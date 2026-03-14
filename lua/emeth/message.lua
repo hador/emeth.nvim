@@ -12,7 +12,7 @@ local _uuid_counter = 0
 ---@field tool_use_id? string
 ---@field content? string|table
 ---@field is_error? boolean
----@field status? "pending"|"in_progress"|"completed"|"failed"
+---@field status? "pending"|"in_progress"|"completed"|"failed"|"cancelled"
 
 ---@class chat_ui.MessageMetadata
 ---@field provider? string
@@ -23,7 +23,8 @@ local _uuid_counter = 0
 
 ---@class chat_ui.Message
 ---@field role "user"|"assistant"|"system"
----@field content string|chat_ui.ContentItem[]
+---@field content chat_ui.ContentItem[]
+---@field _show_files? boolean
 ---@field timestamp string
 ---@field uuid string
 ---@field metadata chat_ui.MessageMetadata
@@ -41,8 +42,9 @@ end
 ---@param metadata? chat_ui.MessageMetadata
 ---@return chat_ui.Message
 function Message:new(role, content, metadata)
-  -- Wrap single ContentItem in a list
-  if type(content) == "table" and content.type then
+  if type(content) == "string" then
+    content = { { type = "text", text = content } }
+  elseif type(content) == "table" and content.type then
     content = { content }
   end
   return setmetatable({
@@ -55,55 +57,28 @@ function Message:new(role, content, metadata)
   }, Message)
 end
 
----@param new_content string|chat_ui.ContentItem[]
-function Message:update_content(new_content)
-  self.content = new_content
+--- Get the concatenated text content of the message.
+---@return string
+function Message:text()
+  local parts = {}
+  for _, item in ipairs(self.content) do
+    if item.type == "text" and item.text then
+      parts[#parts + 1] = item.text
+    end
+  end
+  return table.concat(parts)
 end
 
---- Append text for streaming. If content is a string, concatenate.
---- If content is a table, find last text item and append, or add new text item.
+--- Append text for streaming.
 ---@param text string
 function Message:append_text(text)
-  if type(self.content) == "string" then
-    self.content = self.content .. text
-  elseif type(self.content) == "table" then
-    -- Find last text item
-    for i = #self.content, 1, -1 do
-      if self.content[i].type == "text" then
-        self.content[i].text = (self.content[i].text or "") .. text
-        return
-      end
+  for i = #self.content, 1, -1 do
+    if self.content[i].type == "text" then
+      self.content[i].text = (self.content[i].text or "") .. text
+      return
     end
-    -- No text item found, add one
-    table.insert(self.content, { type = "text", text = text })
   end
-end
-
----@return boolean
-function Message:is_tool_use()
-  if type(self.content) ~= "table" then return false end
-  for _, item in ipairs(self.content) do
-    if item.type == "tool_use" then return true end
-  end
-  return false
-end
-
----@return boolean
-function Message:is_tool_result()
-  if type(self.content) ~= "table" then return false end
-  for _, item in ipairs(self.content) do
-    if item.type == "tool_result" then return true end
-  end
-  return false
-end
-
----@return boolean
-function Message:is_thinking()
-  if type(self.content) ~= "table" then return false end
-  for _, item in ipairs(self.content) do
-    if item.type == "thinking" then return true end
-  end
-  return false
+  table.insert(self.content, { type = "text", text = text })
 end
 
 return Message

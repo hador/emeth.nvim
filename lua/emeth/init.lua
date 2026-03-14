@@ -1,13 +1,14 @@
 --- emeth.nvim — Reusable chat UI library for AI/LLM interactions.
 
-local Highlights = require("emeth.highlights")
-local ChatView = require("emeth.view")
-local Sidebar = require("emeth.layout.sidebar")
-
 ---@class chat_ui.Config
 ---@field sidebar { position: string, width: number, input_height: number }
 ---@field mappings table
 ---@field icons table
+---@field resume_last_session boolean
+---@field prompt_dirs string[]
+---@field default_provider string|nil
+---@field auto_add_current_file boolean
+---@field show_title? boolean
 
 ---@class chat_ui.Module
 ---@field config chat_ui.Config
@@ -33,6 +34,11 @@ local defaults = {
     tool_succeeded = "✓",
     tool_failed = "✗",
   },
+  resume_last_session = false,
+  prompt_dirs = {},
+  show_title = true,
+  default_provider = nil,
+  auto_add_current_file = true,
 }
 
 M.config = vim.deepcopy(defaults)
@@ -41,48 +47,169 @@ M.config = vim.deepcopy(defaults)
 local _view = nil
 ---@type chat_ui.SidebarLayout|nil
 local _sidebar = nil
----@type table|nil  -- integration returned by integrations/acp.setup_integration
+---@type table|nil
 M._integration = nil
+---@type string|nil
+M._provider = nil
 
 ---@param opts? table
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
-  Highlights.setup()
+  require("emeth.ui.highlights").setup()
+  require("emeth.acp").setup(opts and opts.acp)
+  require("emeth.commands").register_builtins()
 end
 
----@param opts? { on_submit?: fun(text: string) }
-function M.open(opts)
-  if _sidebar and _sidebar:is_open() then
-    _sidebar:focus_input()
-    return
+---Resolve which provider to use: explicit arg > config default > single configured > error.
+---@param provider? string
+---@return string|nil
+local function resolve_provider(provider)
+  if provider then
+    return provider
   end
+  if M.config.default_provider then
+    return M.config.default_provider
+  end
+  local names = vim.tbl_keys(require("emeth.acp").config.providers)
+  if #names == 1 then
+    return names[1]
+  end
+  vim.notify(
+    "[emeth] Multiple providers configured. Specify one with :Emeth <provider> or set default_provider.",
+    vim.log.levels.WARN
+  )
+  return nil
+end
+
+---Ensure the sidebar is open with the given view.
+local function ensure_sidebar_open()
   if not _view then
-    _view = ChatView:new(opts)
+    _view = require("emeth.ui.chat_view"):new({ config = M.config })
   end
   if not _sidebar then
-    _sidebar = Sidebar:new()
+    _sidebar = require("emeth.layout.sidebar"):new(M.config)
   end
-  _sidebar:open(_view)
+  if not _sidebar:is_open() then
+    _sidebar:open(_view)
+    if _sidebar.result_win then
+      require("emeth.ui.winbar").attach(_sidebar.result_win, _sidebar.input_win)
+      local lc = vim.api.nvim_buf_line_count(_view.result_buf)
+      pcall(vim.api.nvim_win_set_cursor, _sidebar.result_win, { lc, 0 })
+    end
+  end
+end
+
+---Connect to a provider, setting up the integration and session.
+---@param provider string
+local function connect(provider)
+  local origin_buf = vim.api.nvim_get_current_buf()
+  local origin_file = vim.api.nvim_buf_get_name(origin_buf)
+
+  ensure_sidebar_open()
+
+  local session = require("emeth.acp").create_session(provider)
+  local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
+  M._integration = integration
+  M._provider = provider
+
+  if M.config.auto_add_current_file and origin_file ~= "" and vim.fn.filereadable(origin_file) == 1 then
+    integration.add_file(origin_file)
+  end
+
+  local resumed = false
+  if M.config.resume_last_session then
+    local Sessions = require("emeth.sessions")
+    local last = Sessions.list(vim.fn.getcwd(), provider)[1]
+    if last then
+      resumed = true
+      integration.connect_and_load(last.session_id)
+    end
+  end
+  if not resumed then
+    integration.connect()
+  end
+end
+
+---Open the chat sidebar, optionally with a specific provider.
+---@param provider? string
+function M.open(provider)
+  -- Switch provider if a different one was requested
+  if provider and M._integration and provider ~= M._provider then
+    M._integration.disconnect()
+    M._integration = nil
+    M._provider = nil
+  end
+
+  -- Already connected — just focus
+  if M._integration then
+    ensure_sidebar_open()
+    if _sidebar then
+      _sidebar:focus_input()
+    end
+    return
+  end
+
+  local resolved = resolve_provider(provider)
+  if resolved then
+    connect(resolved)
+  end
 end
 
 function M.close()
+  if M._closing then
+    return
+  end
+  M._closing = true
   if M._integration and M._integration.disconnect then
     M._integration.disconnect()
   end
   M._integration = nil
+  M._provider = nil
   if _sidebar then
     _sidebar:close()
   end
   _sidebar = nil
   _view = nil
+  M._closing = false
 end
 
-function M.toggle()
+function M.toggle(provider)
   if _sidebar and _sidebar:is_open() then
+    require("emeth.ui.winbar").detach()
     _sidebar:close()
   else
-    M.open()
+    M.open(provider)
   end
+end
+
+function M.history()
+  if M._integration and M._integration.pick_session then
+    M._integration.pick_session()
+  else
+    vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
+  end
+end
+
+function M.cancel()
+  if M._integration and M._integration.cancel then
+    M._integration.cancel()
+  end
+end
+
+---Send the current visual selection to the chat as a fenced code block.
+function M.send_selection()
+  if not M._integration then
+    vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
+    return
+  end
+  local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = vim.fn.mode() })
+  if #lines == 0 then
+    return
+  end
+  local fname = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
+  M._integration.add_fenced({ "From " .. fname .. ":" }, lines)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  M.open()
 end
 
 ---@return chat_ui.ChatView|nil
