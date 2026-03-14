@@ -1,5 +1,6 @@
 # emeth.nvim
 
+[![CI](https://github.com/hador/emeth.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/hador/emeth.nvim/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Neovim](https://img.shields.io/badge/Neovim-%E2%89%A5%200.10-green.svg)](https://neovim.io)
 
