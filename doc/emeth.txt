@@ -1,0 +1,240 @@
+*emeth.txt*  AI chat sidebar for Neovim
+
+Author: Andrea Fagiani
+License: MIT
+Homepage: https://github.com/hador/emeth.nvim
+
+==============================================================================
+CONTENTS                                                      *emeth-contents*
+
+  1. Introduction ............................................. |emeth-intro|
+  2. Requirements ....................................... |emeth-requirements|
+  3. Installation ....................................... |emeth-installation|
+  4. Configuration ................................... |emeth-configuration|
+  5. Commands ............................................. |emeth-commands|
+  6. Lua API ............................................. |emeth-lua-api|
+  7. Mappings ............................................. |emeth-mappings|
+  8. Mentions ............................................. |emeth-mentions|
+  9. Provider Switching .......................... |emeth-provider-switching|
+  10. Adding a Provider ................................ |emeth-new-provider|
+  11. Statusline ......................................... |emeth-statusline|
+  12. Health ............................................... |emeth-health|
+
+==============================================================================
+1. INTRODUCTION                                                  *emeth-intro*
+
+emeth.nvim is an AI chat sidebar for Neovim, powered by ACP (Agent Client
+Protocol). "Emeth" (אמת, truth) is the word inscribed on a golem's forehead
+to animate it.
+
+Any CLI that implements ACP works as a provider with zero glue code. The
+plugin handles the UI; the agent handles the intelligence.
+
+==============================================================================
+2. REQUIREMENTS                                           *emeth-requirements*
+
+- Neovim ≥ 0.10
+- At least one ACP-compatible agent CLI
+
+==============================================================================
+3. INSTALLATION                                           *emeth-installation*
+
+With lazy.nvim: >lua
+
+  {
+    "hador/emeth.nvim",
+    cmd = { "Emeth", "EmethToggle", "EmethHistory" },
+    keys = {
+      { "<leader>ee", "<cmd>Emeth<cr>" },
+      { "<leader>et", "<cmd>EmethToggle<cr>" },
+      { "<leader>eh", "<cmd>EmethHistory<cr>" },
+      { "<leader>es", function() require("emeth").send_selection() end, mode = "v" },
+    },
+    opts = {
+      default_provider = "kiro-cli",
+    },
+  }
+<
+
+==============================================================================
+4. CONFIGURATION                                         *emeth-configuration*
+                                                              *emeth.setup()*
+
+Call `require("emeth").setup(opts)` with any of the following: >lua
+
+  {
+    sidebar = {
+      position = "right",  -- "right" | "left" | "bottom"
+      width = 40,          -- columns (or % for bottom)
+      input_height = 8,    -- lines
+    },
+    mappings = {
+      submit = { insert = "<C-s>", normal = "<CR>" },
+      close = { normal = { "q", "<Esc>" } },
+      switch_window = { normal = "<Tab>" },
+    },
+    icons = {
+      user = "> ",
+      assistant = "",
+      thinking = "🤔 ",
+      tool_generating = "⏳",
+      tool_succeeded = "✓",
+      tool_failed = "✗",
+    },
+    default_provider = nil,       -- required if multiple providers
+    resume_last_session = false,  -- auto-resume last session on open
+    auto_add_current_file = true, -- add current buffer as context
+    prompt_dirs = {},             -- e.g. { "~/.config/prompts" }
+    acp = {
+      debug = false,
+      log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
+      providers = {
+        ["kiro-cli"] = { command = "kiro-cli", args = { "acp" } },
+        -- see :checkhealth emeth for all built-in providers
+      },
+    },
+  }
+<
+
+                                                      *emeth-default_provider*
+`default_provider` ~
+  Name of the provider to connect to when `:Emeth` is called without an
+  argument. Required when multiple providers are configured. If only one
+  provider is configured, it is used automatically.
+
+                                                  *emeth-auto_add_current_file*
+`auto_add_current_file` ~
+  When true (default), the buffer the user was editing when opening the
+  sidebar is automatically added as file context.
+
+                                                         *emeth-prompt_dirs*
+`prompt_dirs` ~
+  List of directories containing `.md` files that can be inserted via the
+  `@prompts` mention. Example: >lua
+
+  prompt_dirs = { "~/.config/prompts", ".prompts" }
+<
+
+==============================================================================
+5. COMMANDS                                                   *emeth-commands*
+
+:Emeth [provider]                                                   *:Emeth*
+  Open the sidebar and connect. If a provider name is given and differs
+  from the current one, disconnects and reconnects to the new provider.
+  Without an argument, focuses the sidebar if already open.
+
+:EmethToggle                                                  *:EmethToggle*
+  Toggle the sidebar open/closed.
+
+:EmethClose                                                    *:EmethClose*
+  Close the sidebar and disconnect.
+
+:EmethHistory                                                *:EmethHistory*
+  Pick and resume a previous session.
+
+:EmethCancel                                                  *:EmethCancel*
+  Cancel the current AI request.
+
+==============================================================================
+6. LUA API                                                    *emeth-lua-api*
+
+require("emeth").open({provider?})                             *emeth.open()*
+  Open or focus the sidebar. If {provider} is given and differs from the
+  active provider, disconnects and reconnects.
+
+require("emeth").close()                                      *emeth.close()*
+  Close the sidebar and disconnect.
+
+require("emeth").toggle({provider?})                         *emeth.toggle()*
+  Toggle the sidebar. Accepts an optional provider like |emeth.open()|.
+
+require("emeth").history()                                  *emeth.history()*
+  Pick and resume a previous session.
+
+require("emeth").cancel()                                    *emeth.cancel()*
+  Cancel the current AI request.
+
+require("emeth").send_selection()                      *emeth.send_selection()*
+  Send the current visual selection to the chat as a fenced code block.
+  Exits visual mode and focuses the sidebar.
+
+==============================================================================
+7. MAPPINGS                                                   *emeth-mappings*
+
+Default mappings inside the sidebar buffers:
+
+  Key        Mode     Action ~
+  `<C-s>`      Insert   Send message
+  `<CR>`       Normal   Send message
+  `<Tab>`      Normal   Switch between input and result
+  `q` / `<Esc>`  Normal   Close sidebar
+
+==============================================================================
+8. MENTIONS                                                   *emeth-mentions*
+
+Type these in the input buffer to attach context:
+
+  Mention      Action ~
+  `@file`        Pick a project file
+  `@buffers`     Attach all open buffers
+  `@files`       Review/remove attached files
+  `@prompts`     Pick a prompt template from |emeth-prompt_dirs|
+
+==============================================================================
+9. PROVIDER SWITCHING                                *emeth-provider-switching*
+
+Switch providers on the fly: >vim
+
+  :Emeth kiro-cli     " connect to kiro
+  :Emeth gemini-cli   " disconnect kiro, connect to gemini
+  :Emeth              " focus sidebar (no switch)
+<
+
+When switching, the chat clears and a fresh session starts. If
+|emeth-default_provider| and `resume_last_session` are set, the last session
+for the new provider is resumed automatically.
+
+==============================================================================
+10. ADDING A PROVIDER                                     *emeth-new-provider*
+
+Add an entry to `acp.providers` in your config: >lua
+
+  acp = {
+    providers = {
+      ["my-agent"] = {
+        command = "my-agent",
+        args = { "acp" },
+        env = { MY_API_KEY = os.getenv("MY_API_KEY") or "" },
+        auth_method = "my-auth",
+      },
+    },
+  }
+<
+
+Everything driven by the ACP protocol works automatically: streaming, tool
+calls, slash commands, plans, session info, file writes, and winbar states.
+
+For custom notifications beyond the ACP spec, create a module at
+`lua/emeth/integrations/<provider-name>.lua`. It will be loaded automatically.
+See the README for the full extension API.
+
+==============================================================================
+11. STATUSLINE                                              *emeth-statusline*
+
+The result buffer uses `filetype=emeth`. Add this to your statusline plugin's
+disabled filetypes to keep the sidebar clean. Example for lualine: >lua
+
+  require("lualine").setup({
+    options = {
+      disabled_filetypes = { statusline = { "emeth" } },
+    },
+  })
+<
+
+==============================================================================
+12. HEALTH                                                      *emeth-health*
+
+Run `:checkhealth emeth` to verify the plugin loaded and ACP providers are
+available on PATH.
+
+ vim:tw=78:ts=8:ft=help:norl:
