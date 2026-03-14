@@ -1,0 +1,25 @@
+{
+  "runtime": {
+    "version": "LuaJIT"
+  },
+  "diagnostics": {
+    "globals": ["vim"],
+    "disable": [
+      "deprecated"
+    ],
+    "severity": {
+      "invisible": "Hint",
+      "inject-field": "Hint",
+      "cast-local-type": "Hint"
+    }
+  },
+  "workspace": {
+    "library": [
+      "${3rd}/luv/library"
+    ],
+    "ignoreDir": [
+      "tests"
+    ],
+    "checkThirdParty": false
+  }
+}
