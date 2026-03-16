@@ -257,7 +257,7 @@ lua/emeth/integrations/<provider-name>.lua
 It will be loaded automatically when a session uses that provider. The module should export a `setup` function:
 
 ```lua
-local Winbar = require("emeth.winbar")
+local Winbar = require("emeth.ui.winbar")
 
 local M = {}
 
@@ -267,8 +267,13 @@ local M = {}
 function M.setup(session, view)
   local function on_notification(method, params)
     if method == "my_provider/context_usage" then
-      -- Update winbar context percentage (0-100)
-      vim.schedule(function() Winbar.set_context(params.percentage) end)
+      vim.schedule(function()
+        Winbar.set_right(Winbar.fmt.gradient(params.percentage))
+      end)
+    elseif method == "my_provider/model_switched" then
+      vim.schedule(function()
+        Winbar.set_left(Winbar.fmt.plain("my-provider · " .. params.model))
+      end)
     end
   end
 
@@ -284,12 +289,47 @@ return M
 
 ### Winbar API
 
-Extensions can drive the winbar through these functions:
+The winbar has two fungible segments (left and right) flanking a centered title. Providers decide what goes in each segment — the winbar only owns layout, padding, and graceful degradation when the sidebar is narrow.
+
+#### Segments
 
 | Function | Description |
 |----------|-------------|
-| `Winbar.set_state(s)` | Set status: `"connecting"`, `"ready"`, `"generating"`, `"compacting"` |
-| `Winbar.set_context(pct)` | Show context window usage (0–100%), color-coded green→yellow→red |
+| `Winbar.set_left(raw, plain?)` | Set the left segment (raw winbar string, may contain `%#Hl#` escapes) |
+| `Winbar.set_right(raw, plain?)` | Set the right segment |
+| `Winbar.set_state(s)` | Set input separator status: `"connecting"`, `"ready"`, `"generating"`, `"compacting"` |
+| `Winbar.set_context(pct)` | Convenience: set right segment to a gradient-colored percentage (0–100) |
+
+#### Formatters
+
+Built-in formatters return ready-to-use winbar strings (with highlight escapes). Each returns two values: `raw, plain` — pass both to `set_left`/`set_right`.
+
+| Formatter | Description |
+|-----------|-------------|
+| `Winbar.fmt.plain(text)` | Muted/default color |
+| `Winbar.fmt.badge(text, hl_group)` | Text in a specific highlight group |
+| `Winbar.fmt.gradient(pct)` | Percentage with green→yellow→red color based on value |
+
+Formatters are optional — you can pass any raw `%#HlGroup#text` string directly.
+
+#### Responsive layout
+
+The winbar adapts to sidebar width automatically:
+
+1. **Wide** — `left  ── ✦ אמת ──  right` (title centered between segments)
+2. **Narrow** — title dropped, segments fill the space
+3. **Very narrow** — both segments truncated proportionally
+
+Neither side is privileged — both shrink by the same ratio when space is tight.
+
+#### Example: rich left segment
+
+```lua
+Winbar.set_left(Winbar.fmt.plain("gemini-cli · ")
+  .. Winbar.fmt.badge("gemini-2.5-pro", "DiagnosticInfo"))
+Winbar.set_right(Winbar.fmt.gradient(72))
+-- Result: gemini-cli · gemini-2.5-pro  ── ✦ אמת ──  72%
+```
 
 ### Session extensions
 

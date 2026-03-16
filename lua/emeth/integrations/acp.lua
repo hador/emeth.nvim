@@ -84,7 +84,8 @@ function M.setup_integration(view, session)
     local emeth = require("emeth")
     local sidebar = emeth.get_sidebar()
     if sidebar and sidebar.result_win then
-      Winbar.attach(sidebar.result_win, sidebar.input_win, { provider = session.provider_name })
+      Winbar.attach(sidebar.result_win, sidebar.input_win)
+      Winbar.set_left(Winbar.fmt.plain(session.provider_name))
     end
     Winbar.set_state("connecting")
     action(function(err)
