@@ -29,6 +29,9 @@ local right_plain = "" ---@type string
 --- Numeric context percentage (preserved for message metadata).
 local context_pct = nil ---@type number|nil
 
+--- Fungible badges: provider-defined key→text pairs snapshotted into message metadata.
+local badges = {} ---@type table<string, string>
+
 -- ── Color helpers ──────────────────────────────────────────────
 local FALLBACK_BG = "#1e222a"
 local FALLBACK_MUTED = "#5c6370"
@@ -290,6 +293,7 @@ function M.detach()
   right_raw = ""
   right_plain = ""
   context_pct = nil
+  badges = {}
   state = "ready"
 end
 
@@ -333,6 +337,7 @@ function M.set_context(pct)
   context_pct = pct
   local raw, plain = M.fmt.gradient(pct)
   M.set_right(raw .. " ", plain .. " ")
+  M.set_badge("ctx", string.format("ctx %.0f%%", pct))
 end
 
 ---@return number|nil
@@ -348,6 +353,29 @@ end
 ---@return string
 function M.get_right()
   return right_plain
+end
+
+--- Set a named badge. Badges are snapshotted into message metadata at send time.
+---@param key string
+---@param text string
+function M.set_badge(key, text)
+  badges[key] = text
+end
+
+--- Remove a named badge.
+---@param key string
+function M.clear_badge(key)
+  badges[key] = nil
+end
+
+--- Snapshot current badges as an ordered list of strings.
+---@return string[]
+function M.get_badges()
+  local out = {}
+  for _, v in pairs(badges) do
+    out[#out + 1] = v
+  end
+  return out
 end
 
 return M

@@ -319,8 +319,8 @@ local function render_user_message(msg)
   if #files > 0 then
     parts[#parts + 1] = #files .. (#files == 1 and " file" or " files")
   end
-  if msg.metadata.context_pct then
-    parts[#parts + 1] = string.format("ctx %.0f%%", msg.metadata.context_pct)
+  for _, badge in ipairs(msg.metadata.badges or {}) do
+    parts[#parts + 1] = badge
   end
   lines[#lines + 1] = Line:new({
     {

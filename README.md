@@ -300,6 +300,24 @@ The winbar has two fungible segments (left and right) flanking a centered title.
 | `Winbar.set_state(s)` | Set input separator status: `"connecting"`, `"ready"`, `"generating"`, `"compacting"` |
 | `Winbar.set_context(pct)` | Convenience: set right segment to a gradient-colored percentage (0–100) |
 
+#### Badges
+
+Badges are provider-defined strings that appear in the user message header line (e.g. `12:34 · 2 files · ctx 42%`). Timestamp and file count are always shown; badges fill the rest.
+
+| Function | Description |
+|----------|-------------|
+| `Winbar.set_badge(key, text)` | Register a named badge (overwrites if key exists) |
+| `Winbar.clear_badge(key)` | Remove a named badge |
+| `Winbar.get_badges()` | Snapshot current badges as a list of strings |
+
+`set_context(pct)` automatically sets a `"ctx"` badge, so kiro-cli needs no extra work. Other providers can add their own:
+
+```lua
+Winbar.set_badge("tokens", "1.2k tokens")
+Winbar.set_badge("model", "gemini-2.5-pro")
+-- Header: 12:34 · 2 files · 1.2k tokens · gemini-2.5-pro
+```
+
 #### Formatters
 
 Built-in formatters return ready-to-use winbar strings (with highlight escapes). Each returns two values: `raw, plain` — pass both to `set_left`/`set_right`.

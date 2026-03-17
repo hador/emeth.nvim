@@ -293,7 +293,7 @@ function M.setup_integration(view, session)
       provider = session.provider_name,
       model = session.extensions and session.extensions.model_id,
       agent = session.extensions and session.extensions.mode_id,
-      context_pct = Winbar.get_context(),
+      badges = Winbar.get_badges(),
     })
     view:add_message(msg)
     reset_state()
