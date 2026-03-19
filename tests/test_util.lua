@@ -21,4 +21,11 @@ h.describe("Util", function()
   h.it("fmt_err with no message but data", function()
     h.eq("unknown error: extra", util.fmt_err({ data = "extra" }))
   end)
+
+  h.it("fmt_err with table data containing details", function()
+    h.eq(
+      'Internal error: Invalid session identifier "abc"',
+      util.fmt_err({ message = "Internal error", data = { details = 'Invalid session identifier "abc"' } })
+    )
+  end)
 end)

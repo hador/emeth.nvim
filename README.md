@@ -90,7 +90,7 @@ Full example:
     acp = {
       providers = {
         ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent", "acp-skills" } },
-        ["gemini-cli"]  = { command = "gemini", args = { "--experimental-acp" } },
+        ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
         ["claude-code"] = { command = "npx", args = { "-y", "-g", "@zed-industries/claude-code-acp" } },
       },
     },
@@ -131,7 +131,7 @@ require("emeth").setup({
     log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
     providers = {
       ["claude-code"] = { command = "npx", args = { "-y", "-g", "@zed-industries/claude-code-acp" } },
-      ["gemini-cli"]  = { command = "gemini", args = { "--experimental-acp" } },
+      ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
       ["goose"]       = { command = "goose", args = { "acp" } },
       ["codex"]       = { command = "npx", args = { "-y", "-g", "@zed-industries/codex-acp" } },
       ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent", "acp-skills" } },

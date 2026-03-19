@@ -31,7 +31,7 @@ local defaults = {
     },
     ["gemini-cli"] = {
       command = "gemini",
-      args = { "--experimental-acp" },
+      args = { "--acp" },
     },
     ["goose"] = {
       command = "goose",

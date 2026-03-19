@@ -305,9 +305,12 @@ function M.setup_integration(view, session)
         Sessions.update_title(session.session_id, text:sub(1, 80):gsub("\n", " "))
       end
     end
-    session:send_prompt(prompt, function()
+    session:send_prompt(prompt, function(_, err)
       vim.schedule(function()
         Winbar.set_state("ready")
+        if err then
+          view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
+        end
         view:invalidate()
       end)
     end)
@@ -316,7 +319,12 @@ function M.setup_integration(view, session)
   -- ── Session events ─────────────────────────────────────────────
 
   session:on("update", function(update)
-    Winbar.set_state("generating")
+    -- Only flip to "generating" for streaming response updates, not metadata updates
+    -- like available_commands_update or session_info_update.
+    local metadata_updates = { available_commands_update = true, session_info_update = true }
+    if not metadata_updates[update.sessionUpdate] then
+      Winbar.set_state("generating")
+    end
 
     if update.sessionUpdate == "user_message_chunk" then
       if update.content and update.content.type == "text" then

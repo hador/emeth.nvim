@@ -23,7 +23,8 @@ function M.fmt_err(err)
   end
   local msg = err.message or "unknown error"
   if err.data then
-    msg = msg .. ": " .. tostring(err.data)
+    local detail = type(err.data) == "table" and (err.data.details or vim.inspect(err.data)) or tostring(err.data)
+    msg = msg .. ": " .. detail
   end
   return msg
 end
