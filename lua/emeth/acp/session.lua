@@ -14,7 +14,7 @@ Session.__index = Session
 
 -- ── Event emitter ──────────────────────────────────────────────
 
----@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"state_change"
+---@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"state_change"|"permission"
 
 ---Register a listener for a session event.
 ---@param event acp.SessionEvent
@@ -101,18 +101,20 @@ function Session:new(provider_name)
       on_notification = function(method, params, message_id)
         session:_emit("notification", method, params, message_id)
       end,
-      on_request_permission = function(_, options, callback)
-        -- Auto-approve: find first allow option
-        for _, opt in ipairs(options or {}) do
-          if opt.kind == "allow_always" or opt.kind == "allow_once" then
-            callback(opt.optionId)
-            return
+      on_request_permission = function(tool_call, options, callback)
+        session:_emit("permission", tool_call, options, callback)
+        if require("emeth.acp").config.auto_approve_tools then
+          for _, opt in ipairs(options or {}) do
+            if opt.kind == "allow_always" or opt.kind == "allow_once" then
+              callback(opt.optionId)
+              return
+            end
           end
-        end
-        if options and #options > 0 then
-          callback(options[1].optionId)
-        else
-          callback(nil)
+          if options and #options > 0 then
+            callback(options[1].optionId)
+          else
+            callback(nil)
+          end
         end
       end,
       on_read_file = function(path, line, limit, callback, error_callback)

@@ -89,3 +89,47 @@ h.describe("Session _extract_session_info", function()
     h.is_nil(s.extensions.mode_id)
   end)
 end)
+
+h.describe("Session permission event", function()
+  h.it("emits permission with tool_call, options, and callback", function()
+    local s = Session:new("test")
+    local received = {}
+    s:on("permission", function(tool_call, options, callback)
+      received.tool_call = tool_call
+      received.options = options
+      received.callback = callback
+    end)
+    local tc = { toolCallId = "t1", title = "ls", kind = "execute" }
+    local opts = { { kind = "allow_once", optionId = "a1", name = "Allow" } }
+    local cb = function() end
+    s.client.config.handlers.on_request_permission(tc, opts, cb)
+    h.eq("t1", received.tool_call.toolCallId)
+    h.eq(1, #received.options)
+    h.eq("allow_once", received.options[1].kind)
+    h.is_true(received.callback ~= nil)
+  end)
+
+  h.it("auto_approve_tools calls callback immediately", function()
+    require("emeth.acp").config.auto_approve_tools = true
+    local s = Session:new("test")
+    local chosen = nil
+    local cb = function(id) chosen = id end
+    local opts = {
+      { kind = "reject_once", optionId = "r1", name = "Reject" },
+      { kind = "allow_once", optionId = "a1", name = "Allow" },
+    }
+    s.client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, cb)
+    h.eq("a1", chosen)
+    require("emeth.acp").config.auto_approve_tools = false
+  end)
+
+  h.it("without auto_approve_tools callback is not called", function()
+    require("emeth.acp").config.auto_approve_tools = false
+    local s = Session:new("test")
+    local chosen = nil
+    local cb = function(id) chosen = id end
+    local opts = { { kind = "allow_once", optionId = "a1", name = "Allow" } }
+    s.client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, cb)
+    h.is_nil(chosen)
+  end)
+end)

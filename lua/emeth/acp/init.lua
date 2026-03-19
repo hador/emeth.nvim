@@ -3,6 +3,7 @@ local Session = require("emeth.acp.session")
 ---@class acp.Config
 ---@field debug boolean
 ---@field log_file string
+---@field auto_approve_tools boolean
 ---@field providers table<string, acp.ProviderConfig>
 ---@field on_update? fun(update: table) Fallback: session update (prefer session:on("update"))
 ---@field on_error? fun(err: table) Fallback: error (prefer session:on("error"))
@@ -25,6 +26,7 @@ local M = {}
 local defaults = {
   debug = false,
   log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
+  auto_approve_tools = false,
   providers = {
     ["claude-code"] = {
       command = "npx",

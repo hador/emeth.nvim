@@ -481,6 +481,60 @@ function M.setup_integration(view, session)
     end
   end)
 
+  session:on("permission", function(tool_call, options, callback)
+    vim.schedule(function()
+      -- Render via the same path as a regular tool_call update
+      if not tool_message_map[tool_call.toolCallId] then
+        local update = vim.tbl_extend("keep", tool_call, { sessionUpdate = "tool_call" })
+        session:_emit("update", update)
+      end
+
+      -- If auto-approve is on, session layer already called the callback
+      if require("emeth.acp").config.auto_approve_tools then
+        return
+      end
+
+      -- Build keybind map from options
+      local kind_keys = {
+        allow_once = "a",
+        allow_always = "A",
+        reject_once = "r",
+        reject_always = "R",
+      }
+      local bound_keys = {}
+      local parts = {}
+      for _, opt in ipairs(options or {}) do
+        local key = kind_keys[opt.kind] or opt.kind:sub(1, 1)
+        bound_keys[#bound_keys + 1] = key
+        parts[#parts + 1] = "[" .. key .. "] " .. (opt.name or opt.kind)
+      end
+
+      local prompt_msg = Message:new("system", "Agent wants to run this tool. " .. table.concat(parts, "  "))
+      view:add_message(prompt_msg)
+
+      local function cleanup()
+        for _, key in ipairs(bound_keys) do
+          pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", key)
+        end
+        view:update_message(prompt_msg.uuid, function(m)
+          m.visible = false
+        end)
+      end
+
+      for i, opt in ipairs(options or {}) do
+        local key = bound_keys[i]
+        vim.api.nvim_buf_set_keymap(view.result_buf, "n", key, "", {
+          noremap = true,
+          silent = true,
+          callback = function()
+            cleanup()
+            callback(opt.optionId)
+          end,
+        })
+      end
+    end)
+  end)
+
   session:on("error", function(err)
     view:add_message(Message:new("assistant", "**Error:** " .. util.fmt_err(err)))
   end)

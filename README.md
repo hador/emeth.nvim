@@ -129,6 +129,7 @@ require("emeth").setup({
   acp = {
     debug = false,
     log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
+    auto_approve_tools = false, -- auto-approve tool permission requests
     providers = {
       ["claude-code"] = { command = "npx", args = { "-y", "-g", "@zed-industries/claude-code-acp" } },
       ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
@@ -225,8 +226,8 @@ require("emeth").setup({
         command = "my-agent",
         args = { "acp" },
         env = { MY_API_KEY = os.getenv("MY_API_KEY") or "" },  -- optional, explicit values
-        pass_env = { "MY_API_KEY" },                            -- optional, inherit from process
-        auth_method = "my-auth",                                 -- optional
+        pass_env = { "MY_API_KEY" },                           -- optional, inherit from process
+        auth_method = "my-auth",                               -- optional
       },
     },
   },
