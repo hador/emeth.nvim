@@ -14,6 +14,7 @@ local Session = require("emeth.acp.session")
 ---@field command string
 ---@field args? string[]
 ---@field env? table<string, string>
+---@field pass_env? string[]  Environment variable names to pass from the current process
 ---@field auth_method? string
 
 ---@class acp.Module
@@ -28,10 +29,12 @@ local defaults = {
     ["claude-code"] = {
       command = "npx",
       args = { "-y", "-g", "@zed-industries/claude-code-acp" },
+      pass_env = { "ANTHROPIC_API_KEY" },
     },
     ["gemini-cli"] = {
       command = "gemini",
       args = { "--acp" },
+      pass_env = { "GEMINI_API_KEY" },
     },
     ["goose"] = {
       command = "goose",
@@ -40,6 +43,7 @@ local defaults = {
     ["codex"] = {
       command = "npx",
       args = { "-y", "-g", "@zed-industries/codex-acp" },
+      pass_env = { "OPENAI_API_KEY" },
     },
     ["kiro-cli"] = {
       command = "kiro-cli",

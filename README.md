@@ -224,7 +224,8 @@ require("emeth").setup({
       ["my-agent"] = {
         command = "my-agent",
         args = { "acp" },
-        env = { MY_API_KEY = os.getenv("MY_API_KEY") or "" },  -- optional
+        env = { MY_API_KEY = os.getenv("MY_API_KEY") or "" },  -- optional, explicit values
+        pass_env = { "MY_API_KEY" },                            -- optional, inherit from process
         auth_method = "my-auth",                                 -- optional
       },
     },

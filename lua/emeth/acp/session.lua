@@ -73,12 +73,23 @@ function Session:new(provider_name)
   -- Forward-declare session so client handlers can reference it
   local session ---@type acp.Session
 
+  -- Merge explicit env with forwarded env vars from the current process
+  local env = provider.env and vim.deepcopy(provider.env) or {}
+  for _, name in ipairs(provider.pass_env or {}) do
+    if not env[name] then
+      local val = vim.fn.getenv(name)
+      if val and val ~= vim.NIL then
+        env[name] = val
+      end
+    end
+  end
+
   ---@type acp.ClientConfig
   local client_config = {
     transport_type = "stdio",
     command = provider.command,
     args = provider.args,
-    env = provider.env,
+    env = env,
     auth_method = provider.auth_method,
     handlers = {
       on_session_update = function(update)
