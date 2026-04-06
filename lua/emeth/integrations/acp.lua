@@ -205,47 +205,6 @@ function M.setup_integration(view, session)
         view:append_fenced(header, lines)
       end,
     },
-    prompts = {
-      desc = "Use a prompt template",
-      handler = function()
-        local items = {}
-        for _, dir in ipairs(view._config.prompt_dirs) do
-          local expanded = vim.fn.expand(dir)
-          for _, path in ipairs(vim.fn.glob(expanded .. "/*.md", false, true)) do
-            local name = vim.fn.fnamemodify(path, ":t:r")
-            local first = ""
-            local f = io.open(path)
-            if f then
-              for line in f:lines() do
-                if line:match("%S") then
-                  first = line
-                  break
-                end
-              end
-              f:close()
-            end
-            items[#items + 1] = { name = name, path = path, first = first }
-          end
-        end
-        if #items == 0 then
-          vim.notify("[emeth] No prompts found", vim.log.levels.INFO)
-          return
-        end
-        vim.ui.select(items, {
-          prompt = "Prompt:",
-          format_item = function(item)
-            return item.name .. "  " .. item.first
-          end,
-        }, function(choice)
-          if not choice then
-            return
-          end
-          local content = table.concat(vim.fn.readfile(choice.path), "\n")
-          vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, vim.split(content, "\n"))
-          vim.cmd("startinsert!")
-        end)
-      end,
-    },
   }
 
   local function do_cancel()

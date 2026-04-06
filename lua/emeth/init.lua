@@ -6,6 +6,7 @@
 ---@field icons table
 ---@field resume_last_session boolean
 ---@field prompt_dirs string[]
+---@field prompt_edit_before_send boolean
 ---@field default_provider string|nil
 ---@field auto_add_current_file boolean
 ---@field show_title? boolean
@@ -36,6 +37,7 @@ local defaults = {
   },
   resume_last_session = false,
   prompt_dirs = {},
+  prompt_edit_before_send = true,
   show_title = true,
   default_provider = nil,
   auto_add_current_file = true,

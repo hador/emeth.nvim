@@ -32,7 +32,7 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 - Thinking/reasoning blocks (collapsible)
 - Winbar with spinner, context usage %, compaction indicator
 - File context mentions: `@file`, `@buffers`, `@files`
-- Prompt templates: `@prompts` (loads `.md` files from configured dirs)
+- Prompt templates via `/prompts` (local `.md` files + MCP server prompts)
 - Session history: list, load, resume previous conversations
 - Provider switching on the fly (`:Emeth <provider>`)
 - Send visual selections to chat
@@ -126,6 +126,7 @@ require("emeth").setup({
   resume_last_session = false,  -- auto-resume last session on open
   auto_add_current_file = true, -- add current buffer as context on open
   prompt_dirs = {},             -- e.g. { "~/.config/prompts", ".prompts" }
+  prompt_edit_before_send = true, -- paste prompt into input for editing; false = send immediately
   acp = {
     debug = false,
     log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
@@ -194,7 +195,9 @@ Type these in the input buffer:
 | `@file` | Pick a project file to add as context |
 | `@buffers` | Attach all open buffers as context |
 | `@files` | Review/remove attached context files |
-| `@prompts` | Pick a prompt template from `prompt_dirs` |
+| `@diagnostics` | Attach LSP diagnostics from current buffer |
+
+Prompts are available via the `/prompts` slash command (type `/` to see all commands). For kiro-cli, this merges prompts from `~/.kiro/prompts/`, `prompt_dirs`, and MCP server prompts. When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
 
 ## Statusline
 

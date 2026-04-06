@@ -6,6 +6,7 @@
 ---@field execute fun(args: string, ctx: { view: chat_ui.ChatView, integration: table })
 ---@field source "builtin"|"acp"
 ---@field has_args? boolean
+---@field has_picker? boolean  Command handles its own arg collection (e.g. selection picker)
 
 local M = {}
 

@@ -81,7 +81,7 @@ function ChatView:new(opts)
     callback = function()
       local row = api.nvim_win_get_cursor(0)[1]
       local msg = view._line_to_msg[row]
-      if not msg or view._line_to_msg[row - 1] == msg then
+      if not msg then
         return
       end
 
@@ -463,11 +463,20 @@ function ChatView:_setup_input()
             return
           end
           if cmd.has_args then
-            api.nvim_buf_set_lines(buf, 0, -1, false, { "/" .. choice.name .. " " })
-            self:set_context_files(self._context_files)
-            local col = #choice.name + 2
-            pcall(api.nvim_win_set_cursor, 0, { 1, col })
-            vim.cmd("startinsert")
+            -- Picker commands: invoke execute directly to show picker
+            if cmd.has_picker then
+              api.nvim_buf_set_lines(buf, 0, -1, false, {})
+              self:set_context_files(self._context_files)
+              if not self.on_command or not self.on_command(choice.name, "") then
+                cmd.execute("", { view = self, integration = self.integration })
+              end
+            else
+              api.nvim_buf_set_lines(buf, 0, -1, false, { "/" .. choice.name .. " " })
+              self:set_context_files(self._context_files)
+              local col = #choice.name + 2
+              pcall(api.nvim_win_set_cursor, 0, { 1, col })
+              vim.cmd("startinsert")
+            end
           else
             api.nvim_buf_set_lines(buf, 0, -1, false, {})
             self:set_context_files(self._context_files)
