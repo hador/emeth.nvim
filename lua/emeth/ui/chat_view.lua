@@ -295,10 +295,16 @@ function ChatView:_render()
   -- Build prefix from cache (messages before dirty_from)
   local prefix_lines = {}
   local prefix_text = {}
+  local last_sender ---@type string|nil
   self._line_to_msg = {}
   for i = 1, dirty_from - 1 do
     local msg = self.messages[i]
     if msg and msg.visible ~= false then
+      if msg.role == "assistant" and msg.metadata then
+        last_sender = msg.metadata.sender
+      elseif msg.role == "user" then
+        last_sender = nil
+      end
       local cached = self._line_cache[msg.uuid]
       if cached then
         local base = #prefix_lines
@@ -327,7 +333,12 @@ function ChatView:_render()
   for i = dirty_from, #self.messages do
     local msg = self.messages[i]
     if msg and msg.visible ~= false then
-      local raw = Render.render_message(msg, self.messages, tool_results)
+      local raw = Render.render_message(msg, self.messages, tool_results, last_sender)
+      if msg.role == "assistant" and msg.metadata then
+        last_sender = msg.metadata.sender
+      elseif msg.role == "user" then
+        last_sender = nil
+      end
       local expanded = expand(raw)
       local texts = {}
       for _, line in ipairs(expanded) do

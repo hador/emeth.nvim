@@ -101,14 +101,16 @@ end)
 
 h.describe("ACPClient _handle_session_update", function()
   h.it("calls on_session_update handler with update payload", function()
-    local received
+    local received, received_sid
     local c = make_client({
-      on_session_update = function(update)
+      on_session_update = function(update, session_id)
         received = update
+        received_sid = session_id
       end,
     })
     c:_handle_session_update({ sessionId = "s1", update = { title = "hi" } })
     h.eq({ title = "hi" }, received)
+    h.eq("s1", received_sid)
   end)
 
   h.it("ignores when sessionId missing", function()

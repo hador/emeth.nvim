@@ -195,7 +195,7 @@
 ---@field data any|nil
 
 ---@class acp.Handlers
----@field on_session_update? fun(update: acp.AgentMessageChunk | acp.AgentThoughtChunk | acp.ToolCallUpdate | acp.PlanUpdate | acp.AvailableCommandsUpdate)
+---@field on_session_update? fun(update: acp.AgentMessageChunk | acp.AgentThoughtChunk | acp.ToolCallUpdate | acp.PlanUpdate | acp.AvailableCommandsUpdate, session_id: string)
 ---@field on_request_permission? fun(tool_call: table, options: table[], callback: fun(option_id: string|nil)): nil
 ---@field on_read_file? fun(path: string, line: integer|nil, limit: integer|nil, callback: fun(content: string), error_callback: fun(message: string, code: integer|nil)): nil
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil

@@ -211,8 +211,9 @@ end
 ---@param msg chat_ui.Message
 ---@param messages chat_ui.Message[]
 ---@param tool_results? table<string, chat_ui.ContentItem>
+---@param sender_label? string
 ---@return chat_ui.Line[]
-local function render_tool_use(item, msg, messages, tool_results)
+local function render_tool_use(item, msg, messages, tool_results, sender_label)
   local result = tool_results and tool_results[item.id] or find_tool_result(item.id, messages)
   local status_icon, status_hl = tool_status(item, result)
   local tool_name, tool_param = tool_display(item, msg)
@@ -230,6 +231,9 @@ local function render_tool_use(item, msg, messages, tool_results)
     if tool_param then
       header_parts[#header_parts + 1] = { ": " }
       header_parts[#header_parts + 1] = { tool_param, HL.TOOL_PARAM }
+    end
+    if sender_label then
+      header_parts[#header_parts + 1] = { "  ⑂ " .. sender_label, HL.SENDER_LABEL }
     end
     lines[#lines + 1] = Line:new(header_parts)
 
@@ -250,6 +254,9 @@ local function render_tool_use(item, msg, messages, tool_results)
     if tool_param then
       header[#header + 1] = { ": " }
       header[#header + 1] = { tool_param, HL.TOOL_PARAM }
+    end
+    if sender_label then
+      header[#header + 1] = { "  ⑂ " .. sender_label, HL.SENDER_LABEL }
     end
     lines[#lines + 1] = Line:new(header)
 
@@ -359,16 +366,25 @@ end
 ---@param messages chat_ui.Message[]
 ---@param tool_results? table<string, chat_ui.ContentItem>
 ---@return chat_ui.Line[]
-local function render_assistant_message(msg, messages, tool_results)
+local function render_assistant_message(msg, messages, tool_results, prev_sender)
   local lines = {}
+  local sender = msg.metadata and msg.metadata.sender
+  -- Show sender label only on transitions (new sender or returning from no sender)
+  local show_label = sender and sender ~= prev_sender
   for _, item in ipairs(msg.content) do
     if item.type == "text" then
+      if show_label then
+        lines[#lines + 1] = Line:new({ { "⑂ " .. sender, HL.SENDER_LABEL } })
+        show_label = false
+      end
       vim.list_extend(lines, text_to_lines(item.text or ""))
     elseif item.type == "thinking" then
       vim.list_extend(lines, render_thinking(item))
       lines[#lines + 1] = Line:new({ { "" } })
     elseif item.type == "tool_use" then
-      vim.list_extend(lines, render_tool_use(item, msg, messages, tool_results))
+      local tool_sender = show_label and sender or nil
+      show_label = false
+      vim.list_extend(lines, render_tool_use(item, msg, messages, tool_results, tool_sender))
       lines[#lines + 1] = Line:new({ { "" } })
     end
     -- tool_result is rendered as part of tool_use, skip
@@ -392,11 +408,11 @@ end
 ---@param messages chat_ui.Message[]
 ---@param tool_results? table<string, chat_ui.ContentItem>
 ---@return chat_ui.Line[]
-function M.render_message(msg, messages, tool_results)
+function M.render_message(msg, messages, tool_results, prev_sender)
   if msg.role == "user" then
     return render_user_message(msg)
   elseif msg.role == "assistant" then
-    return render_assistant_message(msg, messages, tool_results)
+    return render_assistant_message(msg, messages, tool_results, prev_sender)
   elseif msg.role == "system" then
     return render_system_message(msg)
   end

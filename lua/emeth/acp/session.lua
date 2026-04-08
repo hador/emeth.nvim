@@ -92,8 +92,8 @@ function Session:new(provider_name)
     env = env,
     auth_method = provider.auth_method,
     handlers = {
-      on_session_update = function(update)
-        session:_emit("update", update)
+      on_session_update = function(update, update_session_id)
+        session:_emit("update", update, update_session_id)
       end,
       on_error = function(err)
         session:_emit("error", err)
@@ -104,17 +104,16 @@ function Session:new(provider_name)
       on_request_permission = function(tool_call, options, callback)
         session:_emit("permission", tool_call, options, callback)
         if require("emeth.acp").config.auto_approve_tools then
+          local fallback
           for _, opt in ipairs(options or {}) do
-            if opt.kind == "allow_always" or opt.kind == "allow_once" then
+            if opt.kind == "allow_always" then
               callback(opt.optionId)
               return
+            elseif opt.kind == "allow_once" and not fallback then
+              fallback = opt.optionId
             end
           end
-          if options and #options > 0 then
-            callback(options[1].optionId)
-          else
-            callback(nil)
-          end
+          callback(fallback or (options and #options > 0 and options[1].optionId) or nil)
         end
       end,
       on_read_file = function(path, line, limit, callback, error_callback)

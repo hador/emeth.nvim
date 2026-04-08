@@ -350,7 +350,7 @@ function ACPClient:_handle_session_update(params)
     return
   end
   if self.config.handlers and self.config.handlers.on_session_update then
-    self.config.handlers.on_session_update(params.update)
+    self.config.handlers.on_session_update(params.update, params.sessionId)
   end
 end
 

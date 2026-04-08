@@ -173,6 +173,35 @@ function M.setup(session, view)
           Winbar.set_context(pct)
         end)
       end
+    elseif method == "_kiro.dev/subagent/list_update" then
+      vim.schedule(function()
+        local ext = session.extensions or {}
+        ext.subagent_sessions = ext.subagent_sessions or {}
+        -- Rebuild the sessionId → name map from the latest list
+        local map = {}
+        local active = {}
+        for _, sa in ipairs(params.subagents or {}) do
+          if sa.sessionId then
+            map[sa.sessionId] = sa.sessionName or sa.agentName or sa.sessionId
+          end
+          if sa.status and sa.status.type == "working" then
+            active[#active + 1] = sa.sessionName or sa.agentName or "subagent"
+          end
+        end
+        ext.subagent_sessions = map
+        -- Winbar badge
+        if #active > 0 then
+          Winbar.set_badge("subagent", "⑂ " .. table.concat(active, ", "))
+        else
+          Winbar.clear_badge("subagent")
+        end
+        -- Wire up the resolver if integration is available
+        if view.integration and view.integration.set_resolve_sender then
+          view.integration.set_resolve_sender(function(sid)
+            return ext.subagent_sessions[sid]
+          end)
+        end
+      end)
     elseif method == "_kiro.dev/compaction/status" then
       local status_type = params and params.status and params.status.type
       vim.schedule(function()

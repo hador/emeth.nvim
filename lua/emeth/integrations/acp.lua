@@ -277,13 +277,29 @@ function M.setup_integration(view, session)
 
   -- ── Session events ─────────────────────────────────────────────
 
-  session:on("update", function(update)
+  -- Hook for provider integrations to resolve a session ID to a sender label.
+  -- Set by provider extensions (e.g. kiro-cli) to map subagent sessionIds to names.
+  ---@type fun(session_id: string): string|nil
+  local resolve_sender = nil
+
+  ---@param sid string|nil
+  ---@return string|nil
+  local function get_sender(sid)
+    if not sid or sid == session.session_id then
+      return nil
+    end
+    return resolve_sender and resolve_sender(sid) or nil
+  end
+
+  session:on("update", function(update, update_session_id)
     -- Only flip to "generating" for streaming response updates, not metadata updates
     -- like available_commands_update or session_info_update.
     local metadata_updates = { available_commands_update = true, session_info_update = true }
     if not metadata_updates[update.sessionUpdate] then
       Winbar.set_state("generating")
     end
+
+    local sender = get_sender(update_session_id)
 
     if update.sessionUpdate == "user_message_chunk" then
       if update.content and update.content.type == "text" then
@@ -296,7 +312,7 @@ function M.setup_integration(view, session)
             msg:append_text(update.content.text)
           end)
         else
-          local msg = Message:new("assistant", update.content.text)
+          local msg = Message:new("assistant", update.content.text, sender and { sender = sender } or nil)
           current_assistant_uuid = msg.uuid
           current_thinking_uuid = nil
           view:add_message(msg)
@@ -317,7 +333,7 @@ function M.setup_integration(view, session)
           local msg = Message:new("assistant", {
             type = "thinking",
             thinking = update.content.text,
-          })
+          }, sender and { sender = sender } or nil)
           current_thinking_uuid = msg.uuid
           current_assistant_uuid = nil
           view:add_message(msg)
@@ -349,13 +365,17 @@ function M.setup_integration(view, session)
           end
         end)
       else
+        local meta = { tool_call = update }
+        if sender then
+          meta.sender = sender
+        end
         local msg = Message:new("assistant", {
           type = "tool_use",
           name = update.kind or update.title or "tool",
           id = update.toolCallId,
           input = update.rawInput or {},
           status = update.status or "pending",
-        }, { tool_call = update })
+        }, meta)
         tool_message_map[update.toolCallId] = msg.uuid
         view:add_message(msg)
       end
@@ -658,6 +678,12 @@ function M.setup_integration(view, session)
 
     add_fenced = function(header_or_lines, body)
       view:append_fenced(header_or_lines, body)
+    end,
+
+    ---Set a function that maps update sessionIds to sender labels.
+    ---@param fn fun(session_id: string): string|nil
+    set_resolve_sender = function(fn)
+      resolve_sender = fn
     end,
   }
 
