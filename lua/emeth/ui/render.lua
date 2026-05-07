@@ -26,6 +26,7 @@ end
 local function text_to_lines(text, decoration)
   local result = {}
   for _, l in ipairs(vim.split(text, "\n")) do
+    l = l:gsub("\27%[[%d;]*m", "")
     if decoration then
       result[#result + 1] = Line:new({ { decoration }, { l } })
     else

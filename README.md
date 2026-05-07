@@ -132,7 +132,7 @@ require("emeth").setup({
     log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
     auto_approve_tools = false, -- auto-approve tool permission requests
     providers = {
-      ["claude-code"] = { command = "npx", args = { "-y", "-g", "@zed-industries/claude-code-acp" } },
+      ["claude-code"] = { command = "npx", args = { "-y", "@agentclientprotocol/claude-agent-acp" } },
       ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
       ["goose"]       = { command = "goose", args = { "acp" } },
       ["codex"]       = { command = "npx", args = { "-y", "-g", "@zed-industries/codex-acp" } },
