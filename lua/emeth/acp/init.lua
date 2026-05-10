@@ -30,8 +30,8 @@ local defaults = {
   providers = {
     ["claude-code"] = {
       command = "npx",
-      args = { "-y", "-g", "@zed-industries/claude-code-acp" },
-      pass_env = { "ANTHROPIC_API_KEY" },
+      args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" },
+      pass_env = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_MODEL_CONFIG" },
     },
     ["gemini-cli"] = {
       command = "gemini",
