@@ -91,7 +91,7 @@ Full example:
       providers = {
         ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent", "acp-skills" } },
         ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
-        ["claude-code"] = { command = "npx", args = { "-y", "-g", "@zed-industries/claude-code-acp" } },
+        ["claude-code"] = { command = "npx", args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" } },
       },
     },
   },
