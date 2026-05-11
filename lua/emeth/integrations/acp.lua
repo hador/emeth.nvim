@@ -34,6 +34,12 @@ function M.setup_integration(view, session)
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
 
+  -- Forward-declared so the update handler can call into the provider
+  -- extension's `transform_update` via upvalue. Bound below where the
+  -- extension is loaded.
+  local has_ext = false ---@type boolean
+  local ext = nil ---@type table|nil
+
   local function flush_reloads()
     local target_win = util.find_source_win()
     local first_path = nil
@@ -371,20 +377,14 @@ function M.setup_integration(view, session)
 
   -- ── Session events ─────────────────────────────────────────────
 
-  -- Hook for provider integrations to resolve a session ID to a sender label.
-  ---@type fun(session_id: string): string|nil
-  local resolve_sender = nil
-
-  ---@param sid string|nil
-  ---@return string|nil
-  local function get_sender(sid)
-    if not sid or sid == session.session_id then
-      return nil
+  session:on("update", function(update, _update_session_id)
+    -- Provider extensions may rewrite the update in-place (e.g. enrich a
+    -- tool_call's title) before we consume it. Keep this lightweight —
+    -- transforms run on every event.
+    if has_ext and ext and type(ext.transform_update) == "function" then
+      pcall(ext.transform_update, update)
     end
-    return resolve_sender and resolve_sender(sid) or nil
-  end
 
-  session:on("update", function(update, update_session_id)
     -- Only flip to "generating" for streaming response updates, not metadata updates
     -- like available_commands_update or session_info_update.
     local metadata_updates = {
@@ -397,8 +397,6 @@ function M.setup_integration(view, session)
       Winbar.set_state("generating")
     end
 
-    local sender = get_sender(update_session_id)
-
     if update.sessionUpdate == "user_message_chunk" then
       if update.content and update.content.type == "text" then
         view:add_message(Message:new("user", update.content.text))
@@ -410,7 +408,7 @@ function M.setup_integration(view, session)
             msg:append_text(update.content.text)
           end)
         else
-          local msg = Message:new("assistant", update.content.text, sender and { sender = sender } or nil)
+          local msg = Message:new("assistant", update.content.text)
           current_assistant_uuid = msg.uuid
           current_thinking_uuid = nil
           view:add_message(msg)
@@ -431,7 +429,7 @@ function M.setup_integration(view, session)
           local msg = Message:new("assistant", {
             type = "thinking",
             thinking = update.content.text,
-          }, sender and { sender = sender } or nil)
+          })
           current_thinking_uuid = msg.uuid
           current_assistant_uuid = nil
           view:add_message(msg)
@@ -463,17 +461,13 @@ function M.setup_integration(view, session)
           end
         end)
       else
-        local meta = { tool_call = update }
-        if sender then
-          meta.sender = sender
-        end
         local msg = Message:new("assistant", {
           type = "tool_use",
           name = update.kind or update.title or "tool",
           id = update.toolCallId,
           input = update.rawInput or {},
           status = update.status or "pending",
-        }, meta)
+        }, { tool_call = update })
         tool_message_map[update.toolCallId] = msg.uuid
         view:add_message(msg)
       end
@@ -538,9 +532,15 @@ function M.setup_integration(view, session)
       Commands.clear_acp()
       for _, cmd in ipairs(update.availableCommands or {}) do
         local name = cmd.name:gsub("^/", "")
+        local input = cmd.input
+        local hint = type(input) == "table" and input.hint or nil
+        if hint == vim.NIL or hint == "" then
+          hint = nil
+        end
         Commands.register(name, {
           desc = cmd.description or name,
           source = "acp",
+          hint = hint,
           execute = function(args, ctx)
             if ctx.view.on_submit then
               ctx.view.on_submit("/" .. name .. (args ~= "" and (" " .. args) or ""))
@@ -664,9 +664,11 @@ function M.setup_integration(view, session)
     schedule_reload(path, first_changed)
   end)
 
-  -- Load provider-specific extensions (e.g. claude-code, kiro-cli)
+  -- Load provider-specific extensions (e.g. claude-code, kiro-cli).
+  -- Assign to the forward-declared upvalues so handlers registered earlier
+  -- pick up the loaded module.
   local provider_mod = "emeth.integrations." .. session.provider_name
-  local has_ext, ext = pcall(require, provider_mod)
+  has_ext, ext = pcall(require, provider_mod)
   local ext_cleanup
   if has_ext and ext.setup then
     ext_cleanup = ext.setup(session, view)
@@ -925,12 +927,6 @@ function M.setup_integration(view, session)
 
     add_fenced = function(header_or_lines, body)
       view:append_fenced(header_or_lines, body)
-    end,
-
-    ---Set a function that maps update sessionIds to sender labels.
-    ---@param fn fun(session_id: string): string|nil
-    set_resolve_sender = function(fn)
-      resolve_sender = fn
     end,
   }
 

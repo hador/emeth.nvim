@@ -5,8 +5,9 @@
 ---@field desc string
 ---@field execute fun(args: string, ctx: { view: chat_ui.ChatView, integration: table })
 ---@field source "builtin"|"acp"
----@field has_args? boolean
----@field has_picker? boolean  Command handles its own arg collection (e.g. selection picker)
+---@field hint? string         Argument hint shown as virt-text after prefill (e.g. "<model_id>")
+---@field has_picker? boolean  Command runs its own picker UI; bypass the prefill flow
+---@field immediate? boolean   Run execute() immediately on selection (no prefill)
 
 local M = {}
 
@@ -69,6 +70,7 @@ function M.register_builtins()
   M.register("clear", {
     desc = "Clear chat messages",
     source = "builtin",
+    immediate = true,
     execute = function(_, ctx)
       ctx.view:clear()
     end,
@@ -77,6 +79,7 @@ function M.register_builtins()
   M.register("new", {
     desc = "Start a new session",
     source = "builtin",
+    immediate = true,
     execute = function(_, ctx)
       if ctx.integration and ctx.integration.new_session then
         ctx.integration.new_session()
@@ -87,6 +90,7 @@ function M.register_builtins()
   M.register("help", {
     desc = "List available commands",
     source = "builtin",
+    immediate = true,
     execute = function(_, ctx)
       local Message = require("emeth.message")
       local lines = { "**Available commands:**" }

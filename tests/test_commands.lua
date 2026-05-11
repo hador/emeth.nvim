@@ -103,4 +103,34 @@ h.describe("Commands", function()
     local cmd = Commands.get("pick")
     h.is_true(cmd.has_picker)
   end)
+
+  h.it("hint is preserved on registered command", function()
+    reset()
+    Commands.register("model", {
+      desc = "switch model",
+      source = "acp",
+      hint = "<model_id>",
+      execute = function() end,
+    })
+    h.eq("<model_id>", Commands.get("model").hint)
+  end)
+
+  h.it("immediate is preserved on registered command", function()
+    reset()
+    Commands.register("clear", {
+      desc = "c",
+      source = "builtin",
+      immediate = true,
+      execute = function() end,
+    })
+    h.is_true(Commands.get("clear").immediate)
+  end)
+
+  h.it("register_builtins marks clear/new/help as immediate", function()
+    reset()
+    Commands.register_builtins()
+    h.is_true(Commands.get("clear").immediate)
+    h.is_true(Commands.get("new").immediate)
+    h.is_true(Commands.get("help").immediate)
+  end)
 end)
