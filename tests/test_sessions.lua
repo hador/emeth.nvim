@@ -106,6 +106,61 @@ h.describe("Sessions", function()
     reset()
     Sessions.remove("nonexistent") -- should not error
   end)
+
+  h.it("save persists additional_directories", function()
+    reset()
+    Sessions.save({
+      session_id = "s1",
+      provider = "test",
+      cwd = "/tmp",
+      additional_directories = { "/a", "/b" },
+    })
+    local entry = Sessions.get("s1")
+    h.eq({ "/a", "/b" }, entry.additional_directories)
+  end)
+
+  h.it("save updates additional_directories on existing entry", function()
+    reset()
+    Sessions.save({
+      session_id = "s1",
+      provider = "test",
+      cwd = "/tmp",
+      additional_directories = { "/a" },
+    })
+    Sessions.save({
+      session_id = "s1",
+      provider = "test",
+      cwd = "/tmp",
+      additional_directories = { "/a", "/b", "/c" },
+    })
+    h.eq({ "/a", "/b", "/c" }, Sessions.get("s1").additional_directories)
+  end)
+
+  h.it("save without additional_directories preserves existing value", function()
+    reset()
+    Sessions.save({
+      session_id = "s1",
+      provider = "test",
+      cwd = "/tmp",
+      additional_directories = { "/a" },
+    })
+    -- Update title only — additional_directories should not be wiped
+    Sessions.save({
+      session_id = "s1",
+      provider = "test",
+      cwd = "/tmp",
+      title = "renamed",
+    })
+    local entry = Sessions.get("s1")
+    h.eq({ "/a" }, entry.additional_directories)
+    h.eq("renamed", entry.title)
+  end)
+
+  h.it("save without additional_directories on new entry leaves field nil", function()
+    reset()
+    Sessions.save({ session_id = "s1", provider = "test", cwd = "/tmp" })
+    h.is_nil(Sessions.get("s1").additional_directories)
+  end)
 end)
 
 -- Restore
