@@ -95,22 +95,17 @@ function M.setup(session, view)
     end
   end
 
-  ---Create the execute function for an ACP command, handling selection/panel/freeform.
+  ---Create the execute function for an ACP command. This runs *after* the
+  ---user has either typed args into the prefilled input or invoked the
+  ---selection picker. Selection-type commands handle their own UI; freeform
+  ---commands just dispatch the slash text to the agent.
   ---@param cmd_name string without /
   ---@param cmd_meta table|nil
   ---@return fun(args: string, ctx: table)
   local function make_execute(cmd_name, cmd_meta)
     return function(args, ctx)
-      -- If args already provided, send directly
-      if args ~= "" then
-        if ctx.view.on_submit then
-          ctx.view.on_submit("/" .. cmd_name .. " " .. args)
-        end
-        return
-      end
-
       local input_type = cmd_meta and cmd_meta.inputType
-      if input_type == "selection" then
+      if input_type == "selection" and (args == nil or args == "") then
         local options = get_selection_options(cmd_name)
         if options and #options > 0 then
           vim.ui.select(options, {
@@ -138,29 +133,8 @@ function M.setup(session, view)
         end
       end
 
-      -- Freeform: pre-fill with hint or just the command
-      local hint = cmd_meta and cmd_meta.hint
-      if hint and hint ~= "" then
-        vim.api.nvim_buf_set_lines(ctx.view.input_buf, 0, -1, false, { "/" .. cmd_name .. " " })
-        -- Show hint as virtual text
-        local ns = vim.api.nvim_create_namespace("emeth_cmd_hint")
-        vim.api.nvim_buf_set_extmark(ctx.view.input_buf, ns, 0, #cmd_name + 2, {
-          virt_text = { { hint, "Comment" } },
-          virt_text_pos = "overlay",
-        })
-        -- Clear hint on next edit
-        vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
-          buffer = ctx.view.input_buf,
-          once = true,
-          callback = function()
-            vim.api.nvim_buf_clear_namespace(ctx.view.input_buf, ns, 0, -1)
-          end,
-        })
-        vim.cmd("startinsert!")
-      else
-        if ctx.view.on_submit then
-          ctx.view.on_submit("/" .. cmd_name)
-        end
+      if ctx.view.on_submit then
+        ctx.view.on_submit("/" .. cmd_name .. (args ~= "" and (" " .. args) or ""))
       end
     end
   end
@@ -194,12 +168,6 @@ function M.setup(session, view)
           Winbar.set_badge("subagent", "⑂ " .. table.concat(active, ", "))
         else
           Winbar.clear_badge("subagent")
-        end
-        -- Wire up the resolver if integration is available
-        if view.integration and view.integration.set_resolve_sender then
-          view.integration.set_resolve_sender(function(sid)
-            return ext.subagent_sessions[sid]
-          end)
         end
       end)
     elseif method == "_kiro.dev/compaction/status" then
@@ -249,13 +217,15 @@ function M.setup(session, view)
           if not (cmd.meta and cmd.meta["local"]) then
             local name = cmd.name:gsub("^/", "")
             local meta = cmd.meta
-            local is_picker = meta and meta.inputType == "selection"
-            local has_hint = meta and meta.hint and meta.hint ~= ""
+            local hint = meta and meta.hint
+            if hint == vim.NIL then
+              hint = nil
+            end
             Commands.register(name, {
               desc = cmd.description or name,
               source = "acp",
-              has_args = is_picker or has_hint,
-              has_picker = is_picker,
+              hint = hint,
+              has_picker = meta and meta.inputType == "selection" or nil,
               execute = make_execute(name, meta),
             })
           end

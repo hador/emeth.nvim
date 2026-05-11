@@ -19,7 +19,6 @@ local _uuid_counter = 0
 ---@field model? string
 ---@field selected_files? string[]
 ---@field tool_call? table
----@field sender? string  -- attribution label (e.g. subagent name)
 ---@field [string] any
 
 ---@class chat_ui.Message

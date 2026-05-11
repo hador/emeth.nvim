@@ -300,16 +300,10 @@ function ChatView:_render()
   -- Build prefix from cache (messages before dirty_from)
   local prefix_lines = {}
   local prefix_text = {}
-  local last_sender ---@type string|nil
   self._line_to_msg = {}
   for i = 1, dirty_from - 1 do
     local msg = self.messages[i]
     if msg and msg.visible ~= false then
-      if msg.role == "assistant" and msg.metadata then
-        last_sender = msg.metadata.sender
-      elseif msg.role == "user" then
-        last_sender = nil
-      end
       local cached = self._line_cache[msg.uuid]
       if cached then
         local base = #prefix_lines
@@ -338,12 +332,7 @@ function ChatView:_render()
   for i = dirty_from, #self.messages do
     local msg = self.messages[i]
     if msg and msg.visible ~= false then
-      local raw = Render.render_message(msg, self.messages, tool_results, last_sender)
-      if msg.role == "assistant" and msg.metadata then
-        last_sender = msg.metadata.sender
-      elseif msg.role == "user" then
-        last_sender = nil
-      end
+      local raw = Render.render_message(msg, self.messages, tool_results)
       local expanded = expand(raw)
       local texts = {}
       for _, line in ipairs(expanded) do
@@ -478,27 +467,18 @@ function ChatView:_setup_input()
           if not cmd then
             return
           end
-          if cmd.has_args then
-            -- Picker commands: invoke execute directly to show picker
-            if cmd.has_picker then
-              api.nvim_buf_set_lines(buf, 0, -1, false, {})
-              self:set_context_files(self._context_files)
-              if not self.on_command or not self.on_command(choice.name, "") then
-                cmd.execute("", { view = self, integration = self.integration })
-              end
-            else
-              api.nvim_buf_set_lines(buf, 0, -1, false, { "/" .. choice.name .. " " })
-              self:set_context_files(self._context_files)
-              local col = #choice.name + 2
-              pcall(api.nvim_win_set_cursor, 0, { 1, col })
-              vim.cmd("startinsert")
-            end
-          else
+          if cmd.has_picker or cmd.immediate then
+            -- Provider-driven picker, or fire-and-forget: execute directly.
             api.nvim_buf_set_lines(buf, 0, -1, false, {})
             self:set_context_files(self._context_files)
             if not self.on_command or not self.on_command(choice.name, "") then
               cmd.execute("", { view = self, integration = self.integration })
             end
+          else
+            -- Default: pre-fill `/cmd ` and let the user type args (with
+            -- a hint as virt-text overlay if the command supplied one, plus
+            -- the description on the line below).
+            self:prefill_command(choice.name, cmd.hint, cmd.desc)
           end
         end)
       end)
@@ -621,6 +601,73 @@ function ChatView:open_file_manager()
   end
   for _, key in ipairs({ "q", "<Esc>" }) do
     api.nvim_buf_set_keymap(float_buf, "n", key, "", { noremap = true, silent = true, callback = close })
+  end
+end
+
+---Pre-fill the input buffer with `/<name> ` and focus it. Hints are
+---rendered as `Comment`-highlighted virt-text and cleared on the next text
+---change:
+---  - `hint`: overlay shown after the cursor (e.g. "<model_id>")
+---  - `desc`: line below the input, with the command's description
+---@param name string command name without leading slash
+---@param hint? string argument hint (e.g. "<model_id>")
+---@param desc? string command description (rendered on the line below)
+function ChatView:prefill_command(name, hint, desc)
+  local buf = self.input_buf
+  if not api.nvim_buf_is_valid(buf) then
+    return
+  end
+  api.nvim_buf_set_lines(buf, 0, -1, false, { "/" .. name .. " " })
+  self:set_context_files(self._context_files)
+
+  -- Focus the input window if one exists, else bail to picker normal mode.
+  local input_win
+  for _, win in ipairs(api.nvim_list_wins()) do
+    if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == buf then
+      input_win = win
+      break
+    end
+  end
+  if input_win then
+    api.nvim_set_current_win(input_win)
+  end
+
+  local col = #name + 2
+  pcall(api.nvim_win_set_cursor, 0, { 1, col })
+  vim.cmd("startinsert")
+
+  local ns = api.nvim_create_namespace("emeth_cmd_hint")
+  api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+
+  local has_overlay = hint and hint ~= ""
+  local has_desc = desc and desc ~= ""
+
+  if has_overlay then
+    api.nvim_buf_set_extmark(buf, ns, 0, col, {
+      virt_text = { { hint, "Comment" } },
+      virt_text_pos = "overlay",
+    })
+  end
+
+  if has_desc then
+    -- Append the description at end-of-line of the input. virt_lines (below
+    -- the input) renders inconsistently in narrow sidebar windows; eol
+    -- virt_text is reliable. We add a separator so it doesn't crowd the hint.
+    local sep = has_overlay and "    " or "  "
+    api.nvim_buf_set_extmark(buf, ns, 0, #name + 2, {
+      virt_text = { { sep .. "— " .. desc, "Comment" } },
+      virt_text_pos = "eol",
+    })
+  end
+
+  if has_overlay or has_desc then
+    api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
+      buffer = buf,
+      once = true,
+      callback = function()
+        api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+      end,
+    })
   end
 end
 

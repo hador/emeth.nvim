@@ -147,3 +147,187 @@ h.describe("claude-code extract_session_info", function()
 
   vim.schedule = orig_schedule
 end)
+
+
+h.describe("claude-code task_sender_label", function()
+  h.it("uses just description when subagent_type missing", function()
+    local label = CC._task_sender_label({ description = "Find foo", status = "pending" })
+    h.eq("Find foo", label)
+  end)
+
+  h.it("appends subagent_type when present", function()
+    local label = CC._task_sender_label({
+      description = "Find foo",
+      subagent_type = "Explore",
+      status = "pending",
+    })
+    h.eq("Find foo ⊳ Explore", label)
+  end)
+
+  h.it("ignores empty-string subagent_type", function()
+    local label = CC._task_sender_label({
+      description = "Find foo",
+      subagent_type = "",
+      status = "pending",
+    })
+    h.eq("Find foo", label)
+  end)
+end)
+
+h.describe("claude-code track_task_update", function()
+  -- Stub winbar so the badge calls are no-ops; restore at end of describe
+  local Winbar = package.loaded["emeth.ui.winbar"]
+  local orig_set, orig_clear = Winbar.set_badge, Winbar.clear_badge
+  Winbar.set_badge = function() end
+  Winbar.clear_badge = function() end
+
+  h.it("registers a Task tool_call into the tracking map", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = { description = "Find foo", subagent_type = "Explore" },
+    })
+    h.is_true(tasks.t1 ~= nil)
+    h.eq("Find foo", tasks.t1.description)
+    h.eq("Explore", tasks.t1.subagent_type)
+    h.eq("pending", tasks.t1.status)
+  end)
+
+  h.it("falls back to update.title when description missing", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      title = "Side quest",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = {},
+    })
+    h.eq("Side quest", tasks.t1.description)
+    h.is_nil(tasks.t1.subagent_type)
+  end)
+
+  h.it("removes the entry on completed status", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = { description = "Find foo" },
+    })
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      _meta = { claudeCode = { toolName = "Task" } },
+      status = "completed",
+    })
+    h.is_nil(tasks.t1)
+  end)
+
+  h.it("removes the entry on failed status", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = { description = "Find foo" },
+    })
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      _meta = { claudeCode = { toolName = "Task" } },
+      status = "failed",
+    })
+    h.is_nil(tasks.t1)
+  end)
+
+  h.it("ignores updates for non-Task tools", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      _meta = { claudeCode = { toolName = "Bash" } },
+      rawInput = { command = "ls" },
+    })
+    h.is_nil(tasks.t1)
+  end)
+
+  h.it("treats Agent toolName the same as Task", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      toolCallId = "a1",
+      _meta = { claudeCode = { toolName = "Agent" } },
+      rawInput = { description = "Subagent A", subagent_type = "Plan" },
+    })
+    h.is_true(tasks.a1 ~= nil)
+    h.eq("Subagent A", tasks.a1.description)
+    h.eq("Plan", tasks.a1.subagent_type)
+  end)
+
+  h.it("ignores updates without a toolCallId", function()
+    local tasks = {}
+    CC._track_task_update(tasks, {
+      sessionUpdate = "tool_call",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = { description = "x" },
+    })
+    h.eq({}, tasks)
+  end)
+
+  -- Restore winbar stubs
+  Winbar.set_badge = orig_set
+  Winbar.clear_badge = orig_clear
+end)
+
+
+h.describe("claude-code transform_update", function()
+  h.it("is a no-op for non-Task updates", function()
+    local u = { sessionUpdate = "tool_call", title = "Read foo", _meta = { claudeCode = { toolName = "Read" } } }
+    CC.transform_update(u)
+    h.eq("Read foo", u.title)
+  end)
+
+  h.it("is a no-op when update has no _meta", function()
+    local u = { sessionUpdate = "tool_call", title = "x" }
+    CC.transform_update(u)
+    h.eq("x", u.title)
+  end)
+
+  h.it("rewrites title from rawInput.description on first encounter", function()
+    local u = {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      title = "Task",  -- claude-acp's default
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = { description = "Find references", subagent_type = "Explore" },
+    }
+    CC.transform_update(u)
+    h.eq("Find references ⊳ Explore", u.title)
+  end)
+
+  h.it("uses description alone when subagent_type missing", function()
+    local u = {
+      sessionUpdate = "tool_call",
+      toolCallId = "t2",
+      title = "Task",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = { description = "Find references" },
+    }
+    CC.transform_update(u)
+    h.eq("Find references", u.title)
+  end)
+
+  h.it("leaves title unchanged when no description anywhere", function()
+    local u = {
+      sessionUpdate = "tool_call",
+      toolCallId = "t3",
+      title = "Task",
+      _meta = { claudeCode = { toolName = "Task" } },
+      rawInput = {},
+    }
+    CC.transform_update(u)
+    h.eq("Task", u.title)
+  end)
+end)

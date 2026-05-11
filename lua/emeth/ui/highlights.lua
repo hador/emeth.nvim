@@ -17,7 +17,6 @@ M.PROMPT_SIGN = "EmethPromptSign"
 M.WIN_SEPARATOR = "EmethWinSeparator"
 M.HORIZ_SEP = "EmethHorizSep"
 M.TOOL_PARAM = "EmethToolParam"
-M.SENDER_LABEL = "EmethSenderLabel"
 
 function M.setup()
   local set = vim.api.nvim_set_hl
@@ -33,7 +32,6 @@ function M.setup()
   set(0, M.TOOL_SUCCEEDED, { default = true, link = "DiagnosticOk" })
   set(0, M.TOOL_FAILED, { default = true, link = "DiagnosticError" })
   set(0, M.TOOL_PARAM, { default = true, link = "Special" })
-  set(0, M.SENDER_LABEL, { default = true, link = "DiagnosticInfo" })
   set(0, M.MUTED, { default = true, link = "Comment" })
   set(0, M.INPUT, { default = true, link = "NormalFloat" })
   set(0, M.INPUT_CURSOR_LINE, { default = true, link = "CursorLine" })
