@@ -25,7 +25,7 @@ local function write_index(entries)
   vim.fn.writefile({ vim.json.encode(entries) }, path)
 end
 
----@param entry { session_id: string, provider: string, cwd: string, title?: string }
+---@param entry { session_id: string, provider: string, cwd: string, title?: string, additional_directories?: string[] }
 function M.save(entry)
   local entries = read_index()
   local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
@@ -34,6 +34,9 @@ function M.save(entry)
     if e.session_id == entry.session_id then
       if entry.title then
         e.title = entry.title
+      end
+      if entry.additional_directories then
+        e.additional_directories = entry.additional_directories
       end
       e.updated_at = now
       write_index(entries)
@@ -45,6 +48,7 @@ function M.save(entry)
     provider = entry.provider,
     cwd = entry.cwd,
     title = entry.title,
+    additional_directories = entry.additional_directories,
     created_at = now,
     updated_at = now,
   }

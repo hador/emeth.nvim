@@ -32,6 +32,10 @@ local context_pct = nil ---@type number|nil
 --- Fungible badges: provider-defined key→text pairs snapshotted into message metadata.
 local badges = {} ---@type table<string, string>
 
+--- Mode tag shown alongside the lifecycle label in the bottom bar.
+--- {text=string, kind="info"|"warn"|"error"|"hint"|nil}
+local mode_tag = nil ---@type {text: string, kind?: string}|nil
+
 -- ── Color helpers ──────────────────────────────────────────────
 local FALLBACK_BG = "#1e222a"
 local FALLBACK_MUTED = "#5c6370"
@@ -225,22 +229,43 @@ local function render()
     label_hl = get_hl_color("DiagnosticOk", "fg", FALLBACK_GREEN)
   end
 
+  -- Mode tag: appended to label, with its own highlight kind.
+  local mode_label
+  local mode_hl
+  if mode_tag and mode_tag.text and mode_tag.text ~= "" then
+    mode_label = "· " .. mode_tag.text .. " "
+    local kind = mode_tag.kind
+    if kind == "error" then
+      mode_hl = get_hl_color("DiagnosticError", "fg", FALLBACK_RED)
+    elseif kind == "warn" then
+      mode_hl = get_hl_color("DiagnosticWarn", "fg", FALLBACK_YELLOW)
+    elseif kind == "info" then
+      mode_hl = get_hl_color("DiagnosticInfo", "fg", FALLBACK_BLUE)
+    else
+      mode_hl = get_hl_color("DiagnosticHint", "fg", FALLBACK_MUTED)
+    end
+  end
+
   api.nvim_set_hl(0, "EmethSepLine", { fg = sep_fg, bg = bg })
   api.nvim_set_hl(0, "EmethSepLabel", { fg = label_hl, bg = bg, bold = true })
+  if mode_hl then
+    api.nvim_set_hl(0, "EmethSepMode", { fg = mode_hl, bg = bg, bold = true, italic = true })
+  end
 
   local win_w = api.nvim_win_get_width(input_win)
-  local label_w = vim.fn.strdisplaywidth(label)
+  local total_label = label .. (mode_label or "")
+  local label_w = vim.fn.strdisplaywidth(total_label)
   local side = math.max(0, math.floor((win_w - label_w) / 2))
+
+  local label_segment = "%#EmethSepLabel#" .. label
+  if mode_label then
+    label_segment = label_segment .. "%#EmethSepMode#" .. mode_label
+  end
 
   pcall(
     api.nvim_set_option_value,
     "winbar",
-    "%#EmethSepLine#"
-      .. string.rep("─", side)
-      .. "%#EmethSepLabel#"
-      .. label
-      .. "%#EmethSepLine#"
-      .. string.rep("─", side),
+    "%#EmethSepLine#" .. string.rep("─", side) .. label_segment .. "%#EmethSepLine#" .. string.rep("─", side),
     { win = input_win }
   )
 end
@@ -294,7 +319,25 @@ function M.detach()
   right_plain = ""
   context_pct = nil
   badges = {}
+  mode_tag = nil
   state = "ready"
+end
+
+--- Set the mode tag shown next to the lifecycle label in the bottom bar.
+---@param text string|nil  pass nil/"" to clear
+---@param kind? "info"|"warn"|"error"|"hint"
+function M.set_mode_tag(text, kind)
+  if not text or text == "" then
+    mode_tag = nil
+  else
+    mode_tag = { text = text, kind = kind }
+  end
+  render()
+end
+
+function M.clear_mode_tag()
+  mode_tag = nil
+  render()
 end
 
 --- Set the left segment. Accepts a raw winbar string (may contain %#Hl# escapes).

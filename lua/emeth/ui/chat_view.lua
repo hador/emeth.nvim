@@ -22,6 +22,14 @@ local api = vim.api
 local ChatView = {}
 ChatView.__index = ChatView
 
+---True if the user message has any expandable details to show on K.
+---@param msg chat_ui.Message
+---@return boolean
+local function has_user_details(msg)
+  local m = msg.metadata or {}
+  return (m.selected_files and #m.selected_files > 0) or m.mode ~= nil or m.model ~= nil
+end
+
 ---@param opts? { config: chat_ui.Config, on_submit?: fun(text: string) }
 ---@return chat_ui.ChatView
 function ChatView:new(opts)
@@ -85,10 +93,7 @@ function ChatView:new(opts)
         return
       end
 
-      if
-        msg.role == "user"
-        and ((msg.metadata.selected_files and #msg.metadata.selected_files > 0) or msg.metadata.agent)
-      then
+      if msg.role == "user" and has_user_details(msg) then
         msg._show_files = not msg._show_files
         invalidate_msg(msg)
         return
@@ -97,7 +102,7 @@ function ChatView:new(opts)
       if msg.content then
         for _, item in ipairs(msg.content) do
           if item.type == "tool_use" then
-            msg.metadata._show_purpose = not msg.metadata._show_purpose
+            msg.metadata._expanded = not msg.metadata._expanded
             invalidate_msg(msg)
             return
           end
@@ -163,14 +168,14 @@ function ChatView:new(opts)
       if is_first_line and msg.role == "user" then
         hints[#hints + 1] = "r: retry"
         hints[#hints + 1] = "e: edit"
-        if (msg.metadata.selected_files and #msg.metadata.selected_files > 0) or msg.metadata.agent then
+        if has_user_details(msg) then
           hints[#hints + 1] = "K: " .. (msg._show_files and "hide" or "show") .. " details"
         end
       end
       if is_first_line and msg.content then
         for _, item in ipairs(msg.content) do
-          if item.type == "tool_use" and Render.get_tool_purpose(item, msg) then
-            hints[#hints + 1] = "K: " .. (msg.metadata._show_purpose and "hide" or "show") .. " purpose"
+          if item.type == "tool_use" then
+            hints[#hints + 1] = "K: " .. (msg.metadata._expanded and "collapse" or "expand")
             break
           end
         end

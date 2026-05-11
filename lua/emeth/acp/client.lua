@@ -512,10 +512,37 @@ end
 
 ---@param cwd string
 ---@param mcp_servers table[]?
----@param callback fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
-function ACPClient:create_session(cwd, mcp_servers, callback)
+---@param opts_or_cb table|fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
+---@param maybe_cb? fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
+function ACPClient:create_session(cwd, mcp_servers, opts_or_cb, maybe_cb)
+  -- Backward-compatible: 3rd arg may be a callback (no opts).
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts, callback = nil, opts_or_cb
+  else
+    opts, callback = opts_or_cb, maybe_cb
+  end
   callback = callback or function() end
-  self:_send_request("session/new", { cwd = cwd, mcpServers = mcp_servers or {} }, function(result, err)
+  local params = { cwd = cwd, mcpServers = mcp_servers or {} }
+  if opts and opts.additionalDirectories and #opts.additionalDirectories > 0 then
+    local supported = self.agent_capabilities
+      and self.agent_capabilities.sessionCapabilities
+      and self.agent_capabilities.sessionCapabilities.additionalDirectories
+    if supported then
+      params.additionalDirectories = opts.additionalDirectories
+    else
+      vim.schedule(function()
+        vim.notify(
+          "[emeth-acp] Agent does not advertise additionalDirectories capability — workspace roots ignored",
+          vim.log.levels.WARN
+        )
+      end)
+    end
+  end
+  if opts and opts.meta and next(opts.meta) ~= nil then
+    params._meta = opts.meta
+  end
+  self:_send_request("session/new", params, function(result, err)
     if err then
       vim.schedule(function()
         vim.notify(
@@ -537,18 +564,36 @@ end
 ---@param session_id string
 ---@param cwd string
 ---@param mcp_servers table[]?
----@param callback fun(result: table|nil, err: acp.ACPError|nil)
-function ACPClient:load_session(session_id, cwd, mcp_servers, callback)
+---@param opts_or_cb table|fun(result: table|nil, err: acp.ACPError|nil)
+---@param maybe_cb? fun(result: table|nil, err: acp.ACPError|nil)
+function ACPClient:load_session(session_id, cwd, mcp_servers, opts_or_cb, maybe_cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts, callback = nil, opts_or_cb
+  else
+    opts, callback = opts_or_cb, maybe_cb
+  end
   callback = callback or function() end
   if not self.agent_capabilities or not self.agent_capabilities.loadSession then
     callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support loading sessions"))
     return
   end
-  self:_send_request("session/load", {
+  local params = {
     sessionId = session_id,
     cwd = cwd,
     mcpServers = mcp_servers or {},
-  }, callback)
+  }
+  if opts and opts.additionalDirectories and #opts.additionalDirectories > 0 then
+    local supported = self.agent_capabilities.sessionCapabilities
+      and self.agent_capabilities.sessionCapabilities.additionalDirectories
+    if supported then
+      params.additionalDirectories = opts.additionalDirectories
+    end
+  end
+  if opts and opts.meta and next(opts.meta) ~= nil then
+    params._meta = opts.meta
+  end
+  self:_send_request("session/load", params, callback)
 end
 
 ---@param cwd? string

@@ -176,6 +176,10 @@ end
 -- ── Session info extraction ────────────────────────────────────
 
 ---Extract provider-specific fields from session/new or session/load responses.
+---Standard ACP fields (`models.currentModelId`, `modes.currentModeId`) are
+---read directly. Anything beyond the spec is delegated to the provider
+---extension's `extract_session_info(result, extensions)` hook (if any), so
+---claude-acp's `configOptions` shape stays out of this module.
 ---@private
 function Session:_extract_session_info(result)
   if not result then
@@ -188,12 +192,22 @@ function Session:_extract_session_info(result)
   if result.modes and result.modes.currentModeId then
     self.extensions.mode_id = result.modes.currentModeId
   end
+  if self.provider_name then
+    local ok, ext = pcall(require, "emeth.integrations." .. self.provider_name)
+    if ok and type(ext.extract_session_info) == "function" then
+      pcall(ext.extract_session_info, result, self.extensions)
+    end
+  end
 end
 
 -- ── Lifecycle ──────────────────────────────────────────────────
 
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
-function Session:connect(cb)
+function Session:connect(opts, cb)
+  if type(opts) == "function" then
+    cb, opts = opts, nil
+  end
   cb = cb or function() end
   self._state = "connecting"
   self.client:connect(function(err)
@@ -203,7 +217,11 @@ function Session:connect(cb)
       return
     end
     local cwd = vim.fn.getcwd()
-    self.client:create_session(cwd, {}, function(session_id, create_err, result)
+    local create_opts = {
+      additionalDirectories = opts and opts.additional_directories,
+      meta = opts and opts.meta,
+    }
+    self.client:create_session(cwd, {}, create_opts, function(session_id, create_err, result)
       if create_err then
         self._state = "error"
         cb(create_err)
@@ -263,12 +281,20 @@ end
 
 ---Load a previous session by ID.
 ---@param session_id string
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
-function Session:load(session_id, cb)
+function Session:load(session_id, opts, cb)
+  if type(opts) == "function" then
+    cb, opts = opts, nil
+  end
   cb = cb or function() end
   local cwd = vim.fn.getcwd()
   self._state = "connecting"
-  self.client:load_session(session_id, cwd, {}, function(result, err)
+  local load_opts = {
+    additionalDirectories = opts and opts.additional_directories,
+    meta = opts and opts.meta,
+  }
+  self.client:load_session(session_id, cwd, {}, load_opts, function(result, err)
     if err then
       self._state = "error"
       cb(err)
@@ -283,8 +309,12 @@ end
 
 ---Connect and immediately load a session, skipping session/new.
 ---@param session_id string
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
-function Session:connect_and_load(session_id, cb)
+function Session:connect_and_load(session_id, opts, cb)
+  if type(opts) == "function" then
+    cb, opts = opts, nil
+  end
   cb = cb or function() end
   self._state = "connecting"
   self.client:connect(function(err)
@@ -293,7 +323,7 @@ function Session:connect_and_load(session_id, cb)
       cb(err)
       return
     end
-    self:load(session_id, cb)
+    self:load(session_id, opts, cb)
   end)
 end
 

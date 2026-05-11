@@ -10,7 +10,7 @@
 
 ---@class acp.AgentCapabilities
 ---@field loadSession boolean
----@field sessionCapabilities? { list?: table }
+---@field sessionCapabilities? { list?: table, additionalDirectories?: boolean|table }
 ---@field promptCapabilities acp.PromptCapabilities
 
 ---@class acp.PromptCapabilities

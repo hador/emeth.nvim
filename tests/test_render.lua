@@ -121,12 +121,13 @@ h.describe("Render", function()
     h.is_true(all:find("```diff") ~= nil, "expected diff fence")
   end)
 
-  h.it("non-diff tool_use uses light box", function()
+  h.it("non-diff tool_use uses light box when expanded", function()
     local msg = Message:new(
       "assistant",
       { type = "tool_use", name = "read", id = "t5", input = { path = "/a" }, status = "completed" },
       { tool_call = { toolCallId = "t5", status = "completed", content = { { type = "content", content = { type = "text", text = "hello" } } } } }
     )
+    msg.metadata._expanded = true
     local lines = Render.render_message(msg, {})
     local all = ""
     for _, l in ipairs(lines) do
