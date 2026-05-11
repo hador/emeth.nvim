@@ -41,6 +41,15 @@ local defaults = {
   show_title = true,
   default_provider = nil,
   auto_add_current_file = true,
+  claude_code = {
+    show_raw_sdk_messages = false,
+    -- Forwarded as `--<key> <value>` to the Claude CLI on session/new and
+    -- session/load via the agent SDK's `extraArgs` channel. Use `true` for
+    -- boolean flags. Example:
+    --   extra_args = { agent = "my-agent", verbose = true }
+    -- becomes `--agent my-agent --verbose` on the underlying claude invocation.
+    extra_args = nil, ---@type table<string, string|boolean>|nil
+  },
 }
 
 M.config = vim.deepcopy(defaults)

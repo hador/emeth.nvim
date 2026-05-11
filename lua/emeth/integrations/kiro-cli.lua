@@ -266,40 +266,36 @@ function M.setup(session, view)
 
   session:on("notification", on_notification)
 
-  -- Also cache agents/models from session/new result into selection options
-  local orig_extract = session._extract_session_info
-  ---@diagnostic disable-next-line: duplicate-set-field
-  function session:_extract_session_info(result)
-    orig_extract(self, result)
-    if not result then
-      return
-    end
-    local ext = self.extensions or {}
-    if result.modes and result.modes.availableModes then
-      ext.server_agents = {}
-      for _, m in ipairs(result.modes.availableModes) do
-        ext.server_agents[#ext.server_agents + 1] = {
-          label = m.name or m.id,
-          value = m.id,
-          description = m.description,
-        }
-      end
-    end
-    if result.models and result.models.availableModels then
-      ext.server_models = {}
-      for _, m in ipairs(result.models.availableModels) do
-        ext.server_models[#ext.server_models + 1] = {
-          label = m.name or m.modelId,
-          value = m.modelId,
-          description = m.description,
-        }
-      end
-    end
-  end
-
   return function()
     session:off("notification", on_notification)
-    session._extract_session_info = orig_extract
+  end
+end
+
+---Cache agents/models from session/new (or session/load) result into the
+---per-session selection lists used by the `/agent` and `/model` pickers.
+---Called by Session:_extract_session_info via the standard provider hook.
+---@param result table
+---@param extensions table
+function M.extract_session_info(result, extensions)
+  if result.modes and result.modes.availableModes then
+    extensions.server_agents = {}
+    for _, m in ipairs(result.modes.availableModes) do
+      extensions.server_agents[#extensions.server_agents + 1] = {
+        label = m.name or m.id,
+        value = m.id,
+        description = m.description,
+      }
+    end
+  end
+  if result.models and result.models.availableModels then
+    extensions.server_models = {}
+    for _, m in ipairs(result.models.availableModels) do
+      extensions.server_models[#extensions.server_models + 1] = {
+        label = m.name or m.modelId,
+        value = m.modelId,
+        description = m.description,
+      }
+    end
   end
 end
 

@@ -292,6 +292,62 @@ end
 return M
 ```
 
+### Provider hooks reference
+
+A provider extension at `lua/emeth/integrations/<provider>.lua` may export any of these optional hooks. The generic ACP integration calls them — none of them require provider-specific knowledge to live in `acp.lua` or `session.lua`.
+
+| Hook | Signature | Called when |
+|------|-----------|-------------|
+| `setup` | `(session, view) → cleanup()` | Session connection — subscribe to events, register `@mention` handlers, etc. |
+| `build_session_meta` | `(emeth_config) → meta\|nil` | About to send `session/new` or `session/load` — return a `_meta` payload to attach |
+| `format_mode` | `(mode_id) → render_desc\|nil` | A `current_mode_update` arrives — return `{ badge?, tag?, tag_kind? }` for winbar rendering |
+| `extract_session_info` | `(result, extensions)` | After `session/new` or `session/load` — scrape any non-spec fields from `result` into `extensions` |
+
+`render_desc` fields:
+- `badge` — text shown in the right winbar segment as a `mode` badge. Omit/empty to clear.
+- `tag` — short text shown next to the lifecycle label in the bottom bar. Omit to skip.
+- `tag_kind` — `"info"`, `"warn"`, `"error"`, or `"hint"`; selects the tag's highlight color.
+
+### Per-session metadata (`_meta`)
+
+ACP lets clients attach a free-form `_meta` object to `session/new` and `session/load` requests. emeth.nvim exposes this via an optional `build_session_meta` export on the provider extension module — a hook that runs at session creation time and returns the meta payload to send.
+
+```lua
+-- lua/emeth/integrations/<provider>.lua
+
+---@param emeth_config table  the resolved config (from emeth.setup)
+---@return table|nil           meta payload, or nil to send no _meta
+function M.build_session_meta(emeth_config)
+  local cfg = emeth_config.my_provider or {}
+  if not cfg.something then
+    return nil
+  end
+  return { myProvider = { options = { something = cfg.something } } }
+end
+```
+
+Whatever this returns is placed verbatim under the request's `_meta` field. The agent decides how to interpret it; everything outside the spec is provider-specific by design.
+
+#### Example: Claude Code `extra_args`
+
+The bundled claude-code extension uses `_meta` to forward arbitrary CLI flags to the underlying `claude` invocation via the agent SDK's `extraArgs` channel:
+
+```lua
+require("emeth").setup({
+  claude_code = {
+    -- Flags forwarded to the Claude CLI: each key/value becomes `--key value`.
+    -- A boolean `true` (or empty string) renders as a bare `--key`.
+    extra_args = {
+      agent = "flax-kitchen-sink-experimental-agent",
+    },
+  },
+})
+```
+
+Result on the wire: `session/new` ships `_meta.claudeCode.options.extraArgs = { agent = "flax-..." }`, claude-acp passes it through to claude-agent-sdk, and the spawned `claude` process receives `--agent flax-kitchen-sink-experimental-agent`.
+
+Takes effect on next session start. Existing resumed sessions retain whatever flags they were created with.
+
 ### Winbar API
 
 The winbar has two fungible segments (left and right) flanking a centered title. Providers decide what goes in each segment — the winbar only owns layout, padding, and graceful degradation when the sidebar is narrow.

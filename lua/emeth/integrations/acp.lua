@@ -1,4 +1,15 @@
 --- ACP integration glue — wires emeth_acp Session to a ChatView.
+---
+--- Provider-specific behaviour is injected through optional hooks exported by
+--- a module at `lua/emeth/integrations/<provider>.lua`:
+---
+---   setup(session, view) → cleanup           streaming events / @mentions / state
+---   build_session_meta(emeth_config) → meta  `_meta` payload for session/new+load
+---   format_mode(mode_id) → render_desc       { badge?, tag?, tag_kind? }
+---   extract_session_info(result, extensions) populate non-spec session info
+---
+--- This file knows nothing about claude-code, kiro-cli, etc. — it only knows
+--- the shape of these hooks.
 
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
@@ -16,8 +27,12 @@ function M.setup_integration(view, session)
   local current_thinking_uuid = nil
   local tool_message_map = {} ---@type table<string, string>
   local selected_files = {} ---@type string[]
+  local selected_roots = {} ---@type string[]  workspace roots (additionalDirectories)
   local reload_timer = vim.uv.new_timer()
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
+
+  -- Forward-declared so handlers registered earlier can capture it.
+  local render_mode ---@type fun(mode_id: string)
 
   local function flush_reloads()
     local target_win = util.find_source_win()
@@ -70,6 +85,49 @@ function M.setup_integration(view, session)
     view:set_context_files(selected_files)
   end
 
+  ---Update the winbar `roots` badge based on the current root count.
+  local function refresh_roots_badge()
+    if #selected_roots > 0 then
+      Winbar.set_badge("roots", string.format("📁 %d root%s", #selected_roots, #selected_roots == 1 and "" or "s"))
+    else
+      Winbar.clear_badge("roots")
+    end
+  end
+
+  ---Add a workspace root directory. Idempotent.
+  ---@param dir string
+  local function add_root(dir)
+    if not dir or dir == "" then
+      return
+    end
+    dir = vim.fn.fnamemodify(dir, ":p"):gsub("/$", "")
+    if vim.fn.isdirectory(dir) ~= 1 then
+      vim.notify("[emeth] Not a directory: " .. dir, vim.log.levels.WARN)
+      return
+    end
+    if not vim.tbl_contains(selected_roots, dir) then
+      selected_roots[#selected_roots + 1] = dir
+      refresh_roots_badge()
+      vim.notify("[emeth] Added workspace root: " .. dir .. " — applies on next session start", vim.log.levels.INFO)
+    end
+  end
+
+  ---Remove a workspace root by index or path.
+  local function remove_root(idx_or_path)
+    if type(idx_or_path) == "number" then
+      table.remove(selected_roots, idx_or_path)
+    else
+      local path = vim.fn.fnamemodify(idx_or_path, ":p"):gsub("/$", "")
+      for i, r in ipairs(selected_roots) do
+        if r == path then
+          table.remove(selected_roots, i)
+          break
+        end
+      end
+    end
+    refresh_roots_badge()
+  end
+
   -- ── Lifecycle wrapper ──────────────────────────────────────────
 
   ---Run a session lifecycle action with standard boilerplate.
@@ -100,6 +158,7 @@ function M.setup_integration(view, session)
               session_id = session.session_id,
               provider = session.provider_name,
               cwd = vim.fn.getcwd(),
+              additional_directories = #selected_roots > 0 and vim.deepcopy(selected_roots) or nil,
             })
           end
           if opts.touch and session.session_id then
@@ -179,6 +238,40 @@ function M.setup_integration(view, session)
         view:open_file_manager()
       end,
     },
+    workspace = {
+      desc = "Add a workspace root directory (additionalDirectories)",
+      handler = function()
+        local function with_dir(dir)
+          if dir and dir ~= "" then
+            add_root(vim.fn.expand(dir))
+          end
+        end
+        if vim.ui.input then
+          vim.ui.input({ prompt = "Add workspace root: ", completion = "dir", default = vim.fn.getcwd() }, with_dir)
+        else
+          with_dir(vim.fn.input({ prompt = "Add workspace root: ", completion = "dir", default = vim.fn.getcwd() }))
+        end
+      end,
+    },
+    roots = {
+      desc = "Manage workspace roots",
+      handler = function()
+        if #selected_roots == 0 then
+          vim.notify("[emeth] No workspace roots. Use @workspace to add one.", vim.log.levels.INFO)
+          return
+        end
+        vim.ui.select(selected_roots, {
+          prompt = "Remove workspace root:",
+          format_item = function(r)
+            return vim.fn.fnamemodify(r, ":~")
+          end,
+        }, function(choice)
+          if choice then
+            remove_root(choice)
+          end
+        end)
+      end,
+    },
     diagnostics = {
       desc = "LSP diagnostics from current buffer",
       handler = function()
@@ -247,11 +340,12 @@ function M.setup_integration(view, session)
     end
     prompt[#prompt + 1] = { type = "text", text = text }
 
+    local exts = session.extensions or {}
     local msg = Message:new("user", text, {
       selected_files = vim.deepcopy(selected_files),
       provider = session.provider_name,
-      model = session.extensions and session.extensions.model_id,
-      agent = session.extensions and session.extensions.mode_id,
+      model = exts.model_id,
+      mode = exts.mode_id,
       badges = Winbar.get_badges(),
     })
     view:add_message(msg)
@@ -278,7 +372,6 @@ function M.setup_integration(view, session)
   -- ── Session events ─────────────────────────────────────────────
 
   -- Hook for provider integrations to resolve a session ID to a sender label.
-  -- Set by provider extensions (e.g. kiro-cli) to map subagent sessionIds to names.
   ---@type fun(session_id: string): string|nil
   local resolve_sender = nil
 
@@ -294,7 +387,12 @@ function M.setup_integration(view, session)
   session:on("update", function(update, update_session_id)
     -- Only flip to "generating" for streaming response updates, not metadata updates
     -- like available_commands_update or session_info_update.
-    local metadata_updates = { available_commands_update = true, session_info_update = true }
+    local metadata_updates = {
+      available_commands_update = true,
+      session_info_update = true,
+      usage_update = true,
+      current_mode_update = true,
+    }
     if not metadata_updates[update.sessionUpdate] then
       Winbar.set_state("generating")
     end
@@ -319,7 +417,7 @@ function M.setup_integration(view, session)
         end
       end
     elseif update.sessionUpdate == "agent_thought_chunk" then
-      if update.content and update.content.type == "text" then
+      if update.content and update.content.type == "text" and update.content.text ~= "" then
         if current_thinking_uuid then
           view:update_message(current_thinking_uuid, function(msg)
             for _, item in ipairs(msg.content) do
@@ -457,6 +555,27 @@ function M.setup_integration(view, session)
           Sessions.update_title(session.session_id, update.title)
         end
       end
+    elseif update.sessionUpdate == "usage_update" then
+      -- Standard ACP context-window update: { used, size, cost? }
+      vim.schedule(function()
+        if update.used and update.size and update.size > 0 then
+          local pct = (update.used / update.size) * 100
+          Winbar.set_context(pct)
+        end
+        if update.cost and type(update.cost.amount) == "number" then
+          local sym = update.cost.currency == "USD" and "$" or ((update.cost.currency or "") .. " ")
+          Winbar.set_badge("cost", string.format("%s%.2f", sym, update.cost.amount))
+        end
+      end)
+    elseif update.sessionUpdate == "current_mode_update" then
+      -- Standard ACP permission/mode update.
+      if update.currentModeId then
+        vim.schedule(function()
+          session.extensions = session.extensions or {}
+          session.extensions.mode_id = update.currentModeId
+          render_mode(update.currentModeId)
+        end)
+      end
     end
   end)
 
@@ -481,14 +600,37 @@ function M.setup_integration(view, session)
         reject_always = "R",
       }
       local bound_keys = {}
-      local parts = {}
+      local lines = {}
+
+      -- Header: surface tool identity + best-effort param so the user can see
+      -- what they're about to authorize even when the tool_call card is below.
+      local header = "Agent wants permission for:"
+      local tool_name = tool_call.title or tool_call.kind or "tool"
+      local raw_input = tool_call.rawInput or {}
+      local param
+      for _, k in ipairs({ "command", "path", "file_path", "url", "query" }) do
+        if type(raw_input[k]) == "string" and raw_input[k] ~= "" then
+          param = raw_input[k]
+          break
+        end
+      end
+      if param then
+        param = param:gsub("\n", " ")
+        if #param > 200 then
+          param = param:sub(1, 200) .. "…"
+        end
+        lines[#lines + 1] = header .. " " .. tool_name .. " — " .. param
+      else
+        lines[#lines + 1] = header .. " " .. tool_name
+      end
+
       for _, opt in ipairs(options or {}) do
         local key = kind_keys[opt.kind] or opt.kind:sub(1, 1)
         bound_keys[#bound_keys + 1] = key
-        parts[#parts + 1] = "[" .. key .. "] " .. (opt.name or opt.kind)
+        lines[#lines + 1] = "  [" .. key .. "] " .. (opt.name or opt.kind)
       end
 
-      local prompt_msg = Message:new("system", "Agent wants to run this tool. " .. table.concat(parts, "  "))
+      local prompt_msg = Message:new("system", table.concat(lines, "\n"))
       view:add_message(prompt_msg)
 
       local function cleanup()
@@ -522,7 +664,7 @@ function M.setup_integration(view, session)
     schedule_reload(path, first_changed)
   end)
 
-  -- Load provider-specific extensions (e.g. kiro-cli)
+  -- Load provider-specific extensions (e.g. claude-code, kiro-cli)
   local provider_mod = "emeth.integrations." .. session.provider_name
   local has_ext, ext = pcall(require, provider_mod)
   local ext_cleanup
@@ -530,13 +672,79 @@ function M.setup_integration(view, session)
     ext_cleanup = ext.setup(session, view)
   end
 
+  ---Build the session/new (and session/load) `_meta` payload by asking the
+  ---provider extension what meta it wants to attach.
+  ---@return table|nil
+  local function build_session_meta()
+    if has_ext and type(ext.build_session_meta) == "function" then
+      local emeth_config = require("emeth").config
+      local ok, meta = pcall(ext.build_session_meta, emeth_config)
+      if ok and type(meta) == "table" and next(meta) ~= nil then
+        return meta
+      end
+    end
+    return nil
+  end
+
+  ---Render a mode update via the provider extension's `format_mode` hook.
+  ---The extension returns a description table — this function knows nothing
+  ---about specific mode names or icons.
+  ---@param mode_id string
+  render_mode = function(mode_id)
+    ---@type { badge?: string, tag?: string, tag_kind?: string }|nil
+    local desc = nil
+    if has_ext and type(ext.format_mode) == "function" then
+      local ok, r = pcall(ext.format_mode, mode_id)
+      if ok and type(r) == "table" then
+        desc = r
+      end
+    end
+    desc = desc or { badge = mode_id }
+
+    if desc.badge and desc.badge ~= "" then
+      Winbar.set_badge("mode", desc.badge)
+    else
+      Winbar.clear_badge("mode")
+    end
+    if desc.tag and desc.tag ~= "" then
+      Winbar.set_mode_tag(desc.tag, desc.tag_kind)
+    else
+      Winbar.clear_mode_tag()
+    end
+  end
+
+  ---Build options carrying the current workspace roots and provider meta, if any.
+  local function lifecycle_opts()
+    local opts = {}
+    if #selected_roots > 0 then
+      opts.additional_directories = vim.deepcopy(selected_roots)
+    end
+    local meta = build_session_meta()
+    if meta then
+      opts.meta = meta
+    end
+    return next(opts) and opts or nil
+  end
+
+  ---Apply post-connect/post-load fixups: surface the agent id and render any
+  ---mode that the session reports.
+  local function on_session_ready()
+    local exts = session.extensions or {}
+    if exts.mode_id then
+      vim.schedule(function()
+        render_mode(exts.mode_id)
+      end)
+    end
+  end
+
   -- ── Public API ─────────────────────────────────────────────────
 
   local integration = {
     connect = function(cb)
       with_lifecycle({ save = true }, function(done)
-        session:connect(function(err)
+        session:connect(lifecycle_opts(), function(err)
           if not err then
+            on_session_ready()
             vim.schedule(function()
               view:add_message(
                 Message:new(
@@ -552,23 +760,46 @@ function M.setup_integration(view, session)
     end,
 
     load_session = function(session_id, cb)
+      -- Hydrate roots from the persisted session entry before re-loading
+      local entry = Sessions.get(session_id)
+      if entry and entry.additional_directories then
+        selected_roots = vim.deepcopy(entry.additional_directories)
+        refresh_roots_badge()
+      end
       with_lifecycle({ clear = true, touch = true }, function(done)
-        session:load(session_id, done)
+        session:load(session_id, lifecycle_opts(), function(err)
+          if not err then
+            on_session_ready()
+          end
+          done(err)
+        end)
       end, cb)
     end,
 
     connect_and_load = function(session_id, cb)
+      local entry = Sessions.get(session_id)
+      if entry and entry.additional_directories then
+        selected_roots = vim.deepcopy(entry.additional_directories)
+        refresh_roots_badge()
+      end
       with_lifecycle({ touch = true }, function(done)
-        session:connect_and_load(session_id, done)
+        session:connect_and_load(session_id, lifecycle_opts(), function(err)
+          if not err then
+            on_session_ready()
+          end
+          done(err)
+        end)
       end, cb)
     end,
 
     pick_session = function()
       local function load_choice(item)
         with_lifecycle({ clear = true }, function(done)
-          session:load(item.session_id, function(err)
+          session:load(item.session_id, lifecycle_opts(), function(err)
             if err then
               Sessions.remove(item.session_id)
+            else
+              on_session_ready()
             end
             done(err)
           end)
@@ -623,13 +854,23 @@ function M.setup_integration(view, session)
       reset_state()
       selected_files = {}
       refresh_file_display()
+      -- Keep selected_roots as-is so a new session inherits the user's roots.
       with_lifecycle({ save = true }, function(done)
         local cwd = vim.fn.getcwd()
-        session.client:create_session(cwd, {}, function(session_id, err, result)
+        local create_opts = {}
+        if #selected_roots > 0 then
+          create_opts.additionalDirectories = vim.deepcopy(selected_roots)
+        end
+        local meta = build_session_meta()
+        if meta then
+          create_opts.meta = meta
+        end
+        session.client:create_session(cwd, {}, create_opts, function(session_id, err, result)
           if not err then
             session.session_id = session_id
             session:_extract_session_info(result)
             session._state = "ready"
+            on_session_ready()
             vim.schedule(function()
               view:add_message(Message:new("system", "New session started."))
             end)
@@ -674,6 +915,12 @@ function M.setup_integration(view, session)
 
     get_selected_files = function()
       return selected_files
+    end,
+
+    add_root = add_root,
+    remove_root = remove_root,
+    get_selected_roots = function()
+      return selected_roots
     end,
 
     add_fenced = function(header_or_lines, body)

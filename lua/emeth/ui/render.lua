@@ -259,6 +259,13 @@ local function render_tool_use(item, msg, messages, tool_results, sender_label)
     if sender_label then
       header[#header + 1] = { "  ⑂ " .. sender_label, HL.SENDER_LABEL }
     end
+    -- Collapse non-diff tool bodies by default (K to expand).
+    if not msg.metadata._expanded then
+      header[1] = { "── " }
+      lines[#lines + 1] = Line:new(header)
+      return lines
+    end
+
     lines[#lines + 1] = Line:new(header)
 
     local decoration = "│   "
@@ -343,8 +350,8 @@ local function render_user_message(msg)
     if msg.metadata.model then
       lines[#lines + 1] = Line:new({ { "  model: " .. msg.metadata.model, HL.MUTED } })
     end
-    if msg.metadata.agent then
-      lines[#lines + 1] = Line:new({ { "  agent: " .. msg.metadata.agent, HL.MUTED } })
+    if msg.metadata.mode then
+      lines[#lines + 1] = Line:new({ { "  mode:  " .. msg.metadata.mode, HL.MUTED } })
     end
     for _, f in ipairs(files) do
       local rel = vim.fn.fnamemodify(f, ":~:.")
