@@ -34,11 +34,11 @@ function M.setup_integration(view, session)
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
 
-  -- Forward-declared so the update handler can call into the provider
-  -- extension's `transform_update` via upvalue. Bound below where the
-  -- extension is loaded.
-  local has_ext = false ---@type boolean
-  local ext = nil ---@type table|nil
+  -- Hook for provider extensions to mutate session/update payloads in place
+  -- before the integration consumes them. Registered via
+  -- `integration.set_transform_update(fn)` from inside `ext.setup`.
+  ---@type fun(update: table)|nil
+  local transform_update_fn = nil
 
   local function flush_reloads()
     local target_win = util.find_source_win()
@@ -381,8 +381,8 @@ function M.setup_integration(view, session)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
     -- tool_call's title) before we consume it. Keep this lightweight —
     -- transforms run on every event.
-    if has_ext and ext and type(ext.transform_update) == "function" then
-      pcall(ext.transform_update, update)
+    if transform_update_fn then
+      pcall(transform_update_fn, update)
     end
 
     -- Only flip to "generating" for streaming response updates, not metadata updates
@@ -664,13 +664,25 @@ function M.setup_integration(view, session)
     schedule_reload(path, first_changed)
   end)
 
+  -- Stub integration that exposes only the per-session setters extensions
+  -- need *during* setup. The real `integration` table is built below; we
+  -- set `view.integration` to it later. Any setter the extension calls here
+  -- mutates the same upvalue the real integration's method will mutate.
+  local ext_integration = {
+    set_transform_update = function(fn)
+      transform_update_fn = fn
+    end,
+  }
+
   -- Load provider-specific extensions (e.g. claude-code, kiro-cli).
-  -- Assign to the forward-declared upvalues so handlers registered earlier
-  -- pick up the loaded module.
   local provider_mod = "emeth.integrations." .. session.provider_name
-  has_ext, ext = pcall(require, provider_mod)
+  local has_ext, ext = pcall(require, provider_mod)
   local ext_cleanup
   if has_ext and ext.setup then
+    -- Temporarily expose the stub so extensions calling
+    -- `view.integration.set_transform_update(...)` work during setup. The
+    -- real integration table replaces this at the end of setup_integration.
+    view.integration = ext_integration
     ext_cleanup = ext.setup(session, view)
   end
 
@@ -858,20 +870,8 @@ function M.setup_integration(view, session)
       refresh_file_display()
       -- Keep selected_roots as-is so a new session inherits the user's roots.
       with_lifecycle({ save = true }, function(done)
-        local cwd = vim.fn.getcwd()
-        local create_opts = {}
-        if #selected_roots > 0 then
-          create_opts.additionalDirectories = vim.deepcopy(selected_roots)
-        end
-        local meta = build_session_meta()
-        if meta then
-          create_opts.meta = meta
-        end
-        session.client:create_session(cwd, {}, create_opts, function(session_id, err, result)
+        session:new_session(lifecycle_opts(), function(err)
           if not err then
-            session.session_id = session_id
-            session:_extract_session_info(result)
-            session._state = "ready"
             on_session_ready()
             vim.schedule(function()
               view:add_message(Message:new("system", "New session started."))
@@ -927,6 +927,13 @@ function M.setup_integration(view, session)
 
     add_fenced = function(header_or_lines, body)
       view:append_fenced(header_or_lines, body)
+    end,
+
+    ---Register a function that mutates session/update payloads in place
+    ---before the integration consumes them. Pass nil to clear.
+    ---@param fn fun(update: table)|nil
+    set_transform_update = function(fn)
+      transform_update_fn = fn
     end,
   }
 

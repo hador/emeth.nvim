@@ -235,6 +235,36 @@ function Session:connect(opts, cb)
   end)
 end
 
+---Create a fresh session over an already-connected client. Used when the
+---user wants a clean conversation without restarting the underlying agent
+---process. Mirrors the second half of `connect()` (the `session/new` call)
+---without re-establishing the transport.
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param cb? fun(err: acp.ACPError|nil)
+function Session:new_session(opts, cb)
+  if type(opts) == "function" then
+    cb, opts = opts, nil
+  end
+  cb = cb or function() end
+  local cwd = vim.fn.getcwd()
+  self._state = "connecting"
+  local create_opts = {
+    additionalDirectories = opts and opts.additional_directories,
+    meta = opts and opts.meta,
+  }
+  self.client:create_session(cwd, {}, create_opts, function(session_id, create_err, result)
+    if create_err then
+      self._state = "error"
+      cb(create_err)
+      return
+    end
+    self.session_id = session_id
+    self:_extract_session_info(result)
+    self._state = "ready"
+    cb(nil)
+  end)
+end
+
 ---@param content_items table[]
 ---@param cb? fun(result: table|nil, err: acp.ACPError|nil)
 function Session:send_prompt(content_items, cb)
