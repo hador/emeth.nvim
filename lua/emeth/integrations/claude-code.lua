@@ -7,22 +7,16 @@
 ---   - `format_mode(mode_id) → render_desc`    badge + bottom-bar tag rendering
 ---   - `extract_session_info(result, exts)`    scrape claude-acp's configOptions
 ---
---- Subagents: claude reports Task-tool invocations and tags subsequent
---- sub-agent updates with `_meta.claudeCode.parentToolUseId`. We track the
---- in-flight Task tool calls so `transform_update` can enrich the Task
---- tool_call card title with the description + subagent_type for visual
---- attribution.
+--- Subagents: claude reports Task-tool invocations. We track in-flight Task
+--- tool calls per-session so that a `transform_update` callback (registered
+--- via `view.integration.set_transform_update` inside `setup`) can enrich the
+--- Task tool_call card title with the description + subagent_type for visual
+--- attribution. State is closure-scoped, never module-level.
 
 local Message = require("emeth.message")
 local Winbar = require("emeth.ui.winbar")
 
 local M = {}
-
--- Per-session task tracking. Set in setup(), torn down in cleanup. Module-
--- level so the exported `resolve_sender_from_update` (which the generic
--- integration calls during construction, after setup) can read it.
----@type table<string, claude_code.TaskInfo>|nil
-local _active_tasks = nil
 
 -- Human-friendly labels + bottom-bar highlight kind for claude-code modes.
 -- "normal" modes (default/auto) skip the bottom-bar tag entirely.
@@ -122,7 +116,7 @@ local function task_sender_label(entry)
 end
 
 ---Process a session/update payload looking for Task tool_call lifecycle.
----Mutates `tasks` in place and refreshes the badge.
+---Mutates `tasks` in place.
 ---@param tasks table<string, claude_code.TaskInfo>
 ---@param update table
 local function track_task_update(tasks, update)
@@ -169,11 +163,53 @@ local function track_task_update(tasks, update)
   end
 end
 
+---Build a `transform_update` closure that rewrites Task / Agent tool titles
+---to include the subagent_type for visual flavour. Captures `tasks` so it
+---reads the freshest tracked state at call time.
+---@param tasks table<string, claude_code.TaskInfo>
+---@return fun(update: table)
+local function make_transform_update(tasks)
+  return function(update)
+    if not update or not update._meta then
+      return
+    end
+    local meta = update._meta.claudeCode
+    if not meta or (meta.toolName ~= "Task" and meta.toolName ~= "Agent") then
+      return
+    end
+    local entry = tasks[update.toolCallId]
+    local description, subagent_type
+    if entry then
+      description = entry.description
+      subagent_type = entry.subagent_type
+    end
+    -- Streaming updates may pass fresh rawInput; prefer those values.
+    if type(update.rawInput) == "table" then
+      local raw = update.rawInput
+      if type(raw.description) == "string" and raw.description ~= "" then
+        description = raw.description
+      end
+      if type(raw.subagent_type) == "string" and raw.subagent_type ~= "" then
+        subagent_type = raw.subagent_type
+      end
+    end
+    if description and description ~= "" then
+      if subagent_type and subagent_type ~= "" then
+        update.title = description .. " ⊳ " .. subagent_type
+      else
+        update.title = description
+      end
+    end
+  end
+end
+
 -- Exposed for testing.
 M._task_sender_label = task_sender_label
 M._track_task_update = track_task_update
+M._make_transform_update = make_transform_update
 
----Hook claude-code-specific notifications + subagent tracking.
+---Hook claude-code-specific notifications + subagent tracking. All state is
+---closure-scoped — multiple sessions don't interfere.
 ---@param session acp.Session
 ---@param view chat_ui.ChatView
 ---@return fun() cleanup
@@ -205,7 +241,12 @@ function M.setup(session, view)
   session:on("notification", on_notification)
   session:on("update", on_update)
 
-  _active_tasks = tasks
+  -- Register the per-session transform callback. `view.integration` is set
+  -- by the generic integration *before* it calls into this `setup()`, so
+  -- the setter is available here.
+  if view.integration and view.integration.set_transform_update then
+    view.integration.set_transform_update(make_transform_update(tasks))
+  end
 
   return function()
     session:off("notification", on_notification)
@@ -213,45 +254,8 @@ function M.setup(session, view)
     Winbar.clear_badge("model")
     Winbar.clear_badge("mode")
     Winbar.clear_badge("cost")
-    _active_tasks = nil
-  end
-end
-
----Rewrite a session/update payload in place to enrich the Task / Agent
----tool's title with the subagent_type for visual flavour. The generic
----integration calls this on every update before consuming it.
----@param update table
-function M.transform_update(update)
-  if not update or not update._meta then
-    return
-  end
-  local meta = update._meta.claudeCode
-  if not meta or (meta.toolName ~= "Task" and meta.toolName ~= "Agent") then
-    return
-  end
-  -- Look up cached info for this tool call (populated by track_task_update).
-  local entry = _active_tasks and _active_tasks[update.toolCallId]
-  -- Build a richer title: "<description> ⊳ <subagent_type>" if both known.
-  local description, subagent_type
-  if entry then
-    description = entry.description
-    subagent_type = entry.subagent_type
-  end
-  -- Streaming updates may pass updated rawInput; prefer the freshest values.
-  if type(update.rawInput) == "table" then
-    local raw = update.rawInput
-    if type(raw.description) == "string" and raw.description ~= "" then
-      description = raw.description
-    end
-    if type(raw.subagent_type) == "string" and raw.subagent_type ~= "" then
-      subagent_type = raw.subagent_type
-    end
-  end
-  if description and description ~= "" then
-    if subagent_type and subagent_type ~= "" then
-      update.title = description .. " ⊳ " .. subagent_type
-    else
-      update.title = description
+    if view.integration and view.integration.set_transform_update then
+      view.integration.set_transform_update(nil)
     end
   end
 end

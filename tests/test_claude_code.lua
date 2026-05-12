@@ -282,20 +282,23 @@ h.describe("claude-code track_task_update", function()
 end)
 
 
-h.describe("claude-code transform_update", function()
+h.describe("claude-code make_transform_update", function()
   h.it("is a no-op for non-Task updates", function()
+    local transform = CC._make_transform_update({})
     local u = { sessionUpdate = "tool_call", title = "Read foo", _meta = { claudeCode = { toolName = "Read" } } }
-    CC.transform_update(u)
+    transform(u)
     h.eq("Read foo", u.title)
   end)
 
   h.it("is a no-op when update has no _meta", function()
+    local transform = CC._make_transform_update({})
     local u = { sessionUpdate = "tool_call", title = "x" }
-    CC.transform_update(u)
+    transform(u)
     h.eq("x", u.title)
   end)
 
   h.it("rewrites title from rawInput.description on first encounter", function()
+    local transform = CC._make_transform_update({})
     local u = {
       sessionUpdate = "tool_call",
       toolCallId = "t1",
@@ -303,11 +306,12 @@ h.describe("claude-code transform_update", function()
       _meta = { claudeCode = { toolName = "Task" } },
       rawInput = { description = "Find references", subagent_type = "Explore" },
     }
-    CC.transform_update(u)
+    transform(u)
     h.eq("Find references ⊳ Explore", u.title)
   end)
 
   h.it("uses description alone when subagent_type missing", function()
+    local transform = CC._make_transform_update({})
     local u = {
       sessionUpdate = "tool_call",
       toolCallId = "t2",
@@ -315,11 +319,12 @@ h.describe("claude-code transform_update", function()
       _meta = { claudeCode = { toolName = "Task" } },
       rawInput = { description = "Find references" },
     }
-    CC.transform_update(u)
+    transform(u)
     h.eq("Find references", u.title)
   end)
 
   h.it("leaves title unchanged when no description anywhere", function()
+    local transform = CC._make_transform_update({})
     local u = {
       sessionUpdate = "tool_call",
       toolCallId = "t3",
@@ -327,7 +332,34 @@ h.describe("claude-code transform_update", function()
       _meta = { claudeCode = { toolName = "Task" } },
       rawInput = {},
     }
-    CC.transform_update(u)
+    transform(u)
     h.eq("Task", u.title)
+  end)
+
+  h.it("reads from cached tasks when rawInput is missing", function()
+    local tasks = {
+      t4 = { description = "Find references", subagent_type = "Explore", status = "in_progress" },
+    }
+    local transform = CC._make_transform_update(tasks)
+    local u = {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t4",
+      title = "Task",
+      _meta = { claudeCode = { toolName = "Task" } },
+    }
+    transform(u)
+    h.eq("Find references ⊳ Explore", u.title)
+  end)
+
+  h.it("two transform closures over different task tables don't interfere", function()
+    local tasks_a = { x = { description = "A", status = "in_progress" } }
+    local tasks_b = { x = { description = "B", status = "in_progress" } }
+    local ta = CC._make_transform_update(tasks_a)
+    local tb = CC._make_transform_update(tasks_b)
+    local ua = { sessionUpdate = "tool_call_update", toolCallId = "x", title = "Task", _meta = { claudeCode = { toolName = "Task" } } }
+    local ub = { sessionUpdate = "tool_call_update", toolCallId = "x", title = "Task", _meta = { claudeCode = { toolName = "Task" } } }
+    ta(ua); tb(ub)
+    h.eq("A", ua.title)
+    h.eq("B", ub.title)
   end)
 end)
