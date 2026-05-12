@@ -13,6 +13,7 @@
 
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
+local Roots = require("emeth.integrations.roots")
 local Sessions = require("emeth.sessions")
 local Winbar = require("emeth.ui.winbar")
 local util = require("emeth.util")
@@ -27,7 +28,7 @@ function M.setup_integration(view, session)
   local current_thinking_uuid = nil
   local tool_message_map = {} ---@type table<string, string>
   local selected_files = {} ---@type string[]
-  local selected_roots = {} ---@type string[]  workspace roots (additionalDirectories)
+  local roots = Roots.attach(view)
   local reload_timer = vim.uv.new_timer()
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
 
@@ -91,49 +92,6 @@ function M.setup_integration(view, session)
     view:set_context_files(selected_files)
   end
 
-  ---Update the winbar `roots` badge based on the current root count.
-  local function refresh_roots_badge()
-    if #selected_roots > 0 then
-      Winbar.set_badge("roots", string.format("📁 %d root%s", #selected_roots, #selected_roots == 1 and "" or "s"))
-    else
-      Winbar.clear_badge("roots")
-    end
-  end
-
-  ---Add a workspace root directory. Idempotent.
-  ---@param dir string
-  local function add_root(dir)
-    if not dir or dir == "" then
-      return
-    end
-    dir = vim.fn.fnamemodify(dir, ":p"):gsub("/$", "")
-    if vim.fn.isdirectory(dir) ~= 1 then
-      vim.notify("[emeth] Not a directory: " .. dir, vim.log.levels.WARN)
-      return
-    end
-    if not vim.tbl_contains(selected_roots, dir) then
-      selected_roots[#selected_roots + 1] = dir
-      refresh_roots_badge()
-      vim.notify("[emeth] Added workspace root: " .. dir .. " — applies on next session start", vim.log.levels.INFO)
-    end
-  end
-
-  ---Remove a workspace root by index or path.
-  local function remove_root(idx_or_path)
-    if type(idx_or_path) == "number" then
-      table.remove(selected_roots, idx_or_path)
-    else
-      local path = vim.fn.fnamemodify(idx_or_path, ":p"):gsub("/$", "")
-      for i, r in ipairs(selected_roots) do
-        if r == path then
-          table.remove(selected_roots, i)
-          break
-        end
-      end
-    end
-    refresh_roots_badge()
-  end
-
   -- ── Lifecycle wrapper ──────────────────────────────────────────
 
   ---Run a session lifecycle action with standard boilerplate.
@@ -164,7 +122,7 @@ function M.setup_integration(view, session)
               session_id = session.session_id,
               provider = session.provider_name,
               cwd = vim.fn.getcwd(),
-              additional_directories = #selected_roots > 0 and vim.deepcopy(selected_roots) or nil,
+              additional_directories = roots:save_field(),
             })
           end
           if opts.touch and session.session_id then
@@ -244,40 +202,6 @@ function M.setup_integration(view, session)
         view:open_file_manager()
       end,
     },
-    workspace = {
-      desc = "Add a workspace root directory (additionalDirectories)",
-      handler = function()
-        local function with_dir(dir)
-          if dir and dir ~= "" then
-            add_root(vim.fn.expand(dir))
-          end
-        end
-        if vim.ui.input then
-          vim.ui.input({ prompt = "Add workspace root: ", completion = "dir", default = vim.fn.getcwd() }, with_dir)
-        else
-          with_dir(vim.fn.input({ prompt = "Add workspace root: ", completion = "dir", default = vim.fn.getcwd() }))
-        end
-      end,
-    },
-    roots = {
-      desc = "Manage workspace roots",
-      handler = function()
-        if #selected_roots == 0 then
-          vim.notify("[emeth] No workspace roots. Use @workspace to add one.", vim.log.levels.INFO)
-          return
-        end
-        vim.ui.select(selected_roots, {
-          prompt = "Remove workspace root:",
-          format_item = function(r)
-            return vim.fn.fnamemodify(r, ":~")
-          end,
-        }, function(choice)
-          if choice then
-            remove_root(choice)
-          end
-        end)
-      end,
-    },
     diagnostics = {
       desc = "LSP diagnostics from current buffer",
       handler = function()
@@ -305,6 +229,11 @@ function M.setup_integration(view, session)
       end,
     },
   }
+
+  -- Merge in roots' @workspace / @roots handlers
+  for k, v in pairs(roots:mention_handlers()) do
+    view._mention_handlers[k] = v
+  end
 
   local function do_cancel()
     if session:get_state() ~= "prompting" then
@@ -377,6 +306,224 @@ function M.setup_integration(view, session)
 
   -- ── Session events ─────────────────────────────────────────────
 
+  -- ── Update dispatch table ──────────────────────────────────────
+  -- One handler per `sessionUpdate` type. Each closes over the integration
+  -- state it needs (uuids, tool_message_map, schedule_reload, render_mode,
+  -- session, view).
+
+  ---@type table<string, fun(update: table)>
+  local update_handlers = {}
+
+  -- `sessionUpdate` types that are pure metadata and shouldn't flip the
+  -- winbar to "generating" state.
+  local non_streaming_updates = {
+    available_commands_update = true,
+    session_info_update = true,
+    usage_update = true,
+    current_mode_update = true,
+  }
+
+  function update_handlers.user_message_chunk(update)
+    if update.content and update.content.type == "text" then
+      view:add_message(Message:new("user", update.content.text))
+    end
+  end
+
+  function update_handlers.agent_message_chunk(update)
+    if not (update.content and update.content.type == "text") then
+      return
+    end
+    if current_assistant_uuid then
+      view:update_message(current_assistant_uuid, function(msg)
+        msg:append_text(update.content.text)
+      end)
+    else
+      local msg = Message:new("assistant", update.content.text)
+      current_assistant_uuid = msg.uuid
+      current_thinking_uuid = nil
+      view:add_message(msg)
+    end
+  end
+
+  function update_handlers.agent_thought_chunk(update)
+    if not (update.content and update.content.type == "text" and update.content.text ~= "") then
+      return
+    end
+    if current_thinking_uuid then
+      view:update_message(current_thinking_uuid, function(msg)
+        for _, item in ipairs(msg.content) do
+          if item.type == "thinking" then
+            item.thinking = (item.thinking or "") .. update.content.text
+            return
+          end
+        end
+      end)
+    else
+      local msg = Message:new("assistant", {
+        type = "thinking",
+        thinking = update.content.text,
+      })
+      current_thinking_uuid = msg.uuid
+      current_assistant_uuid = nil
+      view:add_message(msg)
+    end
+  end
+
+  function update_handlers.tool_call(update)
+    current_assistant_uuid = nil
+    current_thinking_uuid = nil
+    local existing_uuid = tool_message_map[update.toolCallId]
+    if existing_uuid then
+      view:update_message(existing_uuid, function(msg)
+        for _, item in ipairs(msg.content) do
+          if item.type == "tool_use" and item.id == update.toolCallId then
+            if update.status then
+              item.status = update.status
+            end
+            if update.kind or update.title then
+              item.name = update.kind or update.title
+            end
+            if update.rawInput then
+              item.input = update.rawInput
+            end
+          end
+        end
+        if msg.metadata.tool_call then
+          for k, v in pairs(update) do
+            msg.metadata.tool_call[k] = v
+          end
+        end
+      end)
+    else
+      local msg = Message:new("assistant", {
+        type = "tool_use",
+        name = update.kind or update.title or "tool",
+        id = update.toolCallId,
+        input = update.rawInput or {},
+        status = update.status or "pending",
+      }, { tool_call = update })
+      tool_message_map[update.toolCallId] = msg.uuid
+      view:add_message(msg)
+    end
+  end
+
+  function update_handlers.tool_call_update(update)
+    local uuid = tool_message_map[update.toolCallId]
+    if uuid then
+      view:update_message(uuid, function(msg)
+        for _, item in ipairs(msg.content) do
+          if item.type == "tool_use" and item.id == update.toolCallId then
+            if update.status then
+              item.status = update.status
+            end
+            if update.title then
+              item.name = update.title
+            end
+            if update.rawInput then
+              item.input = update.rawInput
+            end
+          end
+        end
+        if msg.metadata.tool_call then
+          if update.content and next(update.content) ~= nil then
+            msg.metadata.tool_call.content = update.content
+          end
+          if update.status then
+            msg.metadata.tool_call.status = update.status
+          end
+          if update.title then
+            msg.metadata.tool_call.title = update.title
+          end
+          if update.rawOutput then
+            msg.metadata.tool_call.rawOutput = update.rawOutput
+          end
+          if update.locations then
+            msg.metadata.tool_call.locations = update.locations
+          end
+        end
+      end)
+    end
+
+    -- Debounced buffer reload for completed tool calls that wrote files
+    if update.status == "completed" and uuid then
+      local tc = (view:get_message(uuid) or {}).metadata
+      tc = tc and tc.tool_call
+      if tc and tc.content then
+        local first_line = tc.locations and tc.locations[1] and tc.locations[1].line
+        for _, c in ipairs(tc.content) do
+          if c.type == "diff" and c.path then
+            schedule_reload(c.path, first_line)
+          end
+        end
+      end
+    end
+  end
+
+  function update_handlers.plan(update)
+    local parts = { "**Plan:**" }
+    for _, entry in ipairs(update.entries or {}) do
+      local icon = entry.status == "completed" and "✓" or entry.status == "in_progress" and "→" or "○"
+      parts[#parts + 1] = icon .. " " .. entry.content
+    end
+    view:add_message(Message:new("system", table.concat(parts, "\n")))
+  end
+
+  function update_handlers.available_commands_update(update)
+    Commands.clear_acp()
+    for _, cmd in ipairs(update.availableCommands or {}) do
+      local name = cmd.name:gsub("^/", "")
+      local input = cmd.input
+      local hint = type(input) == "table" and input.hint or nil
+      if hint == vim.NIL or hint == "" then
+        hint = nil
+      end
+      Commands.register(name, {
+        desc = cmd.description or name,
+        source = "acp",
+        hint = hint,
+        execute = function(args, ctx)
+          if ctx.view.on_submit then
+            ctx.view.on_submit("/" .. name .. (args ~= "" and (" " .. args) or ""))
+          end
+        end,
+      })
+    end
+  end
+
+  function update_handlers.session_info_update(update)
+    if update.title then
+      view._session_title = update.title
+      if session.session_id then
+        Sessions.update_title(session.session_id, update.title)
+      end
+    end
+  end
+
+  function update_handlers.usage_update(update)
+    -- Standard ACP context-window update: { used, size, cost? }
+    vim.schedule(function()
+      if update.used and update.size and update.size > 0 then
+        local pct = (update.used / update.size) * 100
+        Winbar.set_context(pct)
+      end
+      if update.cost and type(update.cost.amount) == "number" then
+        local sym = update.cost.currency == "USD" and "$" or ((update.cost.currency or "") .. " ")
+        Winbar.set_badge("cost", string.format("%s%.2f", sym, update.cost.amount))
+      end
+    end)
+  end
+
+  function update_handlers.current_mode_update(update)
+    -- Standard ACP permission/mode update.
+    if update.currentModeId then
+      vim.schedule(function()
+        session.extensions = session.extensions or {}
+        session.extensions.mode_id = update.currentModeId
+        render_mode(update.currentModeId)
+      end)
+    end
+  end
+
   session:on("update", function(update, _update_session_id)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
     -- tool_call's title) before we consume it. Keep this lightweight —
@@ -385,197 +532,13 @@ function M.setup_integration(view, session)
       pcall(transform_update_fn, update)
     end
 
-    -- Only flip to "generating" for streaming response updates, not metadata updates
-    -- like available_commands_update or session_info_update.
-    local metadata_updates = {
-      available_commands_update = true,
-      session_info_update = true,
-      usage_update = true,
-      current_mode_update = true,
-    }
-    if not metadata_updates[update.sessionUpdate] then
+    if not non_streaming_updates[update.sessionUpdate] then
       Winbar.set_state("generating")
     end
 
-    if update.sessionUpdate == "user_message_chunk" then
-      if update.content and update.content.type == "text" then
-        view:add_message(Message:new("user", update.content.text))
-      end
-    elseif update.sessionUpdate == "agent_message_chunk" then
-      if update.content and update.content.type == "text" then
-        if current_assistant_uuid then
-          view:update_message(current_assistant_uuid, function(msg)
-            msg:append_text(update.content.text)
-          end)
-        else
-          local msg = Message:new("assistant", update.content.text)
-          current_assistant_uuid = msg.uuid
-          current_thinking_uuid = nil
-          view:add_message(msg)
-        end
-      end
-    elseif update.sessionUpdate == "agent_thought_chunk" then
-      if update.content and update.content.type == "text" and update.content.text ~= "" then
-        if current_thinking_uuid then
-          view:update_message(current_thinking_uuid, function(msg)
-            for _, item in ipairs(msg.content) do
-              if item.type == "thinking" then
-                item.thinking = (item.thinking or "") .. update.content.text
-                return
-              end
-            end
-          end)
-        else
-          local msg = Message:new("assistant", {
-            type = "thinking",
-            thinking = update.content.text,
-          })
-          current_thinking_uuid = msg.uuid
-          current_assistant_uuid = nil
-          view:add_message(msg)
-        end
-      end
-    elseif update.sessionUpdate == "tool_call" then
-      current_assistant_uuid = nil
-      current_thinking_uuid = nil
-      local existing_uuid = tool_message_map[update.toolCallId]
-      if existing_uuid then
-        view:update_message(existing_uuid, function(msg)
-          for _, item in ipairs(msg.content) do
-            if item.type == "tool_use" and item.id == update.toolCallId then
-              if update.status then
-                item.status = update.status
-              end
-              if update.kind or update.title then
-                item.name = update.kind or update.title
-              end
-              if update.rawInput then
-                item.input = update.rawInput
-              end
-            end
-          end
-          if msg.metadata.tool_call then
-            for k, v in pairs(update) do
-              msg.metadata.tool_call[k] = v
-            end
-          end
-        end)
-      else
-        local msg = Message:new("assistant", {
-          type = "tool_use",
-          name = update.kind or update.title or "tool",
-          id = update.toolCallId,
-          input = update.rawInput or {},
-          status = update.status or "pending",
-        }, { tool_call = update })
-        tool_message_map[update.toolCallId] = msg.uuid
-        view:add_message(msg)
-      end
-    elseif update.sessionUpdate == "tool_call_update" then
-      local uuid = tool_message_map[update.toolCallId]
-      if uuid then
-        view:update_message(uuid, function(msg)
-          for _, item in ipairs(msg.content) do
-            if item.type == "tool_use" and item.id == update.toolCallId then
-              if update.status then
-                item.status = update.status
-              end
-              if update.title then
-                item.name = update.title
-              end
-              if update.rawInput then
-                item.input = update.rawInput
-              end
-            end
-          end
-          if msg.metadata.tool_call then
-            if update.content and next(update.content) ~= nil then
-              msg.metadata.tool_call.content = update.content
-            end
-            if update.status then
-              msg.metadata.tool_call.status = update.status
-            end
-            if update.title then
-              msg.metadata.tool_call.title = update.title
-            end
-            if update.rawOutput then
-              msg.metadata.tool_call.rawOutput = update.rawOutput
-            end
-            if update.locations then
-              msg.metadata.tool_call.locations = update.locations
-            end
-          end
-        end)
-      end
-
-      -- Debounced buffer reload for completed tool calls that wrote files
-      if update.status == "completed" and uuid then
-        local tc = (view:get_message(uuid) or {}).metadata
-        tc = tc and tc.tool_call
-        if tc and tc.content then
-          local first_line = tc.locations and tc.locations[1] and tc.locations[1].line
-          for _, c in ipairs(tc.content) do
-            if c.type == "diff" and c.path then
-              schedule_reload(c.path, first_line)
-            end
-          end
-        end
-      end
-    elseif update.sessionUpdate == "plan" then
-      local parts = { "**Plan:**" }
-      for _, entry in ipairs(update.entries or {}) do
-        local icon = entry.status == "completed" and "✓" or entry.status == "in_progress" and "→" or "○"
-        parts[#parts + 1] = icon .. " " .. entry.content
-      end
-      view:add_message(Message:new("system", table.concat(parts, "\n")))
-    elseif update.sessionUpdate == "available_commands_update" then
-      Commands.clear_acp()
-      for _, cmd in ipairs(update.availableCommands or {}) do
-        local name = cmd.name:gsub("^/", "")
-        local input = cmd.input
-        local hint = type(input) == "table" and input.hint or nil
-        if hint == vim.NIL or hint == "" then
-          hint = nil
-        end
-        Commands.register(name, {
-          desc = cmd.description or name,
-          source = "acp",
-          hint = hint,
-          execute = function(args, ctx)
-            if ctx.view.on_submit then
-              ctx.view.on_submit("/" .. name .. (args ~= "" and (" " .. args) or ""))
-            end
-          end,
-        })
-      end
-    elseif update.sessionUpdate == "session_info_update" then
-      if update.title then
-        view._session_title = update.title
-        if session.session_id then
-          Sessions.update_title(session.session_id, update.title)
-        end
-      end
-    elseif update.sessionUpdate == "usage_update" then
-      -- Standard ACP context-window update: { used, size, cost? }
-      vim.schedule(function()
-        if update.used and update.size and update.size > 0 then
-          local pct = (update.used / update.size) * 100
-          Winbar.set_context(pct)
-        end
-        if update.cost and type(update.cost.amount) == "number" then
-          local sym = update.cost.currency == "USD" and "$" or ((update.cost.currency or "") .. " ")
-          Winbar.set_badge("cost", string.format("%s%.2f", sym, update.cost.amount))
-        end
-      end)
-    elseif update.sessionUpdate == "current_mode_update" then
-      -- Standard ACP permission/mode update.
-      if update.currentModeId then
-        vim.schedule(function()
-          session.extensions = session.extensions or {}
-          session.extensions.mode_id = update.currentModeId
-          render_mode(update.currentModeId)
-        end)
-      end
+    local handler = update_handlers[update.sessionUpdate]
+    if handler then
+      handler(update)
     end
   end)
 
@@ -730,8 +693,9 @@ function M.setup_integration(view, session)
   ---Build options carrying the current workspace roots and provider meta, if any.
   local function lifecycle_opts()
     local opts = {}
-    if #selected_roots > 0 then
-      opts.additional_directories = vim.deepcopy(selected_roots)
+    local snap = roots:snapshot()
+    if #snap > 0 then
+      opts.additional_directories = snap
     end
     local meta = build_session_meta()
     if meta then
@@ -775,11 +739,7 @@ function M.setup_integration(view, session)
 
     load_session = function(session_id, cb)
       -- Hydrate roots from the persisted session entry before re-loading
-      local entry = Sessions.get(session_id)
-      if entry and entry.additional_directories then
-        selected_roots = vim.deepcopy(entry.additional_directories)
-        refresh_roots_badge()
-      end
+      roots:hydrate_from(Sessions.get(session_id))
       with_lifecycle({ clear = true, touch = true }, function(done)
         session:load(session_id, lifecycle_opts(), function(err)
           if not err then
@@ -791,11 +751,7 @@ function M.setup_integration(view, session)
     end,
 
     connect_and_load = function(session_id, cb)
-      local entry = Sessions.get(session_id)
-      if entry and entry.additional_directories then
-        selected_roots = vim.deepcopy(entry.additional_directories)
-        refresh_roots_badge()
-      end
+      roots:hydrate_from(Sessions.get(session_id))
       with_lifecycle({ touch = true }, function(done)
         session:connect_and_load(session_id, lifecycle_opts(), function(err)
           if not err then
@@ -868,7 +824,7 @@ function M.setup_integration(view, session)
       reset_state()
       selected_files = {}
       refresh_file_display()
-      -- Keep selected_roots as-is so a new session inherits the user's roots.
+      -- Keep roots as-is so a new session inherits the user's roots.
       with_lifecycle({ save = true }, function(done)
         session:new_session(lifecycle_opts(), function(err)
           if not err then
@@ -894,6 +850,7 @@ function M.setup_integration(view, session)
       if ext_cleanup then
         ext_cleanup()
       end
+      roots:cleanup()
       session:disconnect()
     end,
 
@@ -915,8 +872,12 @@ function M.setup_integration(view, session)
       end
     end,
 
-    add_root = add_root,
-    remove_root = remove_root,
+    add_root = function(dir)
+      roots:add(dir)
+    end,
+    remove_root = function(idx_or_path)
+      roots:remove(idx_or_path)
+    end,
 
     ---Register a function that mutates session/update payloads in place
     ---before the integration consumes them. Pass nil to clear.
