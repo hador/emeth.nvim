@@ -292,14 +292,6 @@ function Session:cancel()
   end
 end
 
----Send a raw JSON-RPC request to the agent.
----@param method string
----@param params? table
----@param cb? fun(result: table|nil, err: table|nil)
-function Session:request(method, params, cb)
-  self.client:_send_request(method, params or {}, cb or function() end)
-end
-
 ---List previous sessions from the agent. Requires sessionCapabilities.list.
 ---@param cb fun(sessions: acp.SessionInfo[]|nil, err: acp.ACPError|nil)
 function Session:list_sessions(cb)

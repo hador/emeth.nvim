@@ -24,7 +24,7 @@ local _uuid_counter = 0
 ---@class chat_ui.Message
 ---@field role "user"|"assistant"|"system"
 ---@field content chat_ui.ContentItem[]
----@field _show_files? boolean
+---@field _show_details? boolean
 ---@field timestamp string
 ---@field uuid string
 ---@field metadata chat_ui.MessageMetadata

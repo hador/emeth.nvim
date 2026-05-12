@@ -915,19 +915,8 @@ function M.setup_integration(view, session)
       end
     end,
 
-    get_selected_files = function()
-      return selected_files
-    end,
-
     add_root = add_root,
     remove_root = remove_root,
-    get_selected_roots = function()
-      return selected_roots
-    end,
-
-    add_fenced = function(header_or_lines, body)
-      view:append_fenced(header_or_lines, body)
-    end,
 
     ---Register a function that mutates session/update payloads in place
     ---before the integration consumes them. Pass nil to clear.
