@@ -133,3 +133,54 @@ h.describe("Session permission event", function()
     h.is_nil(chosen)
   end)
 end)
+
+h.describe("Session _extract_session_info provider delegation", function()
+  -- Inject a fake provider extension module on the fly. We use a unique name
+  -- so the require cache miss doesn't clash with real integrations.
+  local fake = { calls = 0, last_result = nil, last_extensions = nil }
+  package.loaded["emeth.integrations.fakeprov"] = {
+    extract_session_info = function(result, extensions)
+      fake.calls = fake.calls + 1
+      fake.last_result = result
+      fake.last_extensions = extensions
+      extensions.custom_field = "from-extension"
+    end,
+  }
+  -- Register provider config too
+  require("emeth.acp").config.providers["fakeprov"] = { command = "echo", args = {} }
+
+  h.it("calls extension's extract_session_info with result and extensions table", function()
+    local s = Session:new("fakeprov")
+    s:_extract_session_info({ models = { currentModelId = "m1" }, configOptions = { foo = "bar" } })
+    h.eq(1, fake.calls)
+    h.eq("m1", s.extensions.model_id)  -- standard field still set
+    h.eq("from-extension", s.extensions.custom_field)  -- extension mutation visible
+    h.eq("bar", fake.last_result.configOptions.foo)
+  end)
+
+  h.it("nil result short-circuits before delegation", function()
+    fake.calls = 0
+    local s = Session:new("fakeprov")
+    s:_extract_session_info(nil)
+    h.eq(0, fake.calls)
+  end)
+
+  h.it("missing extract_session_info on extension is ok", function()
+    package.loaded["emeth.integrations.bareprov"] = { build_session_meta = function() end }
+    require("emeth.acp").config.providers["bareprov"] = { command = "echo", args = {} }
+    local s = Session:new("bareprov")
+    s:_extract_session_info({ models = { currentModelId = "x" } })
+    h.eq("x", s.extensions.model_id)
+  end)
+
+  h.it("buggy extract_session_info is contained via pcall", function()
+    package.loaded["emeth.integrations.brokenprov"] = {
+      extract_session_info = function() error("boom") end,
+    }
+    require("emeth.acp").config.providers["brokenprov"] = { command = "echo", args = {} }
+    local s = Session:new("brokenprov")
+    -- Should not throw
+    s:_extract_session_info({ models = { currentModelId = "x" } })
+    h.eq("x", s.extensions.model_id)
+  end)
+end)
