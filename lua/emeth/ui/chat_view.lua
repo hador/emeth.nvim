@@ -11,7 +11,6 @@ local api = vim.api
 ---@field messages chat_ui.Message[]
 ---@field on_submit fun(text: string)|nil
 ---@field on_remove_file fun(index: number)|nil
----@field on_command fun(name: string, args: string): boolean|nil
 ---@field integration table|nil
 ---@field _config chat_ui.Config
 ---@field _ns_id number
@@ -57,7 +56,6 @@ function ChatView:new(opts)
     messages = {},
     on_submit = opts.on_submit,
     on_remove_file = nil,
-    on_command = nil,
     integration = nil,
     _config = opts.config,
     _ns_id = api.nvim_create_namespace("emeth_render"),
@@ -94,7 +92,7 @@ function ChatView:new(opts)
       end
 
       if msg.role == "user" and has_user_details(msg) then
-        msg._show_files = not msg._show_files
+        msg._show_details = not msg._show_details
         invalidate_msg(msg)
         return
       end
@@ -169,7 +167,7 @@ function ChatView:new(opts)
         hints[#hints + 1] = "r: retry"
         hints[#hints + 1] = "e: edit"
         if has_user_details(msg) then
-          hints[#hints + 1] = "K: " .. (msg._show_files and "hide" or "show") .. " details"
+          hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
         end
       end
       if is_first_line and msg.content then
@@ -396,9 +394,7 @@ function ChatView:_setup_input()
     if cmd_name then
       local cmd = Commands.get(cmd_name)
       if cmd then
-        if not self.on_command or not self.on_command(cmd_name, cmd_args) then
-          cmd.execute(cmd_args, { view = self, integration = self.integration })
-        end
+        cmd.execute(cmd_args, { view = self, integration = self.integration })
         return
       end
     end
@@ -471,9 +467,7 @@ function ChatView:_setup_input()
             -- Provider-driven picker, or fire-and-forget: execute directly.
             api.nvim_buf_set_lines(buf, 0, -1, false, {})
             self:set_context_files(self._context_files)
-            if not self.on_command or not self.on_command(choice.name, "") then
-              cmd.execute("", { view = self, integration = self.integration })
-            end
+            cmd.execute("", { view = self, integration = self.integration })
           else
             -- Default: pre-fill `/cmd ` and let the user type args (with
             -- a hint as virt-text overlay if the command supplied one, plus

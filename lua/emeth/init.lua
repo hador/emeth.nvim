@@ -218,7 +218,7 @@ function M.send_selection()
     return
   end
   local fname = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
-  M._integration.add_fenced({ "From " .. fname .. ":" }, lines)
+  assert(_view):append_fenced({ "From " .. fname .. ":" }, lines)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   M.open()
 end
