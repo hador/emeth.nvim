@@ -308,6 +308,16 @@ A provider extension at `lua/emeth/integrations/<provider>.lua` may export any o
 - `tag` — short text shown next to the lifecycle label in the bottom bar. Omit to skip.
 - `tag_kind` — `"info"`, `"warn"`, `"error"`, or `"hint"`; selects the tag's highlight color.
 
+#### Per-session callbacks
+
+In addition to the module-level hooks above, an extension's `setup(session, view)` may register per-session callbacks via setters on `view.integration`:
+
+| Setter | Callback | Purpose |
+|--------|----------|---------|
+| `view.integration.set_transform_update(fn)` | `fn(update)` | Mutate a `session/update` payload in place before the integration consumes it. The bundled claude-code extension uses this to enrich Task tool_call titles with the subagent's description and type. |
+
+Pass `nil` to clear; the integration also clears registered callbacks on disconnect. The setter exists at `view.integration` from the moment `setup` is called, so the registration can happen synchronously inside `setup`.
+
 ### Per-session metadata (`_meta`)
 
 ACP lets clients attach a free-form `_meta` object to `session/new` and `session/load` requests. emeth.nvim exposes this via an optional `build_session_meta` export on the provider extension module — a hook that runs at session creation time and returns the meta payload to send.

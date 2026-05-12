@@ -339,7 +339,7 @@ local function render_user_message(msg)
   lines[#lines + 1] = Line:new({ { table.concat(parts, " · ") .. " ", HL.USER } })
 
   -- Details (hidden by default, toggled with K)
-  if msg._show_files then
+  if msg._show_details then
     if msg.metadata.model then
       lines[#lines + 1] = Line:new({ { "  model: " .. msg.metadata.model, HL.MUTED } })
     end
