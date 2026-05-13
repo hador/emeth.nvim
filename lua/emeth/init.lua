@@ -112,7 +112,9 @@ end
 
 ---Connect to a provider, setting up the integration and session.
 ---@param provider string
-local function connect(provider)
+---@param opts? { fresh?: boolean }
+local function connect(provider, opts)
+  opts = opts or {}
   local origin_buf = vim.api.nvim_get_current_buf()
   local origin_file = vim.api.nvim_buf_get_name(origin_buf)
 
@@ -128,7 +130,7 @@ local function connect(provider)
   end
 
   local resumed = false
-  if M.config.resume_last_session then
+  if not opts.fresh and M.config.resume_last_session then
     local Sessions = require("emeth.sessions")
     local last = Sessions.list(vim.fn.getcwd(), provider)[1]
     if last then
@@ -143,7 +145,10 @@ end
 
 ---Open the chat sidebar, optionally with a specific provider.
 ---@param provider? string
-function M.open(provider)
+---@param opts? { fresh?: boolean }  fresh=true forces a new session (skip resume)
+function M.open(provider, opts)
+  opts = opts or {}
+
   -- Switch provider if a different one was requested
   if provider and M._integration and provider ~= M._provider then
     M._integration.disconnect()
@@ -151,9 +156,12 @@ function M.open(provider)
     M._provider = nil
   end
 
-  -- Already connected — just focus
+  -- Already connected — start a new session if fresh was requested, else focus
   if M._integration then
     ensure_sidebar_open()
+    if opts.fresh and M._integration.new_session then
+      M._integration.new_session()
+    end
     if _sidebar then
       _sidebar:focus_input()
     end
@@ -162,7 +170,7 @@ function M.open(provider)
 
   local resolved = resolve_provider(provider)
   if resolved then
-    connect(resolved)
+    connect(resolved, opts)
   end
 end
 
