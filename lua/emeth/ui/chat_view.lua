@@ -145,32 +145,63 @@ function ChatView:new(opts)
     end,
   })
 
-  -- Contextual help: show available keybinds as virtual text on cursor line
+  -- Contextual help: show available keybinds as virtual text on the
+  -- message's "primary" line — the line where the user actually looks. For
+  -- user messages that's the first content line (`> text`); for everything
+  -- else it's the first row of the message.
   local help_ns = api.nvim_create_namespace("emeth_help_hints")
-  local last_hint_row = nil
+
+  ---@param msg chat_ui.Message
+  ---@param cursor_row number  1-based buffer row currently under the cursor
+  ---@return number  1-based buffer row to anchor the hint on
+  local function primary_row_for(msg, cursor_row)
+    -- Walk back to the message's first row.
+    local first = cursor_row
+    while first > 1 and view._line_to_msg[first - 1] == msg do
+      first = first - 1
+    end
+    -- Walk forward to the message's last row.
+    local last = cursor_row
+    local total = api.nvim_buf_line_count(result_buf)
+    while last < total and view._line_to_msg[last + 1] == msg do
+      last = last + 1
+    end
+    -- For user messages, prefer the first `> ` content line.
+    if msg.role == "user" then
+      for r = first, last do
+        local line = api.nvim_buf_get_lines(result_buf, r - 1, r, false)[1] or ""
+        if line:sub(1, 2) == "> " then
+          return r
+        end
+      end
+    end
+    return first
+  end
+
+  local last_anchor_row = nil
   api.nvim_create_autocmd("CursorMoved", {
     buffer = result_buf,
     callback = function()
       local row = api.nvim_win_get_cursor(0)[1]
-      if row == last_hint_row then
+      local msg = view._line_to_msg[row]
+      local anchor_row = msg and primary_row_for(msg, row) or nil
+      if anchor_row == last_anchor_row then
         return
       end
-      last_hint_row = row
+      last_anchor_row = anchor_row
       api.nvim_buf_clear_namespace(result_buf, help_ns, 0, -1)
-      local msg = view._line_to_msg[row]
       if not msg then
         return
       end
       local hints = {}
-      local is_first_line = view._line_to_msg[row - 1] ~= msg
-      if is_first_line and msg.role == "user" then
+      if msg.role == "user" then
         hints[#hints + 1] = "r: retry"
         hints[#hints + 1] = "e: edit"
         if has_user_details(msg) then
           hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
         end
       end
-      if is_first_line and msg.content then
+      if msg.content then
         for _, item in ipairs(msg.content) do
           if item.type == "tool_use" then
             hints[#hints + 1] = "K: " .. (msg.metadata._expanded and "collapse" or "expand")
@@ -178,8 +209,8 @@ function ChatView:new(opts)
           end
         end
       end
-      if #hints > 0 then
-        api.nvim_buf_set_extmark(result_buf, help_ns, row - 1, 0, {
+      if #hints > 0 and anchor_row then
+        api.nvim_buf_set_extmark(result_buf, help_ns, anchor_row - 1, 0, {
           virt_text = { { "  [" .. table.concat(hints, ", ") .. "]", "Comment" } },
           virt_text_pos = "eol",
         })
