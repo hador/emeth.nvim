@@ -43,9 +43,10 @@ With lazy.nvim: >lua
 
   {
     "hador/emeth.nvim",
-    cmd = { "Emeth", "EmethToggle", "EmethHistory" },
+    cmd = { "Emeth", "EmethNew", "EmethToggle", "EmethHistory" },
     keys = {
       { "<leader>ee", "<cmd>Emeth<cr>" },
+      { "<leader>en", "<cmd>EmethNew<cr>" },
       { "<leader>et", "<cmd>EmethToggle<cr>" },
       { "<leader>eh", "<cmd>EmethHistory<cr>" },
       { "<leader>es", function() require("emeth").send_selection() end, mode = "v" },
@@ -123,6 +124,12 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   from the current one, disconnects and reconnects to the new provider.
   Without an argument, focuses the sidebar if already open.
 
+:EmethNew [provider]                                              *:EmethNew*
+  Open the sidebar with a fresh session, bypassing `resume_last_session`.
+  If a chat is already open, starts a new session in-place (equivalent to
+  `/new`). Useful when `resume_last_session = true` is the default but you
+  want to start clean for a new task.
+
 :EmethToggle                                                  *:EmethToggle*
   Toggle the sidebar open/closed.
 
@@ -138,9 +145,10 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
 ==============================================================================
 6. LUA API                                                    *emeth-lua-api*
 
-require("emeth").open({provider?})                             *emeth.open()*
+require("emeth").open({provider?}, {opts?})                    *emeth.open()*
   Open or focus the sidebar. If {provider} is given and differs from the
-  active provider, disconnects and reconnects.
+  active provider, disconnects and reconnects. {opts.fresh = true} forces a
+  new session (skips `resume_last_session`); equivalent to |:EmethNew|.
 
 require("emeth").close()                                      *emeth.close()*
   Close the sidebar and disconnect.
