@@ -3,6 +3,11 @@ vim.api.nvim_create_user_command("Emeth", function(args)
   require("emeth").open(provider)
 end, { nargs = "?", desc = "Open Emeth chat (optionally specify provider)" })
 
+vim.api.nvim_create_user_command("EmethNew", function(args)
+  local provider = args.args ~= "" and args.args or nil
+  require("emeth").open(provider, { fresh = true })
+end, { nargs = "?", desc = "Open Emeth chat with a new session (skip resume)" })
+
 vim.api.nvim_create_user_command("EmethClose", function()
   require("emeth").close()
 end, { desc = "Close Emeth sidebar" })
