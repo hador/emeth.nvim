@@ -524,7 +524,7 @@ function M.setup_integration(view, session)
     end
   end
 
-  session:on("update", function(update, _update_session_id)
+  session:on("update", function(update)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
     -- tool_call's title) before we consume it. Keep this lightweight —
     -- transforms run on every event.
