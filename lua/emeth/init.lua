@@ -1,5 +1,9 @@
 --- emeth.nvim — Reusable chat UI library for AI/LLM interactions.
 
+---@class chat_ui.ClaudeCodeConfig
+---@field show_raw_sdk_messages? boolean
+---@field extra_args? table<string, string|boolean>
+
 ---@class chat_ui.Config
 ---@field sidebar { position: string, width: number, input_height: number }
 ---@field mappings table
@@ -10,6 +14,7 @@
 ---@field default_provider string|nil
 ---@field auto_add_current_file boolean
 ---@field show_title? boolean
+---@field claude_code? chat_ui.ClaudeCodeConfig
 
 ---@class chat_ui.Module
 ---@field config chat_ui.Config
