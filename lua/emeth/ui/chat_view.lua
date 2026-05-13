@@ -428,6 +428,71 @@ function ChatView:_setup_input()
   ---@type table<string, { handler: fun(), desc: string }>
   self._mention_handlers = {}
 
+  ---Build a markdown preview body for a command (used by the snacks-native
+  ---picker on the side pane).
+  ---@param name string command name (without leading /)
+  ---@param cmd emeth.Command
+  ---@return string
+  local function command_preview_text(name, cmd)
+    local lines = { "# /" .. name, "" }
+    if cmd.desc and cmd.desc ~= "" then
+      lines[#lines + 1] = cmd.desc
+      lines[#lines + 1] = ""
+    end
+    if cmd.hint and cmd.hint ~= "" then
+      lines[#lines + 1] = "**Args:** `" .. cmd.hint .. "`"
+      lines[#lines + 1] = ""
+    end
+    if cmd.source then
+      lines[#lines + 1] = "_source: " .. cmd.source .. "_"
+    end
+    return table.concat(lines, "\n")
+  end
+
+  ---Run the command picker. Uses snacks.picker.pick directly when available
+  ---(two-pane layout with description preview); falls back to vim.ui.select.
+  ---@param cmds { name: string, desc: string, source: string }[]
+  ---@param on_pick fun(name: string)
+  local function pick_command(cmds, on_pick)
+    local has_snacks, SnacksPicker = pcall(require, "snacks.picker")
+    if has_snacks then
+      local items = {}
+      for _, c in ipairs(cmds) do
+        local cmd = Commands.get(c.name)
+        items[#items + 1] = {
+          text = "/" .. c.name,
+          cmd = c.name,
+          preview = cmd and { text = command_preview_text(c.name, cmd), ft = "markdown" } or nil,
+        }
+      end
+      SnacksPicker.pick({
+        source = "emeth_commands",
+        title = "emeth commands",
+        items = items,
+        format = "text",
+        preview = "preview",
+        confirm = function(picker, item)
+          picker:close()
+          if item and item.cmd then
+            on_pick(item.cmd)
+          end
+        end,
+      })
+      return
+    end
+    -- Fallback: vim.ui.select with name + truncated desc on one line
+    vim.ui.select(cmds, {
+      prompt = "/",
+      format_item = function(c)
+        return "/" .. c.name .. "  " .. c.desc
+      end,
+    }, function(choice)
+      if choice then
+        on_pick(choice.name)
+      end
+    end)
+  end
+
   -- Intercept "/" before it enters the buffer so completion plugins
   -- never see it and don't trigger path completion over the command picker.
   api.nvim_create_autocmd("InsertCharPre", {
@@ -450,16 +515,8 @@ function ChatView:_setup_input()
       end
       vim.v.char = ""
       vim.schedule(function()
-        vim.ui.select(cmds, {
-          prompt = "/",
-          format_item = function(c)
-            return "/" .. c.name .. "  " .. c.desc
-          end,
-        }, function(choice)
-          if not choice then
-            return
-          end
-          local cmd = Commands.get(choice.name)
+        pick_command(cmds, function(name)
+          local cmd = Commands.get(name)
           if not cmd then
             return
           end
@@ -469,10 +526,11 @@ function ChatView:_setup_input()
             self:set_context_files(self._context_files)
             cmd.execute("", { view = self, integration = self.integration })
           else
-            -- Default: pre-fill `/cmd ` and let the user type args (with
-            -- a hint as virt-text overlay if the command supplied one, plus
-            -- the description on the line below).
-            self:prefill_command(choice.name, cmd.hint, cmd.desc)
+            -- Default: pre-fill `/cmd ` (and the hint as a real-text
+            -- placeholder if the command provides one). Description is
+            -- visible in the picker's preview pane, so we don't render
+            -- it in the input window.
+            self:prefill_command(name, cmd.hint)
           end
         end)
       end)
@@ -598,71 +656,50 @@ function ChatView:open_file_manager()
   end
 end
 
----Pre-fill the input buffer with `/<name> ` and focus it. Hints are
----rendered as `Comment`-highlighted virt-text and cleared on the next text
----change:
----  - `hint`: overlay shown after the cursor (e.g. "<model_id>")
----  - `desc`: line below the input, with the command's description
+---Pre-fill the input buffer with `/<name> ` (and the hint as a real-text
+---placeholder if provided) and focus the input window in insert mode.
+---When a hint is present, the cursor is placed at the start of the hint so
+---a visual-mode select-replace is one keystroke away (`v$c`) — but the user
+---can also just keep typing to append, or hit backspace to clear and replace.
+---
+---The mode switch is deferred via `vim.schedule` so it survives the picker
+---plugin's close-time focus shuffling.
 ---@param name string command name without leading slash
----@param hint? string argument hint (e.g. "<model_id>")
----@param desc? string command description (rendered on the line below)
-function ChatView:prefill_command(name, hint, desc)
+---@param hint? string argument hint (e.g. "<model_id>"); inserted as real text
+function ChatView:prefill_command(name, hint)
   local buf = self.input_buf
   if not api.nvim_buf_is_valid(buf) then
     return
   end
-  api.nvim_buf_set_lines(buf, 0, -1, false, { "/" .. name .. " " })
+
+  local prefix = "/" .. name .. " "
+  local has_hint = hint and hint ~= ""
+  local line = has_hint and (prefix .. hint) or prefix
+  api.nvim_buf_set_lines(buf, 0, -1, false, { line })
   self:set_context_files(self._context_files)
 
-  -- Focus the input window if one exists, else bail to picker normal mode.
-  local input_win
-  for _, win in ipairs(api.nvim_list_wins()) do
-    if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == buf then
-      input_win = win
-      break
+  local cursor_col = #prefix
+  if not has_hint then
+    cursor_col = #prefix
+  end
+
+  -- Defer focus + cursor + insert-mode entry to next tick. Picker plugins
+  -- (snacks, telescope, etc.) close their UI synchronously on confirm and
+  -- can leave focus or mode in unexpected states; scheduling lets that
+  -- settle before we apply our intent.
+  vim.schedule(function()
+    if not api.nvim_buf_is_valid(buf) then
+      return
     end
-  end
-  if input_win then
-    api.nvim_set_current_win(input_win)
-  end
-
-  local col = #name + 2
-  pcall(api.nvim_win_set_cursor, 0, { 1, col })
-  vim.cmd("startinsert")
-
-  local ns = api.nvim_create_namespace("emeth_cmd_hint")
-  api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-
-  local has_overlay = hint and hint ~= ""
-  local has_desc = desc and desc ~= ""
-
-  if has_overlay then
-    api.nvim_buf_set_extmark(buf, ns, 0, col, {
-      virt_text = { { hint, "Comment" } },
-      virt_text_pos = "overlay",
-    })
-  end
-
-  if has_desc then
-    -- Append the description at end-of-line of the input. virt_lines (below
-    -- the input) renders inconsistently in narrow sidebar windows; eol
-    -- virt_text is reliable. We add a separator so it doesn't crowd the hint.
-    local sep = has_overlay and "    " or "  "
-    api.nvim_buf_set_extmark(buf, ns, 0, #name + 2, {
-      virt_text = { { sep .. "— " .. desc, "Comment" } },
-      virt_text_pos = "eol",
-    })
-  end
-
-  if has_overlay or has_desc then
-    api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
-      buffer = buf,
-      once = true,
-      callback = function()
-        api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-      end,
-    })
-  end
+    for _, win in ipairs(api.nvim_list_wins()) do
+      if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == buf then
+        api.nvim_set_current_win(win)
+        break
+      end
+    end
+    pcall(api.nvim_win_set_cursor, 0, { 1, cursor_col })
+    vim.cmd("startinsert")
+  end)
 end
 
 ---@param files string[]
