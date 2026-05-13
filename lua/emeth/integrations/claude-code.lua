@@ -234,7 +234,7 @@ function M.setup(session, view)
     end)
   end
 
-  local function on_update(update, _update_session_id)
+  local function on_update(update)
     track_task_update(tasks, update)
   end
 
