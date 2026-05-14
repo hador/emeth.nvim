@@ -82,6 +82,8 @@ function M.setup_integration(view, session)
     end
   end
 
+  local prompt_generation = 0
+
   local function reset_state()
     current_assistant_uuid = nil
     current_thinking_uuid = nil
@@ -285,6 +287,8 @@ function M.setup_integration(view, session)
     })
     view:add_message(msg)
     reset_state()
+    prompt_generation = prompt_generation + 1
+    local gen = prompt_generation
     Winbar.set_state("generating")
     if session.session_id then
       Sessions.touch(session.session_id)
@@ -295,7 +299,9 @@ function M.setup_integration(view, session)
     end
     session:send_prompt(prompt, function(_, err)
       vim.schedule(function()
-        Winbar.set_state("ready")
+        if gen == prompt_generation then
+          Winbar.set_state("ready")
+        end
         if err then
           view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
         end
