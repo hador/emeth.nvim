@@ -120,6 +120,10 @@ function ChatView:new(opts)
         local text = msg:text()
         if text ~= "" then
           view.on_submit(text)
+          vim.schedule(function()
+            local lc = api.nvim_buf_line_count(result_buf)
+            pcall(api.nvim_win_set_cursor, 0, { lc, 0 })
+          end)
         end
       end
     end,
