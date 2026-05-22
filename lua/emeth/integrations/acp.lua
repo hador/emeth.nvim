@@ -287,6 +287,7 @@ function M.setup_integration(view, session)
     })
     view:add_message(msg)
     reset_state()
+    Winbar.clear_mode_tag()
     prompt_generation = prompt_generation + 1
     local gen = prompt_generation
     Winbar.set_state("generating")
@@ -304,6 +305,13 @@ function M.setup_integration(view, session)
         end
         if err then
           view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
+        end
+        -- Signal when background tasks are still in-flight — their output
+        -- is deferred by the ACP wrapper and will arrive on the next prompt.
+        local pending_fn = view.integration and view.integration.get_pending_task_count
+        local pending = pending_fn and pending_fn() or 0
+        if pending > 0 then
+          Winbar.set_mode_tag("⑂ " .. pending .. " background", "info")
         end
         view:invalidate()
       end)
