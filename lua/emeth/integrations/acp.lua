@@ -238,11 +238,18 @@ function M.setup_integration(view, session)
   end
 
   local function do_cancel()
-    if session:get_state() ~= "prompting" then
+    if not session:is_connected() then
+      return
+    end
+    local is_prompting = session:get_state() == "prompting"
+    local pending_fn = view.integration and view.integration.get_pending_task_count
+    local has_background = pending_fn and pending_fn() > 0
+    if not is_prompting and not has_background then
       return
     end
     session:cancel()
     Winbar.set_state("ready")
+    Winbar.clear_mode_tag()
     for _, msg in ipairs(view:get_messages()) do
       for _, item in ipairs(msg.content) do
         if item.type == "tool_use" and item.status and item.status ~= "completed" and item.status ~= "failed" then
