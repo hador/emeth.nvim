@@ -228,6 +228,7 @@ function Session:connect(opts, cb)
         return
       end
       self.session_id = session_id
+
       self:_extract_session_info(result)
       self._state = "ready"
       cb(nil)
@@ -259,6 +260,7 @@ function Session:new_session(opts, cb)
       return
     end
     self.session_id = session_id
+
     self:_extract_session_info(result)
     self._state = "ready"
     cb(nil)

@@ -87,8 +87,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     auto_add_current_file = true, -- add current buffer as context
     prompt_dirs = {},             -- e.g. { "~/.config/prompts" }
     acp = {
-      debug = false,
-      log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
+      debug = false,  -- per-session logs in stdpath("state")/emeth/logs/
       providers = {
         ["kiro-cli"] = { command = "kiro-cli", args = { "acp" } },
         -- see :checkhealth emeth for all built-in providers
