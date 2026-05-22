@@ -244,8 +244,19 @@ function M.setup(session, view)
   -- Register the per-session transform callback. `view.integration` is set
   -- by the generic integration *before* it calls into this `setup()`, so
   -- the setter is available here.
-  if view.integration and view.integration.set_transform_update then
-    view.integration.set_transform_update(make_transform_update(tasks))
+  if view.integration then
+    if view.integration.set_transform_update then
+      view.integration.set_transform_update(make_transform_update(tasks))
+    end
+    -- Expose a count of in-flight background tasks so the integration layer
+    -- can signal the user when deferred output is pending.
+    view.integration.get_pending_task_count = function()
+      local n = 0
+      for _ in pairs(tasks) do
+        n = n + 1
+      end
+      return n
+    end
   end
 
   return function()
