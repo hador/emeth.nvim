@@ -128,8 +128,7 @@ require("emeth").setup({
   prompt_dirs = {},             -- e.g. { "~/.config/prompts", ".prompts" }
   prompt_edit_before_send = true, -- paste prompt into input for editing; false = send immediately
   acp = {
-    debug = false,
-    log_file = vim.fn.stdpath("log") .. "/emeth-acp.log",
+    debug = false,               -- per-session logs in stdpath("state")/emeth/logs/
     auto_approve_tools = false, -- auto-approve tool permission requests
     providers = {
       ["claude-code"] = { command = "npx", args = { "-y", "@agentclientprotocol/claude-agent-acp" } },

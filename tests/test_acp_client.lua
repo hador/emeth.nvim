@@ -23,7 +23,8 @@ local function make_client(handlers)
     capabilities = {},
     agent_capabilities = nil,
     auth_methods = {},
-    debug_log_file = nil,
+    _log_file = nil,
+    _log_path = nil,
     callbacks = {},
     transport = {
       send = function(_, data)

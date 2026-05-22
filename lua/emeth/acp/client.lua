@@ -27,7 +27,8 @@ end
 ---@field auth_methods acp.AuthMethod[]
 ---@field config acp.ClientConfig
 ---@field callbacks table<number, fun(result: table|nil, err: acp.ACPError|nil)>
----@field debug_log_file file*|nil
+---@field _log_file file*|nil
+---@field _log_path string|nil  datetime-based path, created on first write
 ---@field id_counter number
 ---@field transport acp.ACPTransport
 ---@field state acp.ConnectionState
@@ -56,7 +57,8 @@ function ACPClient:new(config)
     capabilities = { fs = { readTextFile = true, writeTextFile = true } },
     agent_capabilities = nil,
     auth_methods = {},
-    debug_log_file = nil,
+    _log_file = nil,
+    _log_path = nil,
     callbacks = {},
     transport = nil,
     config = config or {},
@@ -73,19 +75,24 @@ function ACPClient:_debug_log(message)
     self:_close_debug_log()
     return
   end
-  if not self.debug_log_file then
-    self.debug_log_file = io.open(get_config().log_file, "a")
+  if not self._log_file then
+    local dir = vim.fn.stdpath("state") .. "/emeth/logs"
+    vim.fn.mkdir(dir, "p")
+    if not self._log_path then
+      self._log_path = dir .. "/" .. os.date("%Y-%m-%d_%H-%M-%S") .. ".log"
+    end
+    self._log_file = io.open(self._log_path, "a")
   end
-  if self.debug_log_file then
-    self.debug_log_file:write(message)
-    self.debug_log_file:flush()
+  if self._log_file then
+    self._log_file:write(message)
+    self._log_file:flush()
   end
 end
 
 function ACPClient:_close_debug_log()
-  if self.debug_log_file then
-    self.debug_log_file:close()
-    self.debug_log_file = nil
+  if self._log_file then
+    self._log_file:close()
+    self._log_file = nil
   end
 end
 
