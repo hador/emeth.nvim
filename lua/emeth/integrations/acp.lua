@@ -241,12 +241,9 @@ function M.setup_integration(view, session)
     if not session:is_connected() then
       return
     end
-    local is_prompting = session:get_state() == "prompting"
-    local pending_fn = view.integration and view.integration.get_pending_task_count
-    local has_background = pending_fn and pending_fn() > 0
-    if not is_prompting and not has_background then
-      return
-    end
+    -- Always send the cancel if we're connected. The notification is cheap
+    -- and harmless when nothing is in-flight, and avoids false negatives
+    -- from stale state checks (background tasks, race with prompt callback).
     session:cancel()
     Winbar.set_state("ready")
     Winbar.clear_mode_tag()
@@ -907,6 +904,15 @@ function M.setup_integration(view, session)
       transform_update_fn = fn
     end,
   }
+
+  -- Transfer any extra fields the provider extension added to the temporary
+  -- stub (e.g. get_pending_task_count) onto the real integration table so
+  -- they remain accessible after the stub is replaced.
+  for k, v in pairs(ext_integration) do
+    if integration[k] == nil then
+      integration[k] = v
+    end
+  end
 
   view.integration = integration
   return integration
