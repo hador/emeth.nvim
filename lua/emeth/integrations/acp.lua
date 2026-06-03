@@ -83,6 +83,7 @@ function M.setup_integration(view, session)
   end
 
   local prompt_generation = 0
+  local cancelled_generation = 0 -- set to prompt_generation on cancel; suppresses trailing updates
 
   local function reset_state()
     current_assistant_uuid = nil
@@ -241,10 +242,16 @@ function M.setup_integration(view, session)
     if not session:is_connected() then
       return
     end
-    -- Always send the cancel if we're connected. The notification is cheap
-    -- and harmless when nothing is in-flight, and avoids false negatives
-    -- from stale state checks (background tasks, race with prompt callback).
+    local is_prompting = session:get_state() == "prompting"
+    local pending_fn = view.integration and view.integration.get_pending_task_count
+    local has_background = pending_fn and pending_fn() > 0
+    if not is_prompting and not has_background then
+      return
+    end
     session:cancel()
+    -- Mark this generation as cancelled so trailing session/update
+    -- notifications don't flip the winbar back to "generating".
+    cancelled_generation = prompt_generation
     Winbar.set_state("ready")
     Winbar.clear_mode_tag()
     for _, msg in ipairs(view:get_messages()) do
@@ -550,7 +557,10 @@ function M.setup_integration(view, session)
       pcall(transform_update_fn, update)
     end
 
-    if not non_streaming_updates[update.sessionUpdate] then
+    -- Don't flip the winbar to "generating" for trailing updates that arrive
+    -- after a cancel. A new prompt will reset cancelled_generation via the
+    -- prompt_generation increment + fresh Winbar.set_state("generating").
+    if not non_streaming_updates[update.sessionUpdate] and cancelled_generation < prompt_generation then
       Winbar.set_state("generating")
     end
 
