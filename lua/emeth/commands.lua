@@ -100,6 +100,66 @@ function M.register_builtins()
       ctx.view:add_message(Message:new("system", table.concat(lines, "\n")))
     end,
   })
+
+  M.register("prompts", {
+    desc = "Insert a prompt from prompt_dirs",
+    source = "builtin",
+    has_picker = true,
+    execute = function(_, ctx)
+      -- If an ACP provider also registered /prompts (e.g. kiro-cli), it
+      -- handles local+server prompt merging itself — skip the builtin picker
+      -- to avoid showing two pickers in sequence.
+      local self_cmd = commands["prompts"]
+      if self_cmd and self_cmd._builtin then
+        return
+      end
+
+      local config = require("emeth").config
+      local dirs = config.prompt_dirs or {}
+      if #dirs == 0 then
+        vim.notify("[emeth] No prompt_dirs configured", vim.log.levels.WARN)
+        return
+      end
+
+      -- Discover local .md prompt files
+      local items = {} ---@type { label: string, path: string }[]
+      for _, dir in ipairs(dirs) do
+        for _, path in ipairs(vim.fn.glob(vim.fn.expand(dir) .. "/*.md", false, true)) do
+          items[#items + 1] = {
+            label = vim.fn.fnamemodify(path, ":t:r"),
+            path = path,
+          }
+        end
+      end
+
+      if #items == 0 then
+        vim.notify("[emeth] No .md prompts found in prompt_dirs", vim.log.levels.INFO)
+        return
+      end
+
+      vim.ui.select(items, {
+        prompt = "Prompt:",
+        format_item = function(item)
+          return item.label
+        end,
+      }, function(choice)
+        if not choice then
+          return
+        end
+        local content = table.concat(vim.fn.readfile(choice.path), "\n")
+        if config.prompt_edit_before_send then
+          local wins = vim.fn.win_findbuf(ctx.view.input_buf)
+          if wins[1] then
+            vim.api.nvim_set_current_win(wins[1])
+          end
+          vim.api.nvim_buf_set_lines(ctx.view.input_buf, 0, -1, false, vim.split(content, "\n"))
+          vim.cmd("startinsert!")
+        elseif ctx.view.on_submit then
+          ctx.view.on_submit(content)
+        end
+      end)
+    end,
+  })
 end
 
 return M
