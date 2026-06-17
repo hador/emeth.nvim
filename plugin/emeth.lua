@@ -16,6 +16,10 @@ vim.api.nvim_create_user_command("EmethToggle", function()
   require("emeth").toggle()
 end, { desc = "Toggle Emeth sidebar" })
 
+vim.api.nvim_create_user_command("EmethZoom", function()
+  require("emeth").zoom()
+end, { desc = "Toggle zoom (fill screen) for the Emeth sidebar" })
+
 vim.api.nvim_create_user_command("EmethHistory", function()
   require("emeth").history()
 end, { desc = "Pick a previous chat session to resume" })
