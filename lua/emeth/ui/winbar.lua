@@ -295,16 +295,38 @@ end
 
 -- ── Public API ─────────────────────────────────────────────────
 
+local resize_augroup = nil ---@type number|nil
+
 ---@param win number result window
 ---@param iwin? number input window
 function M.attach(win, iwin)
   result_win = win
   input_win = iwin
   render()
+
+  -- Re-render on resize so the winbar adapts to the new width instead of
+  -- showing nvim's overflow arrows (</>).
+  if resize_augroup then
+    api.nvim_clear_autocmds({ group = resize_augroup })
+  end
+  resize_augroup = api.nvim_create_augroup("emeth_winbar_resize", { clear = true })
+  api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+    group = resize_augroup,
+    callback = function()
+      if not result_win and not input_win then
+        return
+      end
+      render()
+    end,
+  })
 end
 
 function M.detach()
   stop_timer()
+  if resize_augroup then
+    api.nvim_clear_autocmds({ group = resize_augroup })
+    resize_augroup = nil
+  end
   if result_win and api.nvim_win_is_valid(result_win) then
     pcall(api.nvim_set_option_value, "winbar", "", { win = result_win })
   end
