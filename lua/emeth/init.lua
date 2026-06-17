@@ -13,6 +13,9 @@
 ---@field prompt_edit_before_send boolean
 ---@field default_provider string|nil
 ---@field auto_add_current_file boolean
+---@field fold_pasted_text boolean
+---@field paste_fold_min_lines number
+---@field paste_fold_min_chars number
 ---@field show_title? boolean
 ---@field claude_code? chat_ui.ClaudeCodeConfig
 
@@ -31,6 +34,10 @@ local defaults = {
     submit = { insert = "<C-s>", normal = "<CR>" },
     close = { normal = { "q", "<Esc>" } },
     switch_window = { normal = "<Tab>" },
+    -- Expand a folded paste under the cursor in the input buffer. `za`/`zo`
+    -- can't work here (it's not a real vim fold — the text is held off-buffer
+    -- for performance), so this provides an explicit, familiar binding.
+    expand_paste = { normal = { "za", "zo" } },
   },
   icons = {
     user = "> ",
@@ -43,6 +50,12 @@ local defaults = {
   resume_last_session = false,
   prompt_dirs = {},
   prompt_edit_before_send = true,
+  -- Collapse large pastes in the input buffer to a single placeholder line.
+  -- The raw text is held off-buffer and spliced back in at submit time, so it
+  -- never sits in the live-edited (treesitter-parsed) input buffer.
+  fold_pasted_text = true,
+  paste_fold_min_lines = 10, -- fold pastes with at least this many lines
+  paste_fold_min_chars = 1000, -- ...or at least this many chars (catches huge single-line blobs)
   show_title = true,
   default_provider = nil,
   auto_add_current_file = true,
@@ -191,6 +204,9 @@ function M.close()
   M._provider = nil
   if _sidebar then
     _sidebar:close()
+  end
+  if _view and _view.detach then
+    _view:detach()
   end
   _sidebar = nil
   _view = nil
