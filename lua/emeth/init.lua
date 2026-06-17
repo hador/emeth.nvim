@@ -34,6 +34,8 @@ local defaults = {
     submit = { insert = "<C-s>", normal = "<CR>" },
     close = { normal = { "q", "<Esc>" } },
     switch_window = { normal = "<Tab>" },
+    -- tmux-style zoom: grow the sidebar to fill the screen and back.
+    zoom = { normal = "<leader>ez" },
     -- Expand a folded paste under the cursor in the input buffer. `za`/`zo`
     -- can't work here (it's not a real vim fold — the text is held off-buffer
     -- for performance), so this provides an explicit, familiar binding.
@@ -219,6 +221,15 @@ function M.toggle(provider)
     _sidebar:close()
   else
     M.open(provider)
+  end
+end
+
+---Toggle tmux-style zoom of the emeth sidebar (grow to fill the screen / back).
+function M.zoom()
+  if _sidebar and _sidebar:is_open() then
+    _sidebar:toggle_zoom()
+  else
+    vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
   end
 end
 
