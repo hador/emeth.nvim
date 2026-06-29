@@ -28,6 +28,9 @@ function M.setup_integration(view, session)
   local current_thinking_uuid = nil
   local tool_message_map = {} ---@type table<string, string>
   local selected_files = {} ---@type string[]
+  -- FIFO of pending permission requests. Only the head owns the a/r keymaps at
+  -- any time, so concurrent requests can't clobber each other's bindings.
+  local permission_queue = {} ---@type { tool_call: table, options: table[], callback: fun(option_id: string|nil), prompt_uuid?: string }[]
   local roots = Roots.attach(view)
   local reload_timer = vim.uv.new_timer()
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
@@ -570,6 +573,87 @@ function M.setup_integration(view, session)
     end
   end)
 
+  local kind_keys = { allow_once = "a", allow_always = "A", reject_once = "r", reject_always = "R" }
+
+  --- Build the prompt body for a queued permission request. The tool_call card
+  --- is rendered directly above this prompt, so we keep it terse: a short tool
+  --- identity (truncated — kiro titles are the whole command), the count of
+  --- other requests waiting, then one line per option.
+  ---@param req { tool_call: table, options: table[] }
+  ---@return string[] lines, string[] keys  keys aligned to req.options order
+  local function permission_lines(req)
+    local tool_name = req.tool_call.title or req.tool_call.kind or "tool"
+    tool_name = tool_name:gsub("%s+", " ")
+    if vim.fn.strdisplaywidth(tool_name) > 60 then
+      tool_name = vim.fn.strcharpart(tool_name, 0, 59) .. "…"
+    end
+    local lines = { "Agent wants permission for: " .. tool_name }
+    if #permission_queue > 1 then
+      lines[#lines + 1] = ("  (%d more pending)"):format(#permission_queue - 1)
+    end
+    local keys = {}
+    for _, opt in ipairs(req.options or {}) do
+      local key = kind_keys[opt.kind] or opt.kind:sub(1, 1)
+      keys[#keys + 1] = key
+      lines[#lines + 1] = "  [" .. key .. "] " .. (opt.name or opt.kind)
+    end
+    return lines, keys
+  end
+
+  -- Activate the request at the head of the queue: render its prompt and bind
+  -- the a/A/r/R keys to it. Only ever one active at a time, so the fixed keys
+  -- can't collide across concurrent requests. Forward-declared for recursion.
+  local activate_permission
+  activate_permission = function()
+    local req = permission_queue[1]
+    if not req then
+      return
+    end
+
+    local lines, keys = permission_lines(req)
+    local prompt_msg = Message:new("system", table.concat(lines, "\n"))
+    view:add_message(prompt_msg)
+    req.prompt_uuid = prompt_msg.uuid
+
+    local function resolve(option_id)
+      for _, key in ipairs(keys) do
+        pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", key)
+      end
+      view:update_message(prompt_msg.uuid, function(m)
+        m.visible = false
+      end)
+      req.callback(option_id)
+      -- Pop the head and activate the next queued request, if any.
+      table.remove(permission_queue, 1)
+      if permission_queue[1] then
+        activate_permission()
+      end
+    end
+
+    for i, opt in ipairs(req.options or {}) do
+      vim.api.nvim_buf_set_keymap(view.result_buf, "n", keys[i], "", {
+        noremap = true,
+        silent = true,
+        callback = function()
+          resolve(opt.optionId)
+        end,
+      })
+    end
+  end
+
+  -- Re-render the head prompt's pending count when the queue depth changes
+  -- (so the first/active prompt reflects requests that arrived behind it).
+  local function refresh_head_pending()
+    local head = permission_queue[1]
+    if not head or not head.prompt_uuid then
+      return
+    end
+    local lines = permission_lines(head)
+    view:update_message(head.prompt_uuid, function(m)
+      m.content = { { type = "text", text = table.concat(lines, "\n") } }
+    end)
+  end
+
   session:on("permission", function(tool_call, options, callback)
     vim.schedule(function()
       -- Render via the same path as a regular tool_call update
@@ -583,66 +667,15 @@ function M.setup_integration(view, session)
         return
       end
 
-      -- Build keybind map from options
-      local kind_keys = {
-        allow_once = "a",
-        allow_always = "A",
-        reject_once = "r",
-        reject_always = "R",
-      }
-      local bound_keys = {}
-      local lines = {}
-
-      -- Header: surface tool identity + best-effort param so the user can see
-      -- what they're about to authorize even when the tool_call card is below.
-      local header = "Agent wants permission for:"
-      local tool_name = tool_call.title or tool_call.kind or "tool"
-      local raw_input = tool_call.rawInput or {}
-      local param
-      for _, k in ipairs({ "command", "path", "file_path", "url", "query" }) do
-        if type(raw_input[k]) == "string" and raw_input[k] ~= "" then
-          param = raw_input[k]
-          break
-        end
-      end
-      if param then
-        param = param:gsub("\n", " ")
-        if #param > 200 then
-          param = param:sub(1, 200) .. "…"
-        end
-        lines[#lines + 1] = header .. " " .. tool_name .. " — " .. param
+      -- Enqueue; only the head request binds keys. This serializes the UI for
+      -- concurrent requests so their fixed a/r keymaps don't overwrite each
+      -- other (which previously left earlier requests unanswerable → hang).
+      permission_queue[#permission_queue + 1] = { tool_call = tool_call, options = options, callback = callback }
+      if #permission_queue == 1 then
+        activate_permission()
       else
-        lines[#lines + 1] = header .. " " .. tool_name
-      end
-
-      for _, opt in ipairs(options or {}) do
-        local key = kind_keys[opt.kind] or opt.kind:sub(1, 1)
-        bound_keys[#bound_keys + 1] = key
-        lines[#lines + 1] = "  [" .. key .. "] " .. (opt.name or opt.kind)
-      end
-
-      local prompt_msg = Message:new("system", table.concat(lines, "\n"))
-      view:add_message(prompt_msg)
-
-      local function cleanup()
-        for _, key in ipairs(bound_keys) do
-          pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", key)
-        end
-        view:update_message(prompt_msg.uuid, function(m)
-          m.visible = false
-        end)
-      end
-
-      for i, opt in ipairs(options or {}) do
-        local key = bound_keys[i]
-        vim.api.nvim_buf_set_keymap(view.result_buf, "n", key, "", {
-          noremap = true,
-          silent = true,
-          callback = function()
-            cleanup()
-            callback(opt.optionId)
-          end,
-        })
+        -- Something queued behind the active prompt; bump its pending count.
+        refresh_head_pending()
       end
     end)
   end)

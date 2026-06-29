@@ -148,7 +148,6 @@ h.describe("claude-code extract_session_info", function()
   vim.schedule = orig_schedule
 end)
 
-
 h.describe("claude-code task_sender_label", function()
   h.it("uses just description when subagent_type missing", function()
     local label = CC._task_sender_label({ description = "Find foo", status = "pending" })
@@ -281,7 +280,6 @@ h.describe("claude-code track_task_update", function()
   Winbar.clear_badge = orig_clear
 end)
 
-
 h.describe("claude-code make_transform_update", function()
   h.it("is a no-op for non-Task updates", function()
     local transform = CC._make_transform_update({})
@@ -302,7 +300,7 @@ h.describe("claude-code make_transform_update", function()
     local u = {
       sessionUpdate = "tool_call",
       toolCallId = "t1",
-      title = "Task",  -- claude-acp's default
+      title = "Task", -- claude-acp's default
       _meta = { claudeCode = { toolName = "Task" } },
       rawInput = { description = "Find references", subagent_type = "Explore" },
     }
@@ -356,9 +354,20 @@ h.describe("claude-code make_transform_update", function()
     local tasks_b = { x = { description = "B", status = "in_progress" } }
     local ta = CC._make_transform_update(tasks_a)
     local tb = CC._make_transform_update(tasks_b)
-    local ua = { sessionUpdate = "tool_call_update", toolCallId = "x", title = "Task", _meta = { claudeCode = { toolName = "Task" } } }
-    local ub = { sessionUpdate = "tool_call_update", toolCallId = "x", title = "Task", _meta = { claudeCode = { toolName = "Task" } } }
-    ta(ua); tb(ub)
+    local ua = {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "x",
+      title = "Task",
+      _meta = { claudeCode = { toolName = "Task" } },
+    }
+    local ub = {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "x",
+      title = "Task",
+      _meta = { claudeCode = { toolName = "Task" } },
+    }
+    ta(ua)
+    tb(ub)
     h.eq("A", ua.title)
     h.eq("B", ub.title)
   end)

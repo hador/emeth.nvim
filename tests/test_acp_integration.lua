@@ -84,14 +84,50 @@ end
 -- Stub winbar so badge calls / state flips don't hit real highlight groups.
 local Winbar = package.loaded["emeth.ui.winbar"]
 local _orig_winbar = {}
-for _, k in ipairs({ "set_state", "set_badge", "clear_badge", "set_context", "attach", "set_left", "set_mode_tag", "clear_mode_tag" }) do
+for _, k in ipairs({
+  "set_state",
+  "set_badge",
+  "clear_badge",
+  "set_context",
+  "attach",
+  "set_left",
+  "set_mode_tag",
+  "clear_mode_tag",
+}) do
   _orig_winbar[k] = Winbar[k]
   Winbar[k] = function() end
 end
 
--- Stub buf_set_keymap (do_cancel registers C-c in input/result bufs)
+-- Stub buf_set_keymap (do_cancel registers C-c in input/result bufs), but
+-- record permission keymaps so tests can invoke their callbacks. Keyed by the
+-- normal-mode lhs; del_keymap removes the entry.
 local _orig_set_keymap = vim.api.nvim_buf_set_keymap
-vim.api.nvim_buf_set_keymap = function() end
+local _orig_del_keymap = vim.api.nvim_buf_del_keymap
+local bound_keymaps = {} ---@type table<string, fun()>
+vim.api.nvim_buf_set_keymap = function(_, mode, lhs, _rhs, opts)
+  if mode == "n" and opts and opts.callback then
+    bound_keymaps[lhs] = opts.callback
+  end
+end
+vim.api.nvim_buf_del_keymap = function(_, mode, lhs)
+  if mode == "n" then
+    bound_keymaps[lhs] = nil
+  end
+end
+
+--- Run pending vim.schedule callbacks (the permission handler defers to one).
+local function flush()
+  vim.wait(0)
+end
+
+--- Press a normal-mode key that the permission UI bound.
+local function press(key)
+  local cb = bound_keymaps[key]
+  if cb then
+    cb()
+  end
+  return cb ~= nil
+end
 
 -- ── Helper: build session + view + integration ─────────────────
 
@@ -161,7 +197,10 @@ end)
 h.describe("acp integration: agent_thought_chunk", function()
   h.it("creates a thinking message on first non-empty chunk", function()
     local session, view = make_setup()
-    session:_emit("update", { sessionUpdate = "agent_thought_chunk", content = { type = "text", text = "pondering..." } })
+    session:_emit(
+      "update",
+      { sessionUpdate = "agent_thought_chunk", content = { type = "text", text = "pondering..." } }
+    )
     h.eq(1, #view.messages)
     h.eq("assistant", view.messages[1].role)
     h.eq("thinking", view.messages[1].content[1].type)
@@ -294,7 +333,7 @@ h.describe("acp integration: available_commands_update", function()
       sessionUpdate = "available_commands_update",
       availableCommands = {
         { name = "/model", description = "Switch model", input = { hint = "<model_id>" } },
-        { name = "/agents", description = "Manage agents" },  -- no hint
+        { name = "/agents", description = "Manage agents" }, -- no hint
         { name = "/null", description = "x", input = vim.NIL }, -- defensively handled
       },
     })
@@ -367,8 +406,89 @@ h.describe("acp integration: dispatch", function()
   end)
 end)
 
+h.describe("acp integration: permission queue", function()
+  -- Build a session whose request_permission round-trips through the integration
+  -- like the real client: each call records the chosen optionId.
+  local function perm_setup()
+    local session, view = make_setup()
+    local resolved = {} ---@type table[]
+    --- Mimic a permission request arriving from the agent.
+    local function request(tool_call, options)
+      session:_emit("permission", tool_call, options, function(option_id)
+        resolved[#resolved + 1] = { id = tool_call.toolCallId, option = option_id }
+      end)
+    end
+    return session, view, resolved, request
+  end
+
+  local OPTS = {
+    { kind = "allow_once", name = "Yes", optionId = "allow_once" },
+    { kind = "reject_once", name = "No", optionId = "reject_once" },
+  }
+
+  h.it("resolves a single request when its key is pressed", function()
+    local _, _, resolved, request = perm_setup()
+    request({ toolCallId = "t1", title = "Read a.lua" }, OPTS)
+    flush()
+    h.is_true(press("a"), "allow key should be bound")
+    h.eq(1, #resolved)
+    h.eq("t1", resolved[1].id)
+    h.eq("allow_once", resolved[1].option)
+  end)
+
+  h.it("serializes concurrent requests: answering the head activates the next", function()
+    local _, _, resolved, request = perm_setup()
+    -- Two requests arrive before the user answers either.
+    request({ toolCallId = "t1", title = "Read a.lua" }, OPTS)
+    request({ toolCallId = "t2", title = "Read b.lua" }, OPTS)
+    flush()
+
+    -- Only the head (t1) is answerable right now.
+    h.is_true(press("a"), "head keymap bound")
+    h.eq(1, #resolved)
+    h.eq("t1", resolved[1].id)
+    h.eq("allow_once", resolved[1].option)
+
+    -- The second request is now active; the same key resolves it (no collision).
+    h.is_true(press("r"), "next keymap rebound after head resolved")
+    h.eq(2, #resolved)
+    h.eq("t2", resolved[2].id)
+    h.eq("reject_once", resolved[2].option)
+  end)
+
+  h.it("shows pending count on the active prompt when a request queues behind it", function()
+    local _, view, _, request = perm_setup()
+    request({ toolCallId = "t1", title = "Read a.lua" }, OPTS)
+    flush()
+    -- Head prompt is the last message; no pending line yet.
+    local head = view.messages[#view.messages]
+    h.is_true(head:text():find("more pending") == nil, "no pending line with one request")
+
+    -- A second request arrives behind it — head prompt should now show it.
+    request({ toolCallId = "t2", title = "Read b.lua" }, OPTS)
+    flush()
+    h.is_true(head:text():find("1 more pending") ~= nil, "head prompt should report 1 pending")
+  end)
+
+  h.it("preserves FIFO order across three requests", function()
+    local _, _, resolved, request = perm_setup()
+    request({ toolCallId = "t1" }, OPTS)
+    request({ toolCallId = "t2" }, OPTS)
+    request({ toolCallId = "t3" }, OPTS)
+    flush()
+    press("a")
+    press("a")
+    press("a")
+    h.eq(3, #resolved)
+    h.eq("t1", resolved[1].id)
+    h.eq("t2", resolved[2].id)
+    h.eq("t3", resolved[3].id)
+  end)
+end)
+
 -- Restore stubs
 for k, fn in pairs(_orig_winbar) do
   Winbar[k] = fn
 end
 vim.api.nvim_buf_set_keymap = _orig_set_keymap
+vim.api.nvim_buf_del_keymap = _orig_del_keymap
