@@ -106,11 +106,13 @@ h.describe("Render", function()
   end)
 
   h.it("renders diff tool_use with heavy box", function()
-    local msg = Message:new(
-      "assistant",
-      { type = "tool_use", name = "strReplace", id = "t4", input = { old_str = "foo", new_str = "bar" }, status = "completed" },
-      { tool_call = { toolCallId = "t4", status = "completed" } }
-    )
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = "strReplace",
+      id = "t4",
+      input = { old_str = "foo", new_str = "bar" },
+      status = "completed",
+    }, { tool_call = { toolCallId = "t4", status = "completed" } })
     local lines = Render.render_message(msg, {})
     local all = ""
     for _, l in ipairs(lines) do
@@ -125,7 +127,13 @@ h.describe("Render", function()
     local msg = Message:new(
       "assistant",
       { type = "tool_use", name = "read", id = "t5", input = { path = "/a" }, status = "completed" },
-      { tool_call = { toolCallId = "t5", status = "completed", content = { { type = "content", content = { type = "text", text = "hello" } } } } }
+      {
+        tool_call = {
+          toolCallId = "t5",
+          status = "completed",
+          content = { { type = "content", content = { type = "text", text = "hello" } } },
+        },
+      }
     )
     msg.metadata._expanded = true
     local lines = Render.render_message(msg, {})
@@ -138,11 +146,13 @@ h.describe("Render", function()
   end)
 
   h.it("diff context lines use double space prefix", function()
-    local msg = Message:new(
-      "assistant",
-      { type = "tool_use", name = "strReplace", id = "t6", input = { old_str = "a\nb\nc", new_str = "a\nX\nc" }, status = "completed" },
-      { tool_call = { toolCallId = "t6", status = "completed" } }
-    )
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = "strReplace",
+      id = "t6",
+      input = { old_str = "a\nb\nc", new_str = "a\nX\nc" },
+      status = "completed",
+    }, { tool_call = { toolCallId = "t6", status = "completed" } })
     local lines = Render.render_message(msg, {})
     local found_context = false
     for _, l in ipairs(lines) do
@@ -169,11 +179,13 @@ h.describe("Render", function()
   h.it("diff fence escalates when content contains backticks", function()
     local old = "before\n```lua\ncode()\n```\nafter"
     local new = "before\n```lua\ncode(changed)\n```\nafter"
-    local msg = Message:new(
-      "assistant",
-      { type = "tool_use", name = "strReplace", id = "t7", input = { old_str = old, new_str = new }, status = "completed" },
-      { tool_call = { toolCallId = "t7", status = "completed" } }
-    )
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = "strReplace",
+      id = "t7",
+      input = { old_str = old, new_str = new },
+      status = "completed",
+    }, { tool_call = { toolCallId = "t7", status = "completed" } })
     local lines = Render.render_message(msg, {})
     local all = ""
     for _, l in ipairs(lines) do

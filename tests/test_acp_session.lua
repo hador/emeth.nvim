@@ -113,7 +113,9 @@ h.describe("Session permission event", function()
     require("emeth.acp").config.auto_approve_tools = true
     local s = Session:new("test")
     local chosen = nil
-    local cb = function(id) chosen = id end
+    local cb = function(id)
+      chosen = id
+    end
     local opts = {
       { kind = "reject_once", optionId = "r1", name = "Reject" },
       { kind = "allow_once", optionId = "a1", name = "Allow" },
@@ -127,7 +129,9 @@ h.describe("Session permission event", function()
     require("emeth.acp").config.auto_approve_tools = false
     local s = Session:new("test")
     local chosen = nil
-    local cb = function(id) chosen = id end
+    local cb = function(id)
+      chosen = id
+    end
     local opts = { { kind = "allow_once", optionId = "a1", name = "Allow" } }
     s.client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, cb)
     h.is_nil(chosen)
@@ -153,8 +157,8 @@ h.describe("Session _extract_session_info provider delegation", function()
     local s = Session:new("fakeprov")
     s:_extract_session_info({ models = { currentModelId = "m1" }, configOptions = { foo = "bar" } })
     h.eq(1, fake.calls)
-    h.eq("m1", s.extensions.model_id)  -- standard field still set
-    h.eq("from-extension", s.extensions.custom_field)  -- extension mutation visible
+    h.eq("m1", s.extensions.model_id) -- standard field still set
+    h.eq("from-extension", s.extensions.custom_field) -- extension mutation visible
     h.eq("bar", fake.last_result.configOptions.foo)
   end)
 
@@ -175,7 +179,9 @@ h.describe("Session _extract_session_info provider delegation", function()
 
   h.it("buggy extract_session_info is contained via pcall", function()
     package.loaded["emeth.integrations.brokenprov"] = {
-      extract_session_info = function() error("boom") end,
+      extract_session_info = function()
+        error("boom")
+      end,
     }
     require("emeth.acp").config.providers["brokenprov"] = { command = "echo", args = {} }
     local s = Session:new("brokenprov")
