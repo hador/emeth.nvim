@@ -406,6 +406,108 @@ h.describe("acp integration: dispatch", function()
   end)
 end)
 
+h.describe("acp integration: abort stuck connect", function()
+  h.it("Ctrl+C during a pending handshake tears down and messages the user", function()
+    local session = Session:new("test")
+    local view = make_view()
+    local integration = Acp.setup_integration(view, session)
+
+    -- Simulate a handshake that never completes (e.g. a launcher running
+    -- updates before it execs the agent): connect() never calls back, so the
+    -- lifecycle's `done` never fires and `connecting` stays true.
+    session.connect = function() end
+    local disconnected = false
+    session.disconnect = function()
+      disconnected = true
+    end
+
+    integration.connect()
+
+    -- <C-c> is bound to do_cancel; pressing it should abort the connect.
+    h.is_true(press("<C-c>"), "C-c keymap should be bound")
+    h.is_true(disconnected, "session should be torn down on abort")
+    local last = view.messages[#view.messages]
+    h.is_true(last:text():find("aborted", 1, true) ~= nil, "should report the abort to the user")
+  end)
+
+  h.it("Ctrl+C does nothing when idle and connected", function()
+    local session, view = make_setup() -- _state = "ready", not connecting
+    local before = #view.messages
+    press("<C-c>")
+    h.eq(before, #view.messages)
+  end)
+end)
+
+h.describe("acp integration: slow-connect nudge", function()
+  h.it("posts a nudge if the handshake is still pending after the threshold", function()
+    local emeth = require("emeth")
+    local prev = emeth.config.slow_connect_ms
+    emeth.config.slow_connect_ms = 10 -- fire almost immediately
+
+    local session = Session:new("test")
+    local view = make_view()
+    local integration = Acp.setup_integration(view, session)
+    session.connect = function() end -- never completes → stays connecting
+
+    integration.connect()
+    vim.wait(200, function()
+      local last = view.messages[#view.messages]
+      return last and last:text():find("Taking longer", 1, true) ~= nil
+    end)
+
+    local last = view.messages[#view.messages]
+    h.is_true(last and last:text():find("Taking longer", 1, true) ~= nil, "nudge should post")
+    h.is_true(last:text():find("<C-c>", 1, true) ~= nil, "nudge should point at the abort")
+
+    emeth.config.slow_connect_ms = prev
+  end)
+
+  h.it("does not nudge once the connect has completed", function()
+    local emeth = require("emeth")
+    local prev = emeth.config.slow_connect_ms
+    emeth.config.slow_connect_ms = 10
+
+    local session = Session:new("test")
+    local view = make_view()
+    local integration = Acp.setup_integration(view, session)
+    -- Completes synchronously via done(nil): connecting flips false before the
+    -- timer. Called as session:connect(opts, cb) → (self, opts, cb).
+    session.connect = function(_self, _opts, cb)
+      cb(nil)
+    end
+    session.session_id = "sess-1"
+
+    integration.connect()
+    vim.wait(100)
+
+    for _, m in ipairs(view.messages) do
+      h.is_true(m:text():find("Taking longer", 1, true) == nil, "no nudge after completion")
+    end
+
+    emeth.config.slow_connect_ms = prev
+  end)
+
+  h.it("is disabled when slow_connect_ms is 0", function()
+    local emeth = require("emeth")
+    local prev = emeth.config.slow_connect_ms
+    emeth.config.slow_connect_ms = 0
+
+    local session = Session:new("test")
+    local view = make_view()
+    local integration = Acp.setup_integration(view, session)
+    session.connect = function() end
+
+    integration.connect()
+    vim.wait(100)
+
+    for _, m in ipairs(view.messages) do
+      h.is_true(m:text():find("Taking longer", 1, true) == nil, "no nudge when disabled")
+    end
+
+    emeth.config.slow_connect_ms = prev
+  end)
+end)
+
 h.describe("acp integration: permission queue", function()
   -- Build a session whose request_permission round-trips through the integration
   -- like the real client: each call records the chosen optionId.
