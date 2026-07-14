@@ -17,6 +17,7 @@
 ---@field paste_fold_min_lines number
 ---@field paste_fold_min_chars number
 ---@field show_title? boolean
+---@field slow_connect_ms number
 ---@field claude_code? chat_ui.ClaudeCodeConfig
 
 ---@class chat_ui.Module
@@ -59,6 +60,9 @@ local defaults = {
   paste_fold_min_lines = 10, -- fold pastes with at least this many lines
   paste_fold_min_chars = 1000, -- ...or at least this many chars (catches huge single-line blobs)
   show_title = true,
+  -- After this many ms still connecting, post a nudge that the connect is slow
+  -- and can be aborted with <C-c>. Set to 0 to disable the nudge.
+  slow_connect_ms = 10000,
   default_provider = nil,
   auto_add_current_file = true,
   claude_code = {

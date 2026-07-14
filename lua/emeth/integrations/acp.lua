@@ -87,6 +87,13 @@ function M.setup_integration(view, session)
 
   local prompt_generation = 0
   local cancelled_generation = 0 -- set to prompt_generation on cancel; suppresses trailing updates
+  -- True between the start of a connect/load lifecycle and its completion, so
+  -- Ctrl+C can abort a handshake that's stuck (e.g. behind a launcher running
+  -- updates) before any session exists to cancel.
+  local connecting = false
+  -- Bumped each connect so a slow-connect timer from a prior attempt can't fire
+  -- against a later one.
+  local connect_generation = 0
 
   local function reset_state()
     current_assistant_uuid = nil
@@ -116,8 +123,30 @@ function M.setup_integration(view, session)
       Winbar.set_left(Winbar.fmt.plain(session.provider_name))
     end
     Winbar.set_state("connecting")
+    connecting = true
+    connect_generation = connect_generation + 1
+    local gen = connect_generation
+    -- Time-based nudge: if the handshake is still in flight after a while,
+    -- reassure the user it isn't frozen and point at the abort. Reads only our
+    -- own clock/state — nothing from the child process — so it never misfires
+    -- on a fast connect and can't come up empty like scraping stdout did.
+    local slow_ms = require("emeth").config.slow_connect_ms or 0
+    if slow_ms > 0 then
+      vim.defer_fn(function()
+        if connecting and gen == connect_generation then
+          view:add_message(
+            Message:new(
+              "system",
+              "⏳ Taking longer than usual. The agent's launcher may be running updates — press <C-c> to abort and retry."
+            )
+          )
+        end
+      end, slow_ms)
+    end
     action(function(err)
+      connecting = false
       vim.schedule(function()
+        Winbar.clear_mode_tag()
         Winbar.set_state("ready")
         view:invalidate()
         if err then
@@ -242,6 +271,24 @@ function M.setup_integration(view, session)
   end
 
   local function do_cancel()
+    -- Abort a handshake that never completed. The connection may be stuck
+    -- because a launcher (e.g. toolbox) is running updates before it execs the
+    -- agent, so there's no session to cancel yet — tear down the process fully
+    -- and clear the module-level integration so the next :Emeth reconnects
+    -- fresh instead of focusing a dead session.
+    if connecting then
+      connecting = false
+      view:add_message(Message:new("system", "⏹ Connection aborted. Retry with :Emeth (or :EmethNew)."))
+      if view.integration and view.integration.disconnect then
+        view.integration.disconnect()
+      else
+        session:disconnect()
+      end
+      local emeth = require("emeth")
+      emeth._integration = nil
+      emeth._provider = nil
+      return
+    end
     if not session:is_connected() then
       return
     end
@@ -915,10 +962,7 @@ function M.setup_integration(view, session)
       session:disconnect()
     end,
 
-    cancel = function()
-      session:cancel()
-      Winbar.set_state("ready")
-    end,
+    cancel = do_cancel,
 
     add_file = add_file,
 
