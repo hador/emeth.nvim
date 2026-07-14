@@ -65,13 +65,17 @@ function M.setup_integration(view, session)
         vim.cmd("edit " .. vim.fn.fnameescape(first_path.abs))
       end)
       if first_path.line then
-        vim.api.nvim_set_current_win(target_win)
+        -- Position and center the target window on the changed line without
+        -- stealing focus: if the user is reading emeth output, their cursor
+        -- stays put while the source window shows the edit next door.
         vim.schedule(function()
           if not vim.api.nvim_win_is_valid(target_win) then
             return
           end
           pcall(vim.api.nvim_win_set_cursor, target_win, { first_path.line, 0 })
-          vim.cmd("normal! zz")
+          vim.api.nvim_win_call(target_win, function()
+            vim.cmd("normal! zz")
+          end)
         end)
       end
     end
