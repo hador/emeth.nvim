@@ -85,6 +85,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     default_provider = nil,       -- required if multiple providers
     resume_last_session = false,  -- auto-resume last session on open
     auto_add_current_file = true, -- add current buffer as context
+    slow_connect_ms = 10000,      -- nudge if connect exceeds this (0 disables)
     prompt_dirs = {},             -- e.g. { "~/.config/prompts" }
     acp = {
       debug = false,  -- per-session logs in stdpath("state")/emeth/logs/
@@ -106,6 +107,14 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
 `auto_add_current_file` ~
   When true (default), the buffer the user was editing when opening the
   sidebar is automatically added as file context.
+
+                                                       *emeth-slow_connect_ms*
+`slow_connect_ms` ~
+  If a connection is still being established after this many milliseconds
+  (default 10000), a message is posted noting the connect is slow — the
+  agent's launcher may be running updates — and that <C-c> aborts it. This
+  is a time-based nudge only; it reads no output from the agent process. Set
+  to 0 to disable.
 
                                                          *emeth-prompt_dirs*
 `prompt_dirs` ~
@@ -139,7 +148,10 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   Pick and resume a previous session.
 
 :EmethCancel                                                  *:EmethCancel*
-  Cancel the current AI request.
+  Cancel the current AI request. While the sidebar is still "connecting"
+  (e.g. the agent's launcher is running updates before the handshake
+  completes), this instead aborts the connection so you can retry with
+  |:Emeth|. Also bound to <C-c> inside the chat windows.
 
 ==============================================================================
 6. LUA API                                                    *emeth-lua-api*
@@ -159,7 +171,8 @@ require("emeth").history()                                  *emeth.history()*
   Pick and resume a previous session.
 
 require("emeth").cancel()                                    *emeth.cancel()*
-  Cancel the current AI request.
+  Cancel the current AI request, or abort an in-progress connection if the
+  session is still connecting. See |:EmethCancel|.
 
 require("emeth").send_selection()                      *emeth.send_selection()*
   Send the current visual selection to the chat as a fenced code block.

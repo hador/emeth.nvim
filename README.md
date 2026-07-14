@@ -81,6 +81,7 @@ Full example:
     default_provider = "kiro-cli",
     resume_last_session = true,
     auto_add_current_file = true,
+    slow_connect_ms = 10000, -- nudge if a connect takes this long (0 disables)
     prompt_dirs = { "~/.config/prompts" },
     sidebar = {
       position = "right",
@@ -151,7 +152,7 @@ require("emeth").setup({
 | `:EmethToggle` | Toggle sidebar |
 | `:EmethClose` | Close sidebar and disconnect |
 | `:EmethHistory` | Pick and resume a previous session |
-| `:EmethCancel` | Cancel current AI request |
+| `:EmethCancel` | Cancel current AI request (or abort a stuck connection) |
 
 ### Lua API
 
@@ -161,7 +162,7 @@ require("emeth").setup({
 | `require("emeth").close()` | Close sidebar and disconnect |
 | `require("emeth").toggle(provider?)` | Toggle sidebar |
 | `require("emeth").history()` | Pick and resume a previous session |
-| `require("emeth").cancel()` | Cancel current AI request |
+| `require("emeth").cancel()` | Cancel current AI request (or abort a stuck connection) |
 | `require("emeth").send_selection()` | Send visual selection to chat |
 
 ### Provider switching
@@ -182,6 +183,7 @@ When switching, the chat clears and a fresh session starts. If `resume_last_sess
 |-----|------|--------|
 | `<C-s>` | Insert | Send message |
 | `<CR>` | Normal | Send message |
+| `<C-c>` | Insert/Normal | Cancel the current request, or abort a stuck connection |
 | `<Tab>` | Normal | Switch between input/result |
 | `q` / `<Esc>` | Normal | Close sidebar |
 
@@ -248,7 +250,7 @@ Everything driven by the ACP protocol is handled generically:
 - **Plans** — `plan` updates render as checklists
 - **Session info** — `session_info_update` updates the title
 - **File writes** — buffers auto-reload when the agent writes files
-- **Winbar** — spinner states (`connecting` → `generating` → `ready`) work for all providers
+- **Winbar** — spinner states (`connecting` → `generating` → `ready`) work for all providers. A slow connect (e.g. a launcher running updates before the handshake) can be aborted with `<C-c>`.
 
 ### Provider-specific extensions (optional)
 
