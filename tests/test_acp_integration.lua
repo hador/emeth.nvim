@@ -508,6 +508,62 @@ h.describe("acp integration: slow-connect nudge", function()
   end)
 end)
 
+h.describe("acp integration: buffer reload focus", function()
+  h.it("shows the edited file in the source window without stealing focus from emeth", function()
+    local session = Session:new("test")
+    session._state = "ready"
+    session.session_id = "sess-1"
+    local view = make_view()
+    Acp.setup_integration(view, session)
+
+    -- A real file the "agent" wrote, with enough lines to jump to.
+    local tmp = vim.fn.tempname() .. ".txt"
+    local lines = {}
+    for i = 1, 20 do
+      lines[i] = "line " .. i
+    end
+    vim.fn.writefile(lines, tmp)
+
+    -- Two real windows: source (normal buffer) + emeth (named emeth://…).
+    -- find_source_win picks the non-emeth one; the user sits in the emeth one.
+    vim.cmd("only")
+    local source_win = vim.api.nvim_get_current_win()
+    vim.cmd("vsplit")
+    local emeth_win = vim.api.nvim_get_current_win()
+    local emeth_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(emeth_buf, "emeth://test-chat")
+    vim.api.nvim_win_set_buf(emeth_win, emeth_buf)
+    h.is_true(source_win ~= emeth_win, "need two distinct windows")
+
+    -- Agent writes the file while the user's cursor is in the emeth window.
+    -- Resolve via uv.fs_realpath so /tmp symlink on macOS (/private/tmp) matches.
+    local abs_tmp = vim.uv.fs_realpath(tmp) or vim.fn.fnamemodify(tmp, ":p")
+    session:_emit("file_written", tmp, 12)
+
+    -- Wait out the 1s reload debounce + the scheduled cursor positioning.
+    -- Check both that the buffer shows the file AND cursor hit line 12.
+    local ok = vim.wait(5000, function()
+      if not vim.api.nvim_win_is_valid(source_win) then
+        return false
+      end
+      local buf = vim.api.nvim_win_get_buf(source_win)
+      local buf_name = vim.api.nvim_buf_get_name(buf)
+      if buf_name ~= abs_tmp then
+        return false
+      end
+      return vim.api.nvim_win_get_cursor(source_win)[1] == 12
+    end, 20)
+
+    h.is_true(ok, "source window should show the edited file at the changed line")
+    h.eq(emeth_win, vim.api.nvim_get_current_win(), "focus must stay in the emeth window")
+
+    -- Cleanup
+    vim.cmd("only")
+    pcall(vim.api.nvim_buf_delete, emeth_buf, { force = true })
+    vim.fn.delete(tmp)
+  end)
+end)
+
 h.describe("acp integration: permission queue", function()
   -- Build a session whose request_permission round-trips through the integration
   -- like the real client: each call records the chosen optionId.
