@@ -7,7 +7,7 @@ local ACPClient = require("emeth.acp.client")
 ---@field session_id string|nil
 ---@field provider_name string
 ---@field extensions table|nil
----@field _state "disconnected"|"connecting"|"ready"|"prompting"|"error"
+---@field _state "disconnected"|"connecting"|"ready"|"error"
 ---@field _listeners table<string, fun(...)[]>
 local Session = {}
 Session.__index = Session
@@ -202,68 +202,70 @@ end
 
 -- ── Lifecycle ──────────────────────────────────────────────────
 
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
----@param cb? fun(err: acp.ACPError|nil)
-function Session:connect(opts, cb)
+---Normalize the (opts, cb) pair where opts may be the callback (back-compat).
+---@return table|nil opts, fun(err: acp.ACPError|nil) cb
+local function norm_args(opts, cb)
   if type(opts) == "function" then
-    cb, opts = opts, nil
+    return nil, opts
   end
-  cb = cb or function() end
+  return opts, cb or function() end
+end
+
+---Map public opts to session/new + session/load request opts.
+local function req_opts(opts)
+  return {
+    additionalDirectories = opts and opts.additional_directories,
+    meta = opts and opts.meta,
+  }
+end
+
+---Shared tail of every lifecycle action: record the session, extract info,
+---and flip to ready — or error out.
+---@private
+function Session:_finish(session_id, result, err, cb)
+  if err then
+    self._state = "error"
+    cb(err)
+    return
+  end
+  self.session_id = session_id
+  self:_extract_session_info(result)
+  self._state = "ready"
+  cb(nil)
+end
+
+---Establish the transport, then run `next` (or fail out through cb).
+---@private
+function Session:_connect_then(cb, next)
   self._state = "connecting"
   self.client:connect(function(err)
     if err then
       self._state = "error"
       cb(err)
-      return
+    else
+      next()
     end
-    local cwd = vim.fn.getcwd()
-    local create_opts = {
-      additionalDirectories = opts and opts.additional_directories,
-      meta = opts and opts.meta,
-    }
-    self.client:create_session(cwd, {}, create_opts, function(session_id, create_err, result)
-      if create_err then
-        self._state = "error"
-        cb(create_err)
-        return
-      end
-      self.session_id = session_id
-
-      self:_extract_session_info(result)
-      self._state = "ready"
-      cb(nil)
-    end)
   end)
 end
 
----Create a fresh session over an already-connected client. Used when the
----user wants a clean conversation without restarting the underlying agent
----process. Mirrors the second half of `connect()` (the `session/new` call)
----without re-establishing the transport.
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param cb? fun(err: acp.ACPError|nil)
+function Session:connect(opts, cb)
+  opts, cb = norm_args(opts, cb)
+  self:_connect_then(cb, function()
+    self:new_session(opts, cb)
+  end)
+end
+
+---Create a fresh session over an already-connected client (clean conversation
+---without restarting the agent process).
 ---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:new_session(opts, cb)
-  if type(opts) == "function" then
-    cb, opts = opts, nil
-  end
-  cb = cb or function() end
-  local cwd = vim.fn.getcwd()
+  opts, cb = norm_args(opts, cb)
   self._state = "connecting"
-  local create_opts = {
-    additionalDirectories = opts and opts.additional_directories,
-    meta = opts and opts.meta,
-  }
-  self.client:create_session(cwd, {}, create_opts, function(session_id, create_err, result)
-    if create_err then
-      self._state = "error"
-      cb(create_err)
-      return
-    end
-    self.session_id = session_id
-
-    self:_extract_session_info(result)
-    self._state = "ready"
-    cb(nil)
+  self.client:create_session(vim.fn.getcwd(), {}, req_opts(opts), function(session_id, err, result)
+    self:_finish(session_id, result, err, cb)
   end)
 end
 
@@ -276,9 +278,7 @@ function Session:send_prompt(content_items, cb)
     end
     return
   end
-  self._state = "prompting"
   self.client:send_prompt(self.session_id, content_items, function(result, err)
-    self._state = "ready"
     if cb then
       cb(result, err)
     end
@@ -288,9 +288,6 @@ end
 function Session:cancel()
   if self.session_id then
     self.client:cancel_session(self.session_id)
-  end
-  if self._state == "prompting" then
-    self._state = "ready"
   end
 end
 
@@ -308,26 +305,10 @@ end
 ---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:load(session_id, opts, cb)
-  if type(opts) == "function" then
-    cb, opts = opts, nil
-  end
-  cb = cb or function() end
-  local cwd = vim.fn.getcwd()
+  opts, cb = norm_args(opts, cb)
   self._state = "connecting"
-  local load_opts = {
-    additionalDirectories = opts and opts.additional_directories,
-    meta = opts and opts.meta,
-  }
-  self.client:load_session(session_id, cwd, {}, load_opts, function(result, err)
-    if err then
-      self._state = "error"
-      cb(err)
-      return
-    end
-    self.session_id = session_id
-    self:_extract_session_info(result)
-    self._state = "ready"
-    cb(nil)
+  self.client:load_session(session_id, vim.fn.getcwd(), {}, req_opts(opts), function(result, err)
+    self:_finish(session_id, result, err, cb)
   end)
 end
 
@@ -336,17 +317,8 @@ end
 ---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:connect_and_load(session_id, opts, cb)
-  if type(opts) == "function" then
-    cb, opts = opts, nil
-  end
-  cb = cb or function() end
-  self._state = "connecting"
-  self.client:connect(function(err)
-    if err then
-      self._state = "error"
-      cb(err)
-      return
-    end
+  opts, cb = norm_args(opts, cb)
+  self:_connect_then(cb, function()
     self:load(session_id, opts, cb)
   end)
 end
@@ -360,7 +332,7 @@ end
 
 ---@return boolean
 function Session:is_connected()
-  return self._state == "ready" or self._state == "prompting"
+  return self._state == "ready"
 end
 
 ---@return string

@@ -89,15 +89,30 @@ function M.setup_integration(view, session)
     end
   end
 
-  local prompt_generation = 0
-  local cancelled_generation = 0 -- set to prompt_generation on cancel; suppresses trailing updates
-  -- True between the start of a connect/load lifecycle and its completion, so
-  -- Ctrl+C can abort a handshake that's stuck (e.g. behind a launcher running
-  -- updates) before any session exists to cancel.
-  local connecting = false
-  -- Bumped each connect so a slow-connect timer from a prior attempt can't fire
-  -- against a later one.
-  local connect_generation = 0
+  -- ── Activity state ─────────────────────────────────────────────
+  -- Single source of truth for "what is the UI doing right now"; the winbar
+  -- is a pure projection of it. "cancelled" is idle-with-tail-suppression: it
+  -- absorbs trailing updates after a cancel instead of flipping back to
+  -- generating. `epoch` is the staleness token for async continuations:
+  -- capture it when a phase starts, check it before acting; begin() bumps it,
+  -- atomically invalidating everything previously in flight.
+  ---@type "idle"|"connecting"|"generating"|"cancelled"
+  local activity = "idle"
+  local epoch = 0
+  local WINBAR = { idle = "ready", cancelled = "ready", connecting = "connecting", generating = "generating" }
+
+  local function set_activity(a)
+    activity = a
+    Winbar.set_state(WINBAR[a])
+  end
+
+  ---Enter a new activity phase, invalidating all prior async continuations.
+  ---@return number token compare against `epoch` before acting later
+  local function begin(a)
+    epoch = epoch + 1
+    set_activity(a)
+    return epoch
+  end
 
   local function reset_state()
     current_assistant_uuid = nil
@@ -126,18 +141,14 @@ function M.setup_integration(view, session)
       Winbar.attach(sidebar.result_win, sidebar.input_win)
       Winbar.set_left(Winbar.fmt.plain(session.provider_name))
     end
-    Winbar.set_state("connecting")
-    connecting = true
-    connect_generation = connect_generation + 1
-    local gen = connect_generation
-    -- Time-based nudge: if the handshake is still in flight after a while,
-    -- reassure the user it isn't frozen and point at the abort. Reads only our
-    -- own clock/state — nothing from the child process — so it never misfires
-    -- on a fast connect and can't come up empty like scraping stdout did.
+    local token = begin("connecting")
+    -- Nudge if the handshake is still in flight after a while (e.g. a
+    -- launcher running updates before it execs the agent). Purely time/state
+    -- based — reads nothing from the child process.
     local slow_ms = require("emeth").config.slow_connect_ms or 0
     if slow_ms > 0 then
       vim.defer_fn(function()
-        if connecting and gen == connect_generation then
+        if epoch == token then
           view:add_message(
             Message:new(
               "system",
@@ -148,10 +159,15 @@ function M.setup_integration(view, session)
       end, slow_ms)
     end
     action(function(err)
-      connecting = false
+      if epoch ~= token then
+        return -- superseded: cancelled or a newer lifecycle took over
+      end
+      -- Bump synchronously so the nudge timer can't fire between now and the
+      -- scheduled completion below.
+      epoch = epoch + 1
       vim.schedule(function()
+        set_activity("idle")
         Winbar.clear_mode_tag()
-        Winbar.set_state("ready")
         view:invalidate()
         if err then
           view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
@@ -274,14 +290,14 @@ function M.setup_integration(view, session)
     view._mention_handlers[k] = v
   end
 
+  ---Cancel is a total function: converge the UI to ready, cancelling whatever
+  ---that requires based on `activity` alone.
   local function do_cancel()
-    -- Abort a handshake that never completed. The connection may be stuck
-    -- because a launcher (e.g. toolbox) is running updates before it execs the
-    -- agent, so there's no session to cancel yet — tear down the process fully
-    -- and clear the module-level integration so the next :Emeth reconnects
-    -- fresh instead of focusing a dead session.
-    if connecting then
-      connecting = false
+    if activity == "connecting" then
+      -- Abort a stuck handshake (no session to cancel yet). Tear down fully
+      -- and clear the module-level integration so the next :Emeth reconnects
+      -- fresh instead of focusing a dead session.
+      begin("idle")
       view:add_message(Message:new("system", "⏹ Connection aborted. Retry with :Emeth (or :EmethNew)."))
       if view.integration and view.integration.disconnect then
         view.integration.disconnect()
@@ -293,20 +309,18 @@ function M.setup_integration(view, session)
       emeth._provider = nil
       return
     end
-    if not session:is_connected() then
-      return
-    end
-    local is_prompting = session:get_state() == "prompting"
+
     local pending_fn = view.integration and view.integration.get_pending_task_count
     local has_background = pending_fn and pending_fn() > 0
-    if not is_prompting and not has_background then
-      return
+    if activity ~= "generating" and not has_background then
+      return -- idle or already cancelled: nothing in flight
     end
+
     session:cancel()
-    -- Mark this generation as cancelled so trailing session/update
-    -- notifications don't flip the winbar back to "generating".
-    cancelled_generation = prompt_generation
-    Winbar.set_state("ready")
+    -- Entering "cancelled" absorbs the trailing update tail (it won't flip
+    -- the winbar back to generating); the epoch bump from begin() invalidates
+    -- any in-flight prompt callback so it can't overwrite this state.
+    begin("cancelled")
     Winbar.clear_mode_tag()
     for _, msg in ipairs(view:get_messages()) do
       for _, item in ipairs(msg.content) do
@@ -325,7 +339,9 @@ function M.setup_integration(view, session)
   -- ── Submit ─────────────────────────────────────────────────────
 
   view.on_submit = function(text)
-    if session:get_state() ~= "ready" then
+    -- Accept input when the transport is up and nothing of ours is in flight.
+    -- "cancelled" is idle-with-tail-suppression, so it accepts input too.
+    if not session:is_connected() or activity == "generating" or activity == "connecting" then
       vim.notify("[emeth] Session not ready", vim.log.levels.WARN)
       vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, vim.split(text, "\n"))
       view:set_context_files(view._context_files)
@@ -353,9 +369,7 @@ function M.setup_integration(view, session)
     view:add_message(msg)
     reset_state()
     Winbar.clear_mode_tag()
-    prompt_generation = prompt_generation + 1
-    local gen = prompt_generation
-    Winbar.set_state("generating")
+    local token = begin("generating")
     if session.session_id then
       Sessions.touch(session.session_id)
       local entry = Sessions.get(session.session_id)
@@ -365,8 +379,8 @@ function M.setup_integration(view, session)
     end
     session:send_prompt(prompt, function(_, err)
       vim.schedule(function()
-        if gen == prompt_generation then
-          Winbar.set_state("ready")
+        if epoch == token then
+          set_activity("idle")
         end
         if err then
           view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
@@ -611,11 +625,10 @@ function M.setup_integration(view, session)
       pcall(transform_update_fn, update)
     end
 
-    -- Don't flip the winbar to "generating" for trailing updates that arrive
-    -- after a cancel. A new prompt will reset cancelled_generation via the
-    -- prompt_generation increment + fresh Winbar.set_state("generating").
-    if not non_streaming_updates[update.sessionUpdate] and cancelled_generation < prompt_generation then
-      Winbar.set_state("generating")
+    -- Update-driven activity transition: streaming content → generating.
+    -- connecting/cancelled absorb updates (stay put); only idle transitions.
+    if not non_streaming_updates[update.sessionUpdate] and activity == "idle" then
+      set_activity("generating")
     end
 
     local handler = update_handlers[update.sessionUpdate]
@@ -816,25 +829,35 @@ function M.setup_integration(view, session)
     return next(opts) and opts or nil
   end
 
-  ---Apply post-connect/post-load fixups: surface the agent id and render any
-  ---mode that the session reports.
-  local function on_session_ready()
-    local exts = session.extensions or {}
-    if exts.mode_id then
-      vim.schedule(function()
-        render_mode(exts.mode_id)
+  ---Run a session lifecycle method through with_lifecycle, applying the
+  ---shared post-ready fixups (render any reported mode) on success. `run`
+  ---receives (opts, done) and calls the session method.
+  ---@param wl_opts table
+  ---@param run fun(opts: table|nil, done: fun(err: any))
+  ---@param cb? fun(err: any)
+  local function lifecycle(wl_opts, run, cb)
+    with_lifecycle(wl_opts, function(done)
+      run(lifecycle_opts(), function(err)
+        if not err then
+          local exts = session.extensions or {}
+          if exts.mode_id then
+            vim.schedule(function()
+              render_mode(exts.mode_id)
+            end)
+          end
+        end
+        done(err)
       end)
-    end
+    end, cb)
   end
 
   -- ── Public API ─────────────────────────────────────────────────
 
   local integration = {
     connect = function(cb)
-      with_lifecycle({ save = true }, function(done)
-        session:connect(lifecycle_opts(), function(err)
+      lifecycle({ save = true }, function(opts, done)
+        session:connect(opts, function(err)
           if not err then
-            on_session_ready()
             vim.schedule(function()
               view:add_message(
                 Message:new(
@@ -852,36 +875,24 @@ function M.setup_integration(view, session)
     load_session = function(session_id, cb)
       -- Hydrate roots from the persisted session entry before re-loading
       roots:hydrate_from(Sessions.get(session_id))
-      with_lifecycle({ clear = true, touch = true }, function(done)
-        session:load(session_id, lifecycle_opts(), function(err)
-          if not err then
-            on_session_ready()
-          end
-          done(err)
-        end)
+      lifecycle({ clear = true, touch = true }, function(opts, done)
+        session:load(session_id, opts, done)
       end, cb)
     end,
 
     connect_and_load = function(session_id, cb)
       roots:hydrate_from(Sessions.get(session_id))
-      with_lifecycle({ touch = true }, function(done)
-        session:connect_and_load(session_id, lifecycle_opts(), function(err)
-          if not err then
-            on_session_ready()
-          end
-          done(err)
-        end)
+      lifecycle({ touch = true }, function(opts, done)
+        session:connect_and_load(session_id, opts, done)
       end, cb)
     end,
 
     pick_session = function()
       local function load_choice(item)
-        with_lifecycle({ clear = true }, function(done)
-          session:load(item.session_id, lifecycle_opts(), function(err)
+        lifecycle({ clear = true }, function(opts, done)
+          session:load(item.session_id, opts, function(err)
             if err then
               Sessions.remove(item.session_id)
-            else
-              on_session_ready()
             end
             done(err)
           end)
@@ -937,10 +948,9 @@ function M.setup_integration(view, session)
       selected_files = {}
       refresh_file_display()
       -- Keep roots as-is so a new session inherits the user's roots.
-      with_lifecycle({ save = true }, function(done)
-        session:new_session(lifecycle_opts(), function(err)
+      lifecycle({ save = true }, function(opts, done)
+        session:new_session(opts, function(err)
           if not err then
-            on_session_ready()
             vim.schedule(function()
               view:add_message(Message:new("system", "New session started."))
             end)

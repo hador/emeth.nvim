@@ -413,8 +413,8 @@ h.describe("acp integration: abort stuck connect", function()
     local integration = Acp.setup_integration(view, session)
 
     -- Simulate a handshake that never completes (e.g. a launcher running
-    -- updates before it execs the agent): connect() never calls back, so the
-    -- lifecycle's `done` never fires and `connecting` stays true.
+    -- updates before it execs the agent): connect() never calls back, so
+    -- activity stays "connecting".
     session.connect = function() end
     local disconnected = false
     session.disconnect = function()
@@ -431,9 +431,75 @@ h.describe("acp integration: abort stuck connect", function()
   end)
 
   h.it("Ctrl+C does nothing when idle and connected", function()
-    local session, view = make_setup() -- _state = "ready", not connecting
+    local session, view = make_setup() -- _state = "ready", activity = "idle"
     local before = #view.messages
     press("<C-c>")
+    h.eq(before, #view.messages)
+  end)
+end)
+
+h.describe("acp integration: cancel during auto-resumed streaming", function()
+  -- Reproduces: claude auto-resumes a session — session/prompt callback has
+  -- fired (activity → idle), then updates start streaming again on the same
+  -- session (activity → generating). Cancel must still work.
+  h.it("Ctrl+C cancels when updates stream while session state is ready", function()
+    local session, view = make_setup() -- _state = "ready"
+    local cancelled = false
+    session.cancel = function()
+      cancelled = true
+    end
+
+    -- Streaming resumes with no prompt in flight.
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "resumed" } })
+
+    h.is_true(press("<C-c>"), "C-c keymap should be bound")
+    h.is_true(cancelled, "session:cancel() must fire when activity is generating")
+    local last = view.messages[#view.messages]
+    h.is_true(last:text():find("cancelled", 1, true) ~= nil, "should report the cancel")
+  end)
+
+  h.it("Ctrl+C stays a no-op when idle and nothing is streaming", function()
+    local session, view = make_setup()
+    local cancelled = false
+    session.cancel = function()
+      cancelled = true
+    end
+    local before = #view.messages
+    press("<C-c>")
+    h.is_true(not cancelled, "no cancel when idle")
+    h.eq(before, #view.messages)
+  end)
+
+  h.it("metadata-only updates do not arm cancel", function()
+    local session, view = make_setup()
+    local cancelled = false
+    session.cancel = function()
+      cancelled = true
+    end
+    session:_emit("update", { sessionUpdate = "usage_update", used = 10, size = 100 })
+    flush()
+    local before = #view.messages
+    press("<C-c>")
+    h.is_true(not cancelled, "usage_update alone must not arm cancel")
+    h.eq(before, #view.messages)
+  end)
+
+  h.it("trailing updates after cancel do not re-arm cancel", function()
+    local session, view = make_setup()
+    local cancel_count = 0
+    session.cancel = function()
+      cancel_count = cancel_count + 1
+    end
+
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "x" } })
+    press("<C-c>")
+    h.eq(1, cancel_count)
+
+    -- Trailing chunk arrives after the cancel; a second C-c must be a no-op.
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "tail" } })
+    local before = #view.messages
+    press("<C-c>")
+    h.eq(1, cancel_count, "trailing updates must not re-arm cancel")
     h.eq(before, #view.messages)
   end)
 end)
@@ -447,7 +513,7 @@ h.describe("acp integration: slow-connect nudge", function()
     local session = Session:new("test")
     local view = make_view()
     local integration = Acp.setup_integration(view, session)
-    session.connect = function() end -- never completes → stays connecting
+    session.connect = function() end -- never completes → activity stays "connecting"
 
     integration.connect()
     vim.wait(200, function()
@@ -470,8 +536,8 @@ h.describe("acp integration: slow-connect nudge", function()
     local session = Session:new("test")
     local view = make_view()
     local integration = Acp.setup_integration(view, session)
-    -- Completes synchronously via done(nil): connecting flips false before the
-    -- timer. Called as session:connect(opts, cb) → (self, opts, cb).
+    -- Completes synchronously: done(nil) bumps epoch before the timer fires.
+    -- Called as session:connect(opts, cb) → (self, opts, cb).
     session.connect = function(_self, _opts, cb)
       cb(nil)
     end
