@@ -304,15 +304,11 @@ function M.setup_integration(view, session)
       else
         session:disconnect()
       end
-      local emeth = require("emeth")
-      emeth._integration = nil
-      emeth._provider = nil
+      require("emeth")._set_integration(nil, nil)
       return
     end
 
-    local pending_fn = view.integration and view.integration.get_pending_task_count
-    local has_background = pending_fn and pending_fn() > 0
-    if activity ~= "generating" and not has_background then
+    if activity ~= "generating" then
       return -- idle or already cancelled: nothing in flight
     end
 
@@ -384,13 +380,6 @@ function M.setup_integration(view, session)
         end
         if err then
           view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
-        end
-        -- Signal when background tasks are still in-flight — their output
-        -- is deferred by the ACP wrapper and will arrive on the next prompt.
-        local pending_fn = view.integration and view.integration.get_pending_task_count
-        local pending = pending_fn and pending_fn() or 0
-        if pending > 0 then
-          Winbar.set_mode_tag("⑂ " .. pending .. " background", "info")
         end
         view:invalidate()
       end)
@@ -1007,8 +996,8 @@ function M.setup_integration(view, session)
   }
 
   -- Transfer any extra fields the provider extension added to the temporary
-  -- stub (e.g. get_pending_task_count) onto the real integration table so
-  -- they remain accessible after the stub is replaced.
+  -- stub onto the real integration table so they remain accessible after the
+  -- stub is replaced.
   for k, v in pairs(ext_integration) do
     if integration[k] == nil then
       integration[k] = v
