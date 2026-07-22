@@ -87,6 +87,56 @@ M._integration = nil
 ---@type string|nil
 M._provider = nil
 
+-- Commands that only make sense with an established session. Registered when
+-- an integration comes up, removed when it goes away, so they don't clutter
+-- command completion (and can't be invoked) while there's nothing to act on.
+local SESSION_COMMANDS = {
+  EmethHistory = {
+    fn = function()
+      M.history()
+    end,
+    opts = { desc = "Pick a previous chat session to resume" },
+  },
+  EmethResume = {
+    fn = function(args)
+      local session_id = args.args ~= "" and args.args or nil
+      if not session_id then
+        M.history()
+        return
+      end
+      M.resume(session_id)
+    end,
+    opts = { nargs = "?", desc = "Resume a session by ID (or pick from history)" },
+  },
+  EmethCancel = {
+    fn = function()
+      M.cancel()
+    end,
+    opts = { desc = "Cancel current AI request" },
+  },
+}
+
+local function update_session_commands()
+  for name, cmd in pairs(SESSION_COMMANDS) do
+    local registered = vim.fn.exists(":" .. name) == 2
+    if M._integration and not registered then
+      vim.api.nvim_create_user_command(name, cmd.fn, cmd.opts)
+    elseif not M._integration and registered then
+      vim.api.nvim_del_user_command(name)
+    end
+  end
+end
+
+---Set (or clear, with nil) the active integration. Single funnel for all
+---assignments so session-scoped user commands stay in sync.
+---@param integration table|nil
+---@param provider string|nil
+function M._set_integration(integration, provider)
+  M._integration = integration
+  M._provider = provider
+  update_session_commands()
+end
+
 ---@param opts? table
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
@@ -146,8 +196,7 @@ local function connect(provider, opts)
 
   local session = require("emeth.acp").create_session(provider)
   local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
-  M._integration = integration
-  M._provider = provider
+  M._set_integration(integration, provider)
 
   if M.config.auto_add_current_file and origin_file ~= "" and vim.fn.filereadable(origin_file) == 1 then
     integration.add_file(origin_file)
@@ -176,8 +225,7 @@ function M.open(provider, opts)
   -- Switch provider if a different one was requested
   if provider and M._integration and provider ~= M._provider then
     M._integration.disconnect()
-    M._integration = nil
-    M._provider = nil
+    M._set_integration(nil, nil)
   end
 
   -- Already connected — start a new session if fresh was requested, else focus
@@ -206,8 +254,7 @@ function M.close()
   if M._integration and M._integration.disconnect then
     M._integration.disconnect()
   end
-  M._integration = nil
-  M._provider = nil
+  M._set_integration(nil, nil)
   if _sidebar then
     _sidebar:close()
   end
@@ -243,6 +290,32 @@ function M.history()
   else
     vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
   end
+end
+
+---Resume a specific session by ID. If the integration is already running, load
+---into it; otherwise spin up the provider first (same as :Emeth + auto-resume
+---but targeting a specific session instead of "most recent").
+---@param session_id string
+---@param provider? string
+function M.resume(session_id, provider)
+  if M._integration then
+    if M._integration.load_session then
+      ensure_sidebar_open()
+      M._integration.load_session(session_id)
+    end
+    return
+  end
+
+  local resolved = resolve_provider(provider)
+  if not resolved then
+    return
+  end
+
+  ensure_sidebar_open()
+  local session = require("emeth.acp").create_session(resolved)
+  local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
+  M._set_integration(integration, resolved)
+  integration.connect_and_load(session_id)
 end
 
 function M.cancel()
