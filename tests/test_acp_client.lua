@@ -63,6 +63,52 @@ h.describe("ACPClient _create_error", function()
   end)
 end)
 
+-- ── _fail_pending ──────────────────────────────────────────────
+
+h.describe("ACPClient _fail_pending", function()
+  h.it("fails every in-flight callback with the error and clears the queue", function()
+    local c = make_client()
+    local errs = {}
+    c.callbacks[1] = function(_, err)
+      errs[1] = err
+    end
+    c.callbacks[2] = function(_, err)
+      errs[2] = err
+    end
+
+    c:_fail_pending(c:_create_error(-32603, "process exited"))
+    vim.wait(0)
+
+    h.eq("process exited", errs[1] and errs[1].message)
+    h.eq("process exited", errs[2] and errs[2].message)
+    h.is_nil(next(c.callbacks), "pending queue must be cleared")
+  end)
+
+  h.it("is a no-op when nothing is pending", function()
+    local c = make_client()
+    -- Must not throw or schedule anything.
+    c:_fail_pending(c:_create_error(-32603, "process exited"))
+    vim.wait(0)
+    h.is_nil(next(c.callbacks))
+  end)
+
+  h.it("clears synchronously so a re-entrant teardown can't double-fire", function()
+    local c = make_client()
+    local calls = 0
+    c.callbacks[1] = function(_, _)
+      calls = calls + 1
+      -- A callback that triggers another drain (mirrors teardown re-entry)
+      -- must not see itself again: the queue was already snapshotted+cleared.
+      c:_fail_pending(c:_create_error(-32603, "again"))
+    end
+
+    c:_fail_pending(c:_create_error(-32603, "first"))
+    vim.wait(0)
+
+    h.eq(1, calls, "callback must fire exactly once")
+  end)
+end)
+
 -- ── _handle_message dispatch ───────────────────────────────────
 
 h.describe("ACPClient _handle_message", function()
