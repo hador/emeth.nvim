@@ -122,6 +122,28 @@ function ACPClient:_create_error(code, message, data)
   return { code = code, message = message, data = data }
 end
 
+---Fail every in-flight request with `err` and clear the pending queue. Called
+---when the transport dies (process exit / stdout error) so a request waiting on
+---a response that will never arrive doesn't hang forever — which otherwise
+---strands the UI in "connecting" (the orphaned `initialize` callback) or
+---"generating" (an orphaned `session/prompt`). Snapshots and clears the queue
+---synchronously so a drained callback that triggers another teardown can't
+---re-enter the same set; the invocations themselves are scheduled because the
+---callbacks touch the editor API and we may be on the libuv thread.
+---@param err acp.ACPError
+function ACPClient:_fail_pending(err)
+  if not next(self.callbacks) then
+    return
+  end
+  local pending = self.callbacks
+  self.callbacks = {}
+  vim.schedule(function()
+    for _, callback in pairs(pending) do
+      pcall(callback, nil, err)
+    end
+  end)
+end
+
 function ACPClient:_create_stdio_transport()
   local uv = vim.uv or vim.loop
   local transport = { stdin = nil, stdout = nil, process = nil }
@@ -169,6 +191,15 @@ function ACPClient:_create_stdio_transport()
     }, function(code, signal)
       debug_log_print("ACP agent exited with code " .. code .. " and signal " .. signal)
       self:_set_state("disconnected")
+      -- The process is gone: any request still awaiting a response never will
+      -- get one. Fail them so the UI leaves "connecting"/"generating" and shows
+      -- the reason instead of hanging silently.
+      self:_fail_pending(
+        self:_create_error(
+          self.ERROR_CODES.INTERNAL_ERROR,
+          ("ACP agent process exited (code %s, signal %s)"):format(code, signal)
+        )
+      )
       if transport_self.process then
         transport_self.process:close()
         transport_self.process = nil
@@ -201,6 +232,7 @@ function ACPClient:_create_stdio_transport()
           vim.notify("ACP stdout error: " .. err, vim.log.levels.ERROR)
         end)
         self:_set_state("error")
+        self:_fail_pending(self:_create_error(self.ERROR_CODES.INTERNAL_ERROR, "ACP stdout error: " .. err))
         return
       end
       if data then
