@@ -322,6 +322,88 @@ h.describe("acp integration: plan", function()
     h.is_true(text:find("→ Step two", 1, true) ~= nil)
     h.is_true(text:find("○ Step three", 1, true) ~= nil)
   end)
+
+  h.it("updates the plan in place instead of stacking copies", function()
+    local session, view = make_setup()
+    local function emit_plan(entries)
+      session:_emit("update", { sessionUpdate = "plan", entries = entries })
+    end
+    emit_plan({ { content = "Step one", status = "pending" } })
+    emit_plan({ { content = "Step one", status = "in_progress" } })
+    emit_plan({
+      { content = "Step one", status = "completed" },
+      { content = "Step two", status = "pending" },
+    })
+    -- Three plan updates → still ONE message, showing the latest full plan.
+    h.eq(1, #view.messages)
+    local text = view.messages[1]:text()
+    h.is_true(text:find("✓ Step one", 1, true) ~= nil, "latest status wins")
+    h.is_true(text:find("○ Step two", 1, true) ~= nil, "grown plan is present")
+    -- No stale copies: "Step one" appears exactly once.
+    local _, count = text:gsub("Step one", "")
+    h.eq(1, count)
+  end)
+
+  h.it("consecutive plan updates (still last block) stay in place", function()
+    local session, view = make_setup()
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "A", status = "pending" } } })
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "A", status = "in_progress" } } })
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "A", status = "completed" } } })
+    local plan_count = 0
+    for _, m in ipairs(view.messages) do
+      if m:text():find("**Plan:**", 1, true) then
+        plan_count = plan_count + 1
+      end
+    end
+    h.eq(1, plan_count, "no interleaving → single in-place block")
+  end)
+
+  h.it("re-displays the plan when content streamed in below it", function()
+    local session, view = make_setup()
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "A", status = "pending" } } })
+    -- Content streams in below the plan, pushing it out of view.
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "working" } })
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "A", status = "completed" } } })
+
+    -- Two plan blocks: the stale one (scrolled away) and a fresh copy at bottom.
+    local plan_count = 0
+    for _, m in ipairs(view.messages) do
+      if m:text():find("**Plan:**", 1, true) then
+        plan_count = plan_count + 1
+      end
+    end
+    h.eq(2, plan_count, "plan re-displayed at bottom after interleaving")
+    -- The fresh copy is the last message and shows the latest status.
+    local last = view.messages[#view.messages]
+    h.is_true(last:text():find("✓ A", 1, true) ~= nil, "re-displayed copy shows current state")
+  end)
+
+  h.it("a new prompt starts a fresh plan block", function()
+    local session, view = make_setup()
+    -- Turn 1: submit (capturing the completion cb), emit a plan, then complete
+    -- the turn so activity returns to idle before the next submit.
+    local turn1_cb
+    session.send_prompt = function(_, _prompt, cb)
+      turn1_cb = cb
+    end
+    view.on_submit("first question")
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "A", status = "pending" } } })
+    turn1_cb(nil, nil) -- turn 1 completes → idle
+    flush()
+
+    -- Turn 2: a fresh submit runs reset_state, so the next plan is a new block.
+    session.send_prompt = function() end
+    view.on_submit("next question")
+    session:_emit("update", { sessionUpdate = "plan", entries = { { content = "B", status = "pending" } } })
+
+    local plan_count = 0
+    for _, m in ipairs(view.messages) do
+      if m:text():find("**Plan:**", 1, true) then
+        plan_count = plan_count + 1
+      end
+    end
+    h.eq(2, plan_count, "second turn's plan is a separate block")
+  end)
 end)
 
 h.describe("acp integration: available_commands_update", function()
