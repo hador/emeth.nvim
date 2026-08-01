@@ -26,6 +26,7 @@ local M = {}
 function M.setup_integration(view, session)
   local current_assistant_uuid = nil
   local current_thinking_uuid = nil
+  local current_plan_uuid = nil
   local tool_message_map = {} ---@type table<string, string>
   local selected_files = {} ---@type string[]
   -- FIFO of pending permission requests. Only the head owns the a/r keymaps at
@@ -117,6 +118,7 @@ function M.setup_integration(view, session)
   local function reset_state()
     current_assistant_uuid = nil
     current_thinking_uuid = nil
+    current_plan_uuid = nil
     tool_message_map = {}
   end
 
@@ -542,12 +544,32 @@ function M.setup_integration(view, session)
   end
 
   function update_handlers.plan(update)
+    -- Each `plan` update carries the FULL current plan and supersedes the
+    -- previous one — it's a self-updating block, not an append. Render it once
+    -- per turn and rewrite in place as entries progress. `current_plan_uuid` is
+    -- cleared only by reset_state (next prompt), so the plan keeps updating even
+    -- as assistant text / tool calls interleave around it.
     local parts = { "**Plan:**" }
     for _, entry in ipairs(update.entries or {}) do
       local icon = entry.status == "completed" and "✓" or entry.status == "in_progress" and "→" or "○"
       parts[#parts + 1] = icon .. " " .. entry.content
     end
-    view:add_message(Message:new("system", table.concat(parts, "\n")))
+    local text = table.concat(parts, "\n")
+    -- Update in place only while the plan is still the last block. Once other
+    -- content (tool calls, assistant text) has streamed in below it, the plan
+    -- has scrolled out of view — so re-display a fresh copy at the bottom
+    -- instead of silently mutating the off-screen one.
+    local messages = view:get_messages()
+    local last = messages[#messages]
+    if current_plan_uuid and last and last.uuid == current_plan_uuid then
+      view:update_message(current_plan_uuid, function(msg)
+        msg.content = { { type = "text", text = text } }
+      end)
+    else
+      local msg = Message:new("system", text)
+      current_plan_uuid = msg.uuid
+      view:add_message(msg)
+    end
   end
 
   function update_handlers.available_commands_update(update)
