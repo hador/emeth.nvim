@@ -33,28 +33,17 @@ function M.setup_integration(view, session)
   -- any time, so concurrent requests can't clobber each other's bindings.
   local permission_queue = {} ---@type { tool_call: table, options: table[], callback: fun(option_id: string|nil), prompt_uuid?: string }[]
   local roots = Roots.attach(view)
-  local reload_timer = vim.uv.new_timer()
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
 
   -- Coalesces the flood of tool_call_update content chunks into at most one
   -- render per interval. A streaming tool body arrives chunk-by-chunk, and each
   -- render of an *expanded* body is O(body); re-rendering the whole growing body
   -- on every chunk is O(body^2). We apply each chunk's data synchronously (so
-  -- the model is always current) but only paint on this timer's tick. Mirrors
-  -- the reload_timer debounce below.
-  local render_timer = vim.uv.new_timer()
-  local RENDER_THROTTLE_MS = 80
-  local function schedule_tool_render()
-    if not render_timer:is_active() then
-      render_timer:start(
-        RENDER_THROTTLE_MS,
-        0,
-        vim.schedule_wrap(function()
-          view:flush()
-        end)
-      )
-    end
-  end
+  -- the model is always current) but only paint on this debounce's tick.
+  local render_debounce = util.debounce(80, function()
+    view:flush()
+  end)
+  local schedule_tool_render = render_debounce.call
 
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
@@ -107,11 +96,10 @@ function M.setup_integration(view, session)
     pending_reloads = {}
   end
 
+  local reload_debounce = util.debounce(1000, flush_reloads)
   local function schedule_reload(path, first_changed)
     pending_reloads[path] = first_changed or pending_reloads[path] or true
-    if not reload_timer:is_active() then
-      reload_timer:start(1000, 0, vim.schedule_wrap(flush_reloads))
-    end
+    reload_debounce.call()
   end
 
   -- ── Activity state ─────────────────────────────────────────────
@@ -1198,14 +1186,8 @@ function M.setup_integration(view, session)
       end
       Commands.clear_config()
       Winbar.detach()
-      if not reload_timer:is_closing() then
-        reload_timer:stop()
-        reload_timer:close()
-      end
-      if not render_timer:is_closing() then
-        render_timer:stop()
-        render_timer:close()
-      end
+      reload_debounce.close()
+      render_debounce.close()
       view:flush() -- paint any final throttled tool content before we detach
       if ext_cleanup then
         ext_cleanup()
