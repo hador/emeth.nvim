@@ -34,7 +34,7 @@ local function make_view()
     table.insert(self.messages, msg)
   end
 
-  function view:update_message(uuid, fn_or_msg)
+  function view:update_message(uuid, fn_or_msg, _opts)
     for _, m in ipairs(self.messages) do
       if m.uuid == uuid then
         if type(fn_or_msg) == "function" then
@@ -43,6 +43,14 @@ local function make_view()
         return
       end
     end
+  end
+
+  -- Streaming tool content is applied synchronously in update_message above, so
+  -- the stub's flush only needs to exist (real render coalescing is a ChatView
+  -- concern, tested there); the integration calls it on throttle + disconnect.
+  view.flush_count = 0
+  function view:flush()
+    self.flush_count = self.flush_count + 1
   end
 
   function view:get_message(uuid)
@@ -301,6 +309,64 @@ h.describe("acp integration: tool_call lifecycle", function()
     })
     h.eq(1, #view.messages)
     h.eq("in_progress", view.messages[1].content[1].status)
+  end)
+end)
+
+h.describe("acp integration: streaming tool render throttle", function()
+  -- A content-only tool_call_update (a body chunk while the tool streams) is
+  -- applied synchronously but its render is deferred to a throttle timer, so a
+  -- fast stream can't force a re-render of the whole growing body per chunk. A
+  -- structural change (status/title/locations) renders promptly.
+  local function open_tool()
+    local session, view = make_setup()
+    session:_emit("update", {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      title = "Bash",
+      status = "in_progress",
+    })
+    view.flush_count = 0 -- reset after setup noise
+    return session, view
+  end
+
+  h.it("defers the render for a content-only chunk (no synchronous flush)", function()
+    local session, view = open_tool()
+    session:_emit("update", {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      content = { { type = "content", content = { text = "partial output" } } },
+    })
+    -- Data applied immediately...
+    h.eq("partial output", view.messages[1].metadata.tool_call.content[1].content.text)
+    -- ...but no synchronous flush: the throttle timer will paint later.
+    h.eq(0, view.flush_count)
+  end)
+
+  h.it("flushes promptly on a structural update (status)", function()
+    local session, view = open_tool()
+    session:_emit("update", {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      content = { { type = "content", content = { text = "done body" } } },
+      status = "completed",
+    })
+    -- update_message renders synchronously for structural changes, so the
+    -- integration does not additionally arm the throttle. We assert the model
+    -- is current; render promptness is covered by update_message's own path.
+    h.eq("completed", view.messages[1].content[1].status)
+    h.eq("done body", view.messages[1].metadata.tool_call.content[1].content.text)
+  end)
+
+  h.it("paints any pending throttled content on disconnect", function()
+    local session, view = open_tool()
+    session:_emit("update", {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      content = { { type = "content", content = { text = "trailing" } } },
+    })
+    h.eq(0, view.flush_count, "content chunk should not flush synchronously")
+    view.integration.disconnect()
+    h.is_true(view.flush_count >= 1, "disconnect must flush the final throttled paint")
   end)
 end)
 

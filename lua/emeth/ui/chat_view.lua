@@ -252,7 +252,13 @@ end
 
 ---@param uuid string
 ---@param msg_or_fn chat_ui.Message|fun(msg: chat_ui.Message)
-function ChatView:update_message(uuid, msg_or_fn)
+---@param opts? { defer_render?: boolean }  defer_render: apply the mutation and
+---  mark the message dirty, but don't schedule a render -- the caller will call
+---  flush() later. Lets a high-frequency streamer (e.g. a tool body arriving
+---  chunk-by-chunk) coalesce many updates into one render on a timer, so the
+---  visible transcript never re-renders faster than it's worth. The model is
+---  still updated synchronously, so get_message() sees fresh data immediately.
+function ChatView:update_message(uuid, msg_or_fn, opts)
   for i, m in ipairs(self.messages) do
     if m.uuid == uuid then
       if type(msg_or_fn) == "function" then
@@ -262,9 +268,19 @@ function ChatView:update_message(uuid, msg_or_fn)
       end
       self._line_cache[uuid] = nil
       self._dirty_from = self._dirty_from and math.min(self._dirty_from, i) or i
-      self:_schedule_render()
+      if not (opts and opts.defer_render) then
+        self:_schedule_render()
+      end
       return
     end
+  end
+end
+
+--- Render any pending deferred updates now (coalesced onto the next tick).
+--- No-op if nothing is dirty. Pairs with update_message(..., {defer_render=true}).
+function ChatView:flush()
+  if self._dirty_from then
+    self:_schedule_render()
   end
 end
 

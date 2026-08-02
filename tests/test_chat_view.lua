@@ -295,6 +295,52 @@ h.describe("ChatView incremental line->msg map", function()
   end)
 end)
 
+-- ── deferred render (streaming throttle primitive) ─────────────
+h.describe("ChatView:update_message defer_render + flush", function()
+  local Message = require("emeth.message")
+
+  h.it("applies the mutation synchronously but does not schedule a render", function()
+    local view = make_view()
+    local m = Message:new("assistant", "start")
+    view:add_message(m)
+    view:_render()
+    view._render_pending = false -- clear the add's scheduled render
+
+    view:update_message(m.uuid, function(msg)
+      msg:append_text(" more")
+    end, { defer_render = true })
+
+    -- Model is current immediately...
+    h.eq("start more", view:get_message(m.uuid):text())
+    -- ...but no render was scheduled and the cache entry was dropped (dirty).
+    h.is_true(not view._render_pending, "deferred update must not schedule a render")
+    h.is_nil(view._line_cache[m.uuid], "deferred update should still mark the message dirty")
+  end)
+
+  h.it("flush schedules the pending render", function()
+    local view = make_view()
+    local m = Message:new("assistant", "x")
+    view:add_message(m)
+    view:_render()
+    view._render_pending = false
+
+    view:update_message(m.uuid, function(msg)
+      msg:append_text("y")
+    end, { defer_render = true })
+    view:flush()
+    h.is_true(view._render_pending, "flush should schedule a render when dirty")
+  end)
+
+  h.it("flush is a no-op when nothing is dirty", function()
+    local view = make_view()
+    view:add_message(Message:new("assistant", "x"))
+    view:_render() -- clears _dirty_from
+    view._render_pending = false
+    view:flush()
+    h.is_true(not view._render_pending, "flush with no dirty state must not render")
+  end)
+end)
+
 -- ── vim.paste lifecycle (global hygiene) ───────────────────────
 h.describe("ChatView paste lifecycle", function()
   h.it("install wraps the global, detach restores the original", function()

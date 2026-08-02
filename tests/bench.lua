@@ -167,6 +167,45 @@ function M.streaming_tool_growth(n_lines, expanded)
   end, 3)
 end
 
+--- Same growing expanded tool body, but with the integration's render throttle
+--- modeled: chunks are applied with defer_render=true and painted only once per
+--- `coalesce` chunks (the timer coalesces a burst into one render). This is what
+--- the acp integration does via schedule_tool_render(); here we model the
+--- coalescing deterministically so the bench is time-independent. Cost drops
+--- from O(N^2) (render every chunk) to O(N^2 / coalesce) -- still the same shape,
+--- but divided down by however many chunks land within one throttle interval,
+--- which in practice makes it a non-issue at streaming rates.
+---@param n_lines integer
+---@param coalesce integer  chunks coalesced into one render (models the timer)
+---@return number ms_total
+function M.streaming_tool_growth_throttled(n_lines, coalesce)
+  local v = fresh_view()
+  local msg = Message:new("assistant", {
+    { type = "tool_use", id = "t1", name = "Bash", input = {}, status = "in_progress" },
+  })
+  msg.metadata.tool_call = { content = { { type = "content", content = { text = "" } } }, status = "in_progress" }
+  msg.metadata._expanded = true
+  v:add_message(msg)
+  local uuid = msg.uuid
+  local chunk = string.rep("x", 40)
+  return M.time(function()
+    local acc = {}
+    for i = 1, n_lines do
+      acc[i] = "  line_" .. i .. "  |  " .. chunk
+      local text = table.concat(acc, "\n")
+      v:update_message(uuid, function(m)
+        m.metadata.tool_call.content = { { type = "content", content = { text = text } } }
+      end, { defer_render = true })
+      if i % coalesce == 0 then
+        v:flush()
+        v:_render()
+      end
+    end
+    v:flush()
+    v:_render()
+  end, 3)
+end
+
 -- ── runner (make bench) ────────────────────────────────────────
 function M.run()
   print("emeth render benchmarks (median ms)\n")
@@ -191,9 +230,14 @@ function M.run()
     print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_tool_growth(n, false)))
   end
 
-  print("\nstreaming tool body growth (expanded) — QUADRATIC, only if K'd mid-stream:")
+  print("\nstreaming tool body growth (expanded, render every chunk) — QUADRATIC:")
   for _, n in ipairs({ 100, 400, 800 }) do
     print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_tool_growth(n, true)))
+  end
+
+  print("\nstreaming tool body growth (expanded, throttled ~1 render/10 chunks) — the fix:")
+  for _, n in ipairs({ 100, 400, 800 }) do
+    print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_tool_growth_throttled(n, 10)))
   end
 end
 

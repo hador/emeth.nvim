@@ -36,6 +36,26 @@ function M.setup_integration(view, session)
   local reload_timer = vim.uv.new_timer()
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
 
+  -- Coalesces the flood of tool_call_update content chunks into at most one
+  -- render per interval. A streaming tool body arrives chunk-by-chunk, and each
+  -- render of an *expanded* body is O(body); re-rendering the whole growing body
+  -- on every chunk is O(body^2). We apply each chunk's data synchronously (so
+  -- the model is always current) but only paint on this timer's tick. Mirrors
+  -- the reload_timer debounce below.
+  local render_timer = vim.uv.new_timer()
+  local RENDER_THROTTLE_MS = 80
+  local function schedule_tool_render()
+    if not render_timer:is_active() then
+      render_timer:start(
+        RENDER_THROTTLE_MS,
+        0,
+        vim.schedule_wrap(function()
+          view:flush()
+        end)
+      )
+    end
+  end
+
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
   local render_model ---@type fun()
@@ -499,6 +519,14 @@ function M.setup_integration(view, session)
   function update_handlers.tool_call_update(update)
     local uuid = tool_message_map[update.toolCallId]
     if uuid then
+      -- A content/rawOutput-only chunk (the common case while a tool streams)
+      -- is throttled: apply it now, paint on the timer. Anything that changes
+      -- what the card *shows structurally* -- status, title, locations, input
+      -- -- renders promptly so the header/box/icon never lags the model.
+      local structural = update.status ~= nil
+        or update.title ~= nil
+        or update.rawInput ~= nil
+        or update.locations ~= nil
       view:update_message(uuid, function(msg)
         for _, item in ipairs(msg.content) do
           if item.type == "tool_use" and item.id == update.toolCallId then
@@ -530,7 +558,13 @@ function M.setup_integration(view, session)
             msg.metadata.tool_call.locations = update.locations
           end
         end
-      end)
+      end, { defer_render = not structural })
+      -- Structural updates rendered synchronously via update_message above (any
+      -- content deferred earlier rides along in that same paint). Content-only
+      -- chunks arm the throttle timer to paint shortly.
+      if not structural then
+        schedule_tool_render()
+      end
     end
 
     -- Debounced buffer reload for completed tool calls that wrote files
@@ -1168,6 +1202,11 @@ function M.setup_integration(view, session)
         reload_timer:stop()
         reload_timer:close()
       end
+      if not render_timer:is_closing() then
+        render_timer:stop()
+        render_timer:close()
+      end
+      view:flush() -- paint any final throttled tool content before we detach
       if ext_cleanup then
         ext_cleanup()
       end
