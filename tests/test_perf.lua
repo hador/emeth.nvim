@@ -72,9 +72,7 @@ h.describe("perf: a streaming tool body renders linearly (default collapsed)", f
   -- A tool whose output streams in (tool_call_update replacing full content)
   -- renders collapsed by default -- a single header line regardless of body
   -- size -- so N chunks cost O(N). Growth factor here is 4x lines (200 -> 800);
-  -- linear is ~4x, so we cap at 8x to absorb noise. (The EXPANDED path is
-  -- knowingly O(N^2); it is exercised only via `make bench`, not guarded here,
-  -- because it is reachable solely by expanding a tool mid-stream.)
+  -- linear is ~4x, so we cap at 8x to absorb noise.
   h.it("total cost of a growing collapsed tool body scales ~linearly", function()
     local small = bench.streaming_tool_growth(200, false)
     local large = bench.streaming_tool_growth(800, false)
@@ -87,6 +85,28 @@ h.describe("perf: a streaming tool body renders linearly (default collapsed)", f
         ratio,
         small,
         large
+      )
+    )
+  end)
+
+  -- The EXPANDED path (tool K'd open mid-stream) re-renders the whole growing
+  -- body per chunk -- O(N^2). The integration throttles it: chunks are applied
+  -- synchronously but painted at most once per interval. Modeling that
+  -- coalescing must cut total render cost substantially vs painting every chunk.
+  -- We require the throttled path to be at least 3x cheaper at 800 lines; in
+  -- practice it is ~9x. This guards that the throttle stays wired to the
+  -- deferred-render primitive (a regression that rendered every chunk again
+  -- would collapse the ratio toward 1x and trip this).
+  h.it("throttling an expanded streaming tool body beats rendering every chunk", function()
+    local every_chunk = bench.streaming_tool_growth(800, true)
+    local throttled = bench.streaming_tool_growth_throttled(800, 10)
+    h.is_true(
+      every_chunk / math.max(throttled, 1e-6) > 3.0,
+      string.format(
+        "throttled render (%.3fms) should be >3x cheaper than per-chunk render (%.3fms); "
+          .. "the streaming render throttle may have become disconnected from defer_render/flush.",
+        throttled,
+        every_chunk
       )
     )
   end)
