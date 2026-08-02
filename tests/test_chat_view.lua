@@ -253,6 +253,48 @@ h.describe("ChatView paste folding", function()
   end)
 end)
 
+-- ── incremental render bookkeeping ─────────────────────────────
+-- _render no longer rebuilds the prefix each call; it counts prefix lines and
+-- maintains _line_to_msg incrementally. These guard the row->msg mapping (which
+-- backs the K/r/e keymaps) and the shrink case.
+h.describe("ChatView incremental line->msg map", function()
+  local Message = require("emeth.message")
+
+  h.it("maps every buffer row to its message after streaming into the tail", function()
+    local view = make_view()
+    view:add_message(Message:new("user", "first\nsecond"))
+    local live = Message:new("assistant", "")
+    view:add_message(live)
+    view:_render()
+    -- Stream several chunks into the last message (each a re-render).
+    for _ = 1, 5 do
+      view:update_message(live.uuid, function(m)
+        m:append_text("x\n")
+      end)
+      view:_render()
+    end
+    local n = vim.api.nvim_buf_line_count(view.result_buf)
+    -- Every rendered row resolves to a message, and the last row is the live one.
+    for row = 1, n do
+      h.is_true(view._line_to_msg[row] ~= nil, "row " .. row .. " has no message")
+    end
+    h.eq(live.uuid, view._line_to_msg[n].uuid)
+  end)
+
+  h.it("leaves no stale row->msg entries when the transcript shrinks", function()
+    local view = make_view()
+    view:add_message(Message:new("assistant", "a\nb\nc\nd\ne"))
+    view:_render()
+    local before = vim.api.nvim_buf_line_count(view.result_buf)
+    h.is_true(view._line_to_msg[before] ~= nil, "seed row should map")
+    -- Clear collapses to an empty transcript; no rows should map afterward.
+    view:clear()
+    for row = 1, before do
+      h.is_nil(view._line_to_msg[row])
+    end
+  end)
+end)
+
 -- ── vim.paste lifecycle (global hygiene) ───────────────────────
 h.describe("ChatView paste lifecycle", function()
   h.it("install wraps the global, detach restores the original", function()

@@ -26,6 +26,11 @@ local _emeth_paste_wrapper = nil ---@type function|nil
 ---@field _pastes table<integer, { text: string, placeholder: string, mark: integer }>
 ---@field _paste_ns integer
 ---@field _paste_seq integer
+---@field _line_to_msg table<integer, chat_ui.Message>  buffer row (1-based) -> message
+---@field _line_to_msg_max? integer  highest row populated in _line_to_msg
+---@field _line_cache table<string, { lines: table[], text: string[] }>  uuid -> rendered
+---@field _dirty_from? integer  index of first message needing re-render
+---@field _render_pending? boolean
 local ChatView = {}
 ChatView.__index = ChatView
 
@@ -341,23 +346,29 @@ function ChatView:_render()
     return out
   end
 
-  -- Build prefix from cache (messages before dirty_from)
-  local prefix_lines = {}
-  local prefix_text = {}
-  self._line_to_msg = {}
+  -- Prefix (messages before dirty_from) is entirely cache hits: its rendered
+  -- lines and its buffer rows are byte-identical to the previous render, so we
+  -- neither re-materialize them nor rewrite their buffer lines. We only need
+  -- the prefix line COUNT (where the tail starts) and we keep the prefix's
+  -- existing _line_to_msg entries untouched. Counting instead of rebuilding is
+  -- ~20x cheaper and, crucially, keeps a streaming update O(tail) rather than
+  -- O(whole transcript) -- the latter made long sessions render quadratically.
+  local prefix_count = 0
   for i = 1, dirty_from - 1 do
     local msg = self.messages[i]
     if msg and msg.visible ~= false then
       local cached = self._line_cache[msg.uuid]
       if cached then
-        local base = #prefix_lines
-        vim.list_extend(prefix_lines, cached.lines)
-        vim.list_extend(prefix_text, cached.text)
-        for j = base + 1, #prefix_lines do
-          self._line_to_msg[j] = msg
-        end
+        prefix_count = prefix_count + #cached.text
       end
     end
+  end
+  -- Drop any stale line->msg entries at/after the tail start; the tail loop
+  -- below repopulates the rows it actually produces, and anything past the new
+  -- end (e.g. after a message shrank) must not linger.
+  local old_max = self._line_to_msg_max or 0
+  for j = prefix_count + 1, old_max do
+    self._line_to_msg[j] = nil
   end
 
   -- Build tool_id → result lookup once for O(1) resolution
@@ -383,17 +394,21 @@ function ChatView:_render()
         texts[#texts + 1] = tostring(line)
       end
       self._line_cache[msg.uuid] = { lines = expanded, text = texts }
-      local base = #prefix_lines + #tail_lines
+      local base = prefix_count + #tail_lines
       vim.list_extend(tail_lines, expanded)
       vim.list_extend(tail_text, texts)
-      for j = base + 1, #prefix_lines + #tail_lines do
+      for j = base + 1, prefix_count + #tail_lines do
         self._line_to_msg[j] = msg
       end
     end
   end
 
+  -- Highest line index we've populated in _line_to_msg; the next render trims
+  -- any entries beyond its own end so a shrunk transcript leaves no stragglers.
+  self._line_to_msg_max = prefix_count + #tail_lines
+
   -- Partial buffer update: only replace from prefix end onward
-  local start_line = #prefix_text
+  local start_line = prefix_count
   api.nvim_set_option_value("modifiable", true, { buf = buf })
   api.nvim_buf_set_lines(buf, start_line, -1, false, tail_text)
   api.nvim_set_option_value("modifiable", false, { buf = buf })
