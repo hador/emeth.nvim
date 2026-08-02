@@ -516,7 +516,15 @@ function ChatView:_setup_input()
     if cmd_name then
       local cmd = Commands.get(cmd_name)
       if cmd then
-        cmd.execute(cmd_args, { view = self, integration = self.integration })
+        -- Deferred: the insert-mode submit keymap issues a `stopinsert` that
+        -- only applies once control returns to the main loop. A command that
+        -- opens a picker (vim.ui.select) synchronously would mount it while
+        -- still in insert mode — its own `startinsert!` no-ops — and then the
+        -- pending stopinsert kicks the user back to normal mode. One tick
+        -- later, the mode has settled and the picker opens in insert mode.
+        vim.schedule(function()
+          cmd.execute(cmd_args, { view = self, integration = self.integration })
+        end)
         return
       end
     end
@@ -654,23 +662,30 @@ function ChatView:_setup_input()
       vim.v.char = ""
       vim.schedule(function()
         pick_command(cmds, function(name)
-          local cmd = Commands.get(name)
-          if not cmd then
-            return
-          end
-          if cmd.has_picker or cmd.immediate then
-            -- Provider-driven picker, or fire-and-forget: execute directly.
-            api.nvim_buf_set_lines(buf, 0, -1, false, {})
-            self:_clear_pastes()
-            self:set_context_files(self._context_files)
-            cmd.execute("", { view = self, integration = self.integration })
-          else
-            -- Default: pre-fill `/cmd ` (and the hint as a real-text
-            -- placeholder if the command provides one). Description is
-            -- visible in the picker's preview pane, so we don't render
-            -- it in the input window.
-            self:prefill_command(name, cmd.hint)
-          end
+          -- Deferred: on_pick runs inside the command picker's confirm
+          -- callback, i.e. still within an insert-mode mapping whose pending
+          -- `stopinsert` (from the picker teardown) applies once the mapping
+          -- returns — clobbering any `startinsert!` a follow-up picker or the
+          -- prefill issues synchronously. One tick later the mode has settled.
+          vim.schedule(function()
+            local cmd = Commands.get(name)
+            if not cmd then
+              return
+            end
+            if cmd.has_picker or cmd.immediate then
+              -- Provider-driven picker, or fire-and-forget: execute directly.
+              api.nvim_buf_set_lines(buf, 0, -1, false, {})
+              self:_clear_pastes()
+              self:set_context_files(self._context_files)
+              cmd.execute("", { view = self, integration = self.integration })
+            else
+              -- Default: pre-fill `/cmd ` (and the hint as a real-text
+              -- placeholder if the command provides one). Description is
+              -- visible in the picker's preview pane, so we don't render
+              -- it in the input window.
+              self:prefill_command(name, cmd.hint)
+            end
+          end)
         end)
       end)
     end,
