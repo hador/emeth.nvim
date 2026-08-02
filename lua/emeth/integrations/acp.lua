@@ -38,6 +38,10 @@ function M.setup_integration(view, session)
 
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
+  local render_model ---@type fun()
+  -- (Re)registers a slash command per session config option (e.g. /model).
+  -- Forward-declared so the config_option_update handler can call it.
+  local register_config_option_commands ---@type fun()
 
   -- Hook for provider extensions to mutate session/update payloads in place
   -- before the integration consumes them. Registered via
@@ -405,6 +409,7 @@ function M.setup_integration(view, session)
     session_info_update = true,
     usage_update = true,
     current_mode_update = true,
+    config_option_update = true,
   }
 
   function update_handlers.user_message_chunk(update)
@@ -628,6 +633,32 @@ function M.setup_integration(view, session)
     end
   end
 
+  -- Reconcile a fresh `configOptions` snapshot into session state: re-store the
+  -- options (via _extract_session_info, so the provider's badge/model_id refresh
+  -- runs) and re-register the slash commands so newly available options (e.g.
+  -- /effort appearing after a model switch) appear and gone ones disappear.
+  -- Shared by the agent-pushed `config_option_update` AND the response to a
+  -- client-initiated set_config_option (the wrapper only *pushes* for
+  -- agent-side changes; a user's /model switch comes back in the response).
+  local function reconcile_config_options(config_options)
+    if type(config_options) ~= "table" then
+      return
+    end
+    session:_extract_session_info({ configOptions = config_options })
+    -- model_id / mode_id may have changed; refresh their winbar surfaces.
+    render_model()
+    if (session.extensions or {}).mode_id then
+      render_mode(session.extensions.mode_id)
+    end
+    register_config_option_commands()
+  end
+
+  function update_handlers.config_option_update(update)
+    vim.schedule(function()
+      reconcile_config_options(update.configOptions)
+    end)
+  end
+
   session:on("update", function(update)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
     -- tool_call's title) before we consume it. Keep this lightweight —
@@ -826,6 +857,158 @@ function M.setup_integration(view, session)
     end
   end
 
+  -- Longest model string we'll put in the winbar before the generic fallback
+  -- kicks in. The winbar truncates anyway, but a runaway id (e.g. a fully
+  -- qualified Bedrock arn) would eat the whole bar, so cap it here first.
+  local MODEL_DISPLAY_MAX = 24
+
+  ---Provider-agnostic shortening applied *after* the provider hook, only when
+  ---the string is still too long. Prefers the last dot-separated segment (so
+  ---"global.anthropic.opus-4-8[1m]" → "opus-4-8[1m]"), then truncates keeping
+  ---the tail (models usually differ in the suffix) with a leading ellipsis.
+  ---@param s string
+  ---@return string
+  local function fit_model_display(s)
+    if vim.fn.strdisplaywidth(s) <= MODEL_DISPLAY_MAX then
+      return s
+    end
+    local tail = s:match("[^.]+$") -- last dot-separated segment
+    if tail and vim.fn.strdisplaywidth(tail) <= MODEL_DISPLAY_MAX then
+      return tail
+    end
+    s = tail or s
+    if vim.fn.strdisplaywidth(s) <= MODEL_DISPLAY_MAX then
+      return s
+    end
+    -- Keep the tail; strchars-based so we don't split a multibyte char.
+    return "…" .. vim.fn.strcharpart(s, vim.fn.strchars(s) - (MODEL_DISPLAY_MAX - 1))
+  end
+
+  ---Render the current model into the winbar: the left segment shows
+  ---`provider · model`, and the `model` badge (snapshotted into each prompt's
+  ---metadata) tracks it too. The display string comes from the provider's
+  ---optional `format_model` hook (e.g. claude shortens "claude-opus-4-6" →
+  ---"opus-4-6"), then a generic length cap keeps it winbar-sized regardless of
+  ---provider; with no hook the (capped) raw id is shown.
+  render_model = function()
+    local model = (session.extensions or {}).model_id
+    local shown = nil
+    if model and model ~= "" then
+      shown = model
+      if has_ext and type(ext.format_model) == "function" then
+        local ok, s = pcall(ext.format_model, model)
+        if ok and type(s) == "string" and s ~= "" then
+          shown = s
+        end
+      end
+      shown = fit_model_display(shown)
+    end
+    if shown then
+      Winbar.set_badge("model", shown)
+      Winbar.set_left(Winbar.fmt.plain(session.provider_name .. " · " .. shown))
+    else
+      Winbar.clear_badge("model")
+      Winbar.set_left(Winbar.fmt.plain(session.provider_name))
+    end
+  end
+
+  -- ── Session config options (model / mode / effort / agent / fast) ──
+  -- These ride the standard ACP `configOptions` + `session/set_config_option`
+  -- channel. Generic: we register one slash command per option the agent
+  -- exposes and drive it through a single picker, so we don't hard-code
+  -- "model". Providers using a bespoke mechanism (e.g. kiro-cli's own
+  -- _kiro.dev/commands) never populate `config_options`, so this stays inert
+  -- for them.
+
+  ---Flatten a config option's select values into a picker list. `options` is
+  ---either a flat array of `{ value, name, description }` or an array of
+  ---groups `{ group, name, options = {...} }`; we render both flat.
+  ---@param opt table  a SessionConfigOption (select type)
+  ---@return { value: string, label: string, description?: string, group?: string }[]
+  local function config_option_choices(opt)
+    local out = {}
+    for _, entry in ipairs(opt.options or {}) do
+      if entry.options then
+        for _, sub in ipairs(entry.options) do
+          out[#out + 1] =
+            { value = sub.value, label = sub.name or sub.value, description = sub.description, group = entry.name }
+        end
+      else
+        out[#out + 1] = { value = entry.value, label = entry.name or entry.value, description = entry.description }
+      end
+    end
+    return out
+  end
+
+  ---Open a picker for one config option and apply the selection.
+  ---@param config_id string
+  local function pick_config_option(config_id)
+    local opts = (session.extensions or {}).config_options or {}
+    local opt = opts[config_id]
+    if not opt then
+      vim.notify("[emeth] No '" .. config_id .. "' option for this session", vim.log.levels.WARN)
+      return
+    end
+    ---Apply the response snapshot (only pushed for agent-side changes, so a
+    ---user switch must reconcile the response) or surface an error.
+    local function on_set(result, err)
+      vim.schedule(function()
+        if err then
+          view:add_message(Message:new("system", "Failed to set " .. config_id .. ": " .. util.fmt_err(err)))
+        elseif result and result.configOptions then
+          reconcile_config_options(result.configOptions)
+        end
+      end)
+    end
+
+    if opt.type == "boolean" then
+      -- No native boolean toggle from the picker; flip the current value.
+      session:set_config_option(config_id, not opt.currentValue, on_set)
+      return
+    end
+    local choices = config_option_choices(opt)
+    if #choices == 0 then
+      vim.notify("[emeth] No selectable values for '" .. config_id .. "'", vim.log.levels.WARN)
+      return
+    end
+    vim.ui.select(choices, {
+      prompt = "/" .. config_id,
+      format_item = function(item)
+        local s = item.label
+        if item.value == opt.currentValue then
+          s = "● " .. s
+        end
+        if item.group then
+          s = s .. "  [" .. item.group .. "]"
+        end
+        if item.description and item.description ~= "" then
+          s = s .. "  " .. item.description
+        end
+        return s
+      end,
+    }, function(choice)
+      if not choice or choice.value == opt.currentValue then
+        return
+      end
+      session:set_config_option(config_id, choice.value, on_set)
+    end)
+  end
+
+  register_config_option_commands = function()
+    Commands.clear_config()
+    local opts = (session.extensions or {}).config_options or {}
+    for id, opt in pairs(opts) do
+      Commands.register(id, {
+        desc = opt.description or opt.name or id,
+        source = "config",
+        has_picker = true,
+        execute = function()
+          pick_config_option(id)
+        end,
+      })
+    end
+  end
+
   ---Build options carrying the current workspace roots and provider meta, if any.
   local function lifecycle_opts()
     local opts = {}
@@ -851,11 +1034,15 @@ function M.setup_integration(view, session)
       run(lifecycle_opts(), function(err)
         if not err then
           local exts = session.extensions or {}
-          if exts.mode_id then
-            vim.schedule(function()
+          vim.schedule(function()
+            if exts.mode_id then
               render_mode(exts.mode_id)
-            end)
-          end
+            end
+            render_model()
+            -- Register /model (and any other config options the agent exposed
+            -- on session/new or session/load).
+            register_config_option_commands()
+          end)
         end
         done(err)
       end)
@@ -975,6 +1162,7 @@ function M.setup_integration(view, session)
       if session.session_id then
         Sessions.touch(session.session_id)
       end
+      Commands.clear_config()
       Winbar.detach()
       if not reload_timer:is_closing() then
         reload_timer:stop()
