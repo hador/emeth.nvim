@@ -675,6 +675,23 @@ function ACPClient:cancel_session(session_id)
   self:_send_notification("session/cancel", { sessionId = session_id })
 end
 
+---Set a session configuration option (model, mode, effort, agent, fast, ...).
+---Standard ACP `session/set_config_option`. The value is either a select
+---option id (string) or a boolean for boolean-typed options — the wire schema
+---tags the boolean variant with `type = "boolean"`. Returns the full updated
+---`configOptions` array in `result.configOptions`.
+---@param session_id string
+---@param config_id string
+---@param value string|boolean
+---@param callback fun(result: table|nil, err: acp.ACPError|nil)
+function ACPClient:set_config_option(session_id, config_id, value, callback)
+  local params = { sessionId = session_id, configId = config_id, value = value }
+  if type(value) == "boolean" then
+    params.type = "boolean"
+  end
+  self:_send_request("session/set_config_option", params, callback)
+end
+
 -- Content helpers
 
 ---@param text string

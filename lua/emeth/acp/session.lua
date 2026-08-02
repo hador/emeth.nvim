@@ -192,6 +192,27 @@ function Session:_extract_session_info(result)
   if result.modes and result.modes.currentModeId then
     self.extensions.mode_id = result.modes.currentModeId
   end
+  -- Standard ACP session config options (model, mode, effort, agent, fast, ...).
+  -- Keyed by id so the integration can drive a generic picker per option
+  -- without knowing which ids an agent happens to expose. Present on
+  -- session/new, session/load, and pushed via `config_option_update`.
+  if type(result.configOptions) == "table" then
+    self.extensions.config_options = self.extensions.config_options or {}
+    for _, opt in ipairs(result.configOptions) do
+      if opt.id then
+        self.extensions.config_options[opt.id] = opt
+        -- `model`/`mode` are standard config-option ids; mirror their current
+        -- value into model_id/mode_id so a switch made via set_config_option
+        -- (which reports back only through configOptions, not models/modes)
+        -- updates the winbar badge and the per-prompt `model:` detail.
+        if opt.id == "model" and type(opt.currentValue) == "string" then
+          self.extensions.model_id = opt.currentValue
+        elseif opt.id == "mode" and type(opt.currentValue) == "string" then
+          self.extensions.mode_id = opt.currentValue
+        end
+      end
+    end
+  end
   if self.provider_name then
     local ok, ext = pcall(require, "emeth.integrations." .. self.provider_name)
     if ok and type(ext.extract_session_info) == "function" then
@@ -289,6 +310,27 @@ function Session:cancel()
   if self.session_id then
     self.client:cancel_session(self.session_id)
   end
+end
+
+---Set a session config option (model/mode/effort/agent/fast). Ready-guarded
+---like send_prompt. On success the agent also pushes a `config_option_update`
+---session/update carrying the full refreshed set, so callers don't need to
+---reconcile the response themselves.
+---@param config_id string
+---@param value string|boolean
+---@param cb? fun(result: table|nil, err: acp.ACPError|nil)
+function Session:set_config_option(config_id, value, cb)
+  if self._state ~= "ready" then
+    if cb then
+      cb(nil, { code = -1, message = "Session not ready (state: " .. self._state .. ")" })
+    end
+    return
+  end
+  self.client:set_config_option(self.session_id, config_id, value, function(result, err)
+    if cb then
+      cb(result, err)
+    end
+  end)
 end
 
 ---List previous sessions from the agent. Requires sessionCapabilities.list.

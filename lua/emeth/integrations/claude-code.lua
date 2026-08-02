@@ -5,7 +5,7 @@
 ---   - `setup(session, view) → cleanup`        custom notification subscriber
 ---   - `build_session_meta(emeth_config) → t`  `_meta` to attach on session/new
 ---   - `format_mode(mode_id) → render_desc`    badge + bottom-bar tag rendering
----   - `extract_session_info(result, exts)`    scrape claude-acp's configOptions
+---   - `format_model(model_id) → string`       shorten model id for display
 ---
 --- Subagents: a stateless transform_update rewrites Task/Agent tool_call titles
 --- to show the description + subagent_type directly from the streaming rawInput.
@@ -45,32 +45,23 @@ function M.format_mode(mode_id)
   return { badge = "⚙ " .. info.label, tag = info.label, tag_kind = info.kind }
 end
 
----Scrape claude-acp's `configOptions` shape for the active model/mode and
----reflect them in the model badge. Standard ACP fields are handled in
----session.lua before we're called.
----@param result table  raw session/new or session/load result
----@param extensions table  session.extensions; populate fields here
-function M.extract_session_info(result, extensions)
-  if result.configOptions then
-    for _, opt in ipairs(result.configOptions) do
-      if opt.id == "model" and type(opt.currentValue) == "string" then
-        extensions.model_id = opt.currentValue
-      elseif opt.id == "mode" and type(opt.currentValue) == "string" then
-        extensions.mode_id = opt.currentValue
-      end
-    end
-  end
-  -- Refresh the model badge in the winbar to reflect the (possibly updated) id.
-  vim.schedule(function()
-    local model = extensions.model_id
-    if not model or model == "" then
-      Winbar.clear_badge("model")
-      return
-    end
-    -- Strip provider prefix and trailing date for display: "claude-opus-4-6" → "opus-4-6"
-    local short = model:gsub("^claude%-", ""):gsub("%-?20%d%d%d%d%d%d?$", "")
-    Winbar.set_badge("model", short)
-  end)
+---Shorten a claude model id for display by removing claude-family noise: the
+---`claude-` family token and any trailing release date. Unanchored so it also
+---fires inside a Bedrock-style prefixed id (the generic length fallback in the
+---core integration strips the dotted region/vendor prefix itself):
+---   "claude-opus-4-6"                      → "opus-4-6"
+---   "claude-sonnet-4-5-20250101"           → "sonnet-4-5"
+---   "global.anthropic.claude-opus-4-8[1m]" → "global.anthropic.opus-4-8[1m]"
+---This hook only encodes claude id-shape knowledge; keeping the result short
+---enough to display is the generic integration's job.
+---@param model_id string
+---@return string
+function M.format_model(model_id)
+  return (
+    model_id
+      :gsub("claude%-", "") -- drop the claude- family token wherever it appears
+      :gsub("%-?20%d%d%d%d%d%d?$", "") -- drop a trailing release date
+  )
 end
 
 ---Build the `_meta` payload to attach to `session/new`/`session/load`.
