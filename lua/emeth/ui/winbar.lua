@@ -162,9 +162,14 @@ local function render()
 
     local l_out, r_out = left_raw, right_raw
     local total_content = left_w + right_w
+    -- Centering the title mirror-pads the shorter segment up to the longer one,
+    -- so the *rendered* width is 2*max(left,right)+title, not left+right+title.
+    -- Guard tier 1 on that true width or a wide left segment overflows the
+    -- window (nvim then draws its own `<` marker and the title drifts off-center).
+    local centered_w = 2 * math.max(left_w, right_w)
 
-    if total_content + title_w + 4 <= win_w then
-      -- Tier 1: everything fits
+    if centered_w + title_w + 4 <= win_w then
+      -- Tier 1: title fits, centered between mirror-padded segments
       local lpad_n = math.max(0, right_w - left_w)
       local rpad_n = math.max(0, left_w - right_w)
       local lpad = lpad_n > 0 and ("%#EmethWinbarFill#" .. string.rep(" ", lpad_n)) or ""
@@ -176,17 +181,10 @@ local function render()
         { win = result_win }
       )
     elseif total_content + MIN_GAP <= win_w then
-      -- Tier 2: drop title, segments fit
-      local lpad_n = math.max(0, right_w - left_w)
-      local rpad_n = math.max(0, left_w - right_w)
-      local lpad = lpad_n > 0 and ("%#EmethWinbarFill#" .. string.rep(" ", lpad_n)) or ""
-      local rpad = rpad_n > 0 and ("%#EmethWinbarFill#" .. string.rep(" ", rpad_n)) or ""
-      pcall(
-        api.nvim_set_option_value,
-        "winbar",
-        "%#EmethWinbarFill#" .. l_out .. lpad .. "%=" .. rpad .. r_out,
-        { win = result_win }
-      )
+      -- Tier 2: drop the title; justify segments to the edges with %= between.
+      -- No mirror padding here — a single %= already fills the gap, and padding
+      -- would push content past the edge for a wide segment.
+      pcall(api.nvim_set_option_value, "winbar", "%#EmethWinbarFill#" .. l_out .. "%=" .. r_out, { win = result_win })
     else
       -- Tier 3: proportional truncation, no title
       local avail = math.max(0, win_w - MIN_GAP)
