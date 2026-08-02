@@ -88,6 +88,88 @@ h.describe("Session _extract_session_info", function()
     h.is_nil(s.extensions.model_id)
     h.is_nil(s.extensions.mode_id)
   end)
+
+  h.it("captures configOptions keyed by id", function()
+    local s = Session:new("test")
+    s:_extract_session_info({
+      configOptions = {
+        { id = "model", type = "select", currentValue = "opus", options = {} },
+        { id = "mode", type = "select", currentValue = "default", options = {} },
+      },
+    })
+    h.eq("opus", s.extensions.config_options.model.currentValue)
+    h.eq("select", s.extensions.config_options.mode.type)
+  end)
+
+  h.it("merges configOptions across calls (later snapshot wins per id)", function()
+    local s = Session:new("test")
+    s:_extract_session_info({ configOptions = { { id = "model", currentValue = "opus" } } })
+    s:_extract_session_info({ configOptions = { { id = "model", currentValue = "sonnet" } } })
+    h.eq("sonnet", s.extensions.config_options.model.currentValue)
+  end)
+end)
+
+h.describe("Session set_config_option", function()
+  h.it("sends a select value as { configId, value } when ready", function()
+    local s = Session:new("test")
+    s._state = "ready"
+    s.session_id = "sess-1"
+    local sent
+    s.client.set_config_option = function(_, session_id, config_id, value, cb)
+      sent = { session_id = session_id, config_id = config_id, value = value }
+      cb({ configOptions = {} }, nil)
+    end
+    local got
+    s:set_config_option("model", "opus", function(result)
+      got = result
+    end)
+    h.eq("sess-1", sent.session_id)
+    h.eq("model", sent.config_id)
+    h.eq("opus", sent.value)
+    h.is_true(got ~= nil)
+  end)
+
+  h.it("errors without hitting the client when not ready", function()
+    local s = Session:new("test")
+    s._state = "connecting"
+    local called = false
+    s.client.set_config_option = function()
+      called = true
+    end
+    local err
+    s:set_config_option("model", "opus", function(_, e)
+      err = e
+    end)
+    h.is_true(not called, "client must not be called when not ready")
+    h.is_true(err ~= nil and err.message:find("not ready") ~= nil)
+  end)
+end)
+
+h.describe("ACPClient set_config_option wire shape", function()
+  local ACPClient = require("emeth.acp.client")
+
+  h.it("tags boolean values with type=boolean", function()
+    local c = ACPClient:new({ transport_type = "stdio", command = "echo" })
+    local captured
+    c._send_request = function(_, method, params)
+      captured = { method = method, params = params }
+    end
+    c:set_config_option("s1", "fast", true, function() end)
+    h.eq("session/set_config_option", captured.method)
+    h.eq("boolean", captured.params.type)
+    h.eq(true, captured.params.value)
+  end)
+
+  h.it("omits type for select (string) values", function()
+    local c = ACPClient:new({ transport_type = "stdio", command = "echo" })
+    local captured
+    c._send_request = function(_, method, params)
+      captured = { method = method, params = params }
+    end
+    c:set_config_option("s1", "model", "opus", function() end)
+    h.is_nil(captured.params.type)
+    h.eq("opus", captured.params.value)
+  end)
 end)
 
 h.describe("Session permission event", function()

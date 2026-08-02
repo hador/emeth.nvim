@@ -104,48 +104,24 @@ h.describe("claude-code build_session_meta", function()
   end)
 end)
 
-h.describe("claude-code extract_session_info", function()
-  -- extract_session_info schedules a winbar update; suppress to keep tests
-  -- focused on the extension-side state mutation.
-  local function noop_schedule(fn)
-    return fn
-  end
-  local orig_schedule = vim.schedule
-  vim.schedule = noop_schedule
-
-  h.it("populates model_id and mode_id from configOptions", function()
-    local exts = {}
-    CC.extract_session_info({
-      configOptions = {
-        { id = "model", currentValue = "claude-opus-4-7" },
-        { id = "mode", currentValue = "plan" },
-        { id = "effort", currentValue = "high" }, -- ignored
-      },
-    }, exts)
-    h.eq("claude-opus-4-7", exts.model_id)
-    h.eq("plan", exts.mode_id)
+h.describe("claude-code format_model", function()
+  -- Capturing configOptions → model_id/mode_id now lives generically in
+  -- session.lua (see test_acp_session.lua); the extension only shortens the
+  -- model id for display.
+  h.it("strips the claude- token and trailing release date", function()
+    h.eq("opus-4-6", CC.format_model("claude-opus-4-6"))
+    h.eq("sonnet-4-5", CC.format_model("claude-sonnet-4-5-20250101"))
   end)
 
-  h.it("ignores configOptions entries with non-string currentValue", function()
-    local exts = {}
-    CC.extract_session_info({
-      configOptions = {
-        { id = "model", currentValue = nil },
-        { id = "mode", currentValue = 42 },
-      },
-    }, exts)
-    h.is_nil(exts.model_id)
-    h.is_nil(exts.mode_id)
+  h.it("strips the claude- token even inside a Bedrock-style prefix", function()
+    -- The generic length fallback in the core integration drops the dotted
+    -- prefix; the hook only removes claude-family noise wherever it appears.
+    h.eq("global.anthropic.opus-4-8[1m]", CC.format_model("global.anthropic.claude-opus-4-8[1m]"))
   end)
 
-  h.it("is a no-op when result has no configOptions", function()
-    local exts = { existing = "kept" }
-    CC.extract_session_info({}, exts)
-    h.eq("kept", exts.existing)
-    h.is_nil(exts.model_id)
+  h.it("leaves an already-short id unchanged", function()
+    h.eq("opus", CC.format_model("opus"))
   end)
-
-  vim.schedule = orig_schedule
 end)
 
 h.describe("claude-code transform_update", function()

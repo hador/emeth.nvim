@@ -792,6 +792,208 @@ h.describe("acp integration: permission queue", function()
   end)
 end)
 
+h.describe("acp integration: session config options (/model etc.)", function()
+  local Commands = require("emeth.commands")
+
+  -- Stub vim.ui.select to auto-pick by predicate; returns what was offered.
+  local _orig_select = vim.ui.select
+  local function with_select(pick, body)
+    local offered
+    vim.ui.select = function(items, _opts, on_choice)
+      offered = items
+      on_choice(pick(items))
+    end
+    local ok, err = pcall(body, function()
+      return offered
+    end)
+    vim.ui.select = _orig_select
+    if not ok then
+      error(err)
+    end
+  end
+
+  local MODEL_OPT = {
+    id = "model",
+    type = "select",
+    name = "Model",
+    description = "AI model to use",
+    currentValue = "opus",
+    options = {
+      { value = "opus", name = "Opus", description = "big" },
+      { value = "sonnet", name = "Sonnet", description = "fast" },
+    },
+  }
+
+  h.it("registers a /model command from a config_option_update snapshot", function()
+    Commands.clear_config()
+    local session = make_setup()
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+    local cmd = Commands.get("model")
+    h.is_true(cmd ~= nil, "/model should be registered")
+    h.eq("config", cmd.source)
+    h.is_true(cmd.has_picker == true)
+    Commands.clear_config()
+  end)
+
+  h.it("picking a different model sets it and reconciles the response snapshot", function()
+    Commands.clear_config()
+    local session, view = make_setup()
+    local sent
+    -- Mimic the wrapper: return the updated configOptions in the response
+    -- (it does NOT push config_option_update for a user-initiated switch).
+    session.set_config_option = function(_, config_id, value, cb)
+      sent = { config_id = config_id, value = value }
+      cb({
+        configOptions = {
+          {
+            id = "model",
+            type = "select",
+            currentValue = value,
+            options = MODEL_OPT.options,
+          },
+        },
+      }, nil)
+    end
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+
+    with_select(function(items)
+      for _, it in ipairs(items) do
+        if it.value == "sonnet" then
+          return it
+        end
+      end
+    end, function()
+      Commands.get("model").execute("", { view = view, integration = view.integration })
+    end)
+    flush()
+
+    h.eq("model", sent.config_id)
+    h.eq("sonnet", sent.value)
+    -- The response snapshot must land in session state so the prompt's
+    -- `model:` detail and the winbar badge reflect the switch.
+    h.eq("sonnet", session.extensions.config_options.model.currentValue)
+    h.eq("sonnet", session.extensions.model_id)
+    Commands.clear_config()
+  end)
+
+  h.it("selecting the current value is a no-op (no request)", function()
+    Commands.clear_config()
+    local session, view = make_setup()
+    local called = false
+    session.set_config_option = function()
+      called = true
+    end
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+
+    with_select(function(items)
+      for _, it in ipairs(items) do
+        if it.value == "opus" then -- currentValue
+          return it
+        end
+      end
+    end, function()
+      Commands.get("model").execute("", { view = view, integration = view.integration })
+    end)
+
+    h.is_true(not called, "re-selecting the current model must not send a request")
+    Commands.clear_config()
+  end)
+
+  h.it("a forwarded ACP /model does not override the config-sourced one", function()
+    Commands.clear_config()
+    local session, view = make_setup()
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+    -- Agent later forwards its own /model slash command.
+    session:_emit("update", {
+      sessionUpdate = "available_commands_update",
+      availableCommands = { { name = "/model", description = "server model" } },
+    })
+    local cmd = Commands.get("model")
+    h.eq("config", cmd.source, "config command stays authoritative for /model")
+    h.is_true(cmd.has_picker == true)
+    Commands.clear_config()
+    Commands.clear_acp()
+  end)
+
+  h.it("renders provider · model in the winbar left segment and updates on switch", function()
+    Commands.clear_config()
+    -- Capture set_left for this test only, then restore the stub.
+    local left
+    local stub = Winbar.set_left
+    Winbar.set_left = function(_, plain)
+      left = plain
+    end
+
+    local session, view = make_setup()
+    session.extensions = { model_id = "opus" }
+    session.set_config_option = function(_, _config_id, value, cb)
+      cb({ configOptions = { { id = "model", type = "select", currentValue = value, options = MODEL_OPT.options } } }, nil)
+    end
+    -- Seed the picker options + render the initial left segment.
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+    h.is_true(left ~= nil and left:find("test", 1, true) ~= nil, "left shows provider")
+    h.is_true(left:find("opus", 1, true) ~= nil, "left shows initial model")
+
+    with_select(function(items)
+      for _, it in ipairs(items) do
+        if it.value == "sonnet" then
+          return it
+        end
+      end
+    end, function()
+      Commands.get("model").execute("", { view = view, integration = view.integration })
+    end)
+    flush()
+    h.is_true(left:find("sonnet", 1, true) ~= nil, "left updates to switched model")
+
+    Winbar.set_left = stub
+    Commands.clear_config()
+  end)
+
+  h.it("shortens an over-long model id generically (last dotted segment)", function()
+    Commands.clear_config()
+    local left
+    local stub = Winbar.set_left
+    Winbar.set_left = function(_, plain)
+      left = plain
+    end
+
+    -- The `test` provider has no format_model hook, so this exercises the
+    -- generic core fallback directly on a Bedrock-style id.
+    local LONG = "global.anthropic.claude-opus-4-8[1m]"
+    local session = make_setup()
+    session.extensions = { model_id = LONG }
+    session:_emit("update", {
+      sessionUpdate = "config_option_update",
+      configOptions = { { id = "model", type = "select", currentValue = LONG, options = {} } },
+    })
+    flush()
+
+    h.is_true(left:find("test", 1, true) ~= nil, "left still shows provider")
+    -- Collapsed to the last dot-separated segment, dotted prefix dropped.
+    h.is_true(left:find("claude-opus-4-8[1m]", 1, true) ~= nil, "shows last dotted segment")
+    h.is_true(left:find("global.anthropic", 1, true) == nil, "drops the dotted prefix")
+
+    Winbar.set_left = stub
+    Commands.clear_config()
+  end)
+
+  h.it("disconnect clears config commands", function()
+    Commands.clear_config()
+    local session, _, integration = make_setup()
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+    h.is_true(Commands.get("model") ~= nil)
+    integration.disconnect()
+    h.is_nil(Commands.get("model"))
+  end)
+end)
+
 -- Restore stubs
 for k, fn in pairs(_orig_winbar) do
   Winbar[k] = fn

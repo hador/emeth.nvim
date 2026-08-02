@@ -4,7 +4,7 @@
 ---@class emeth.Command
 ---@field desc string
 ---@field execute fun(args: string, ctx: { view: chat_ui.ChatView, integration: table })
----@field source "builtin"|"acp"
+---@field source "builtin"|"acp"|"config"
 ---@field hint? string         Argument hint shown as virt-text after prefill (e.g. "<model_id>")
 ---@field has_picker? boolean  Command runs its own picker UI; bypass the prefill flow
 ---@field immediate? boolean   Run execute() immediately on selection (no prefill)
@@ -18,6 +18,18 @@ local commands = {}
 ---@param cmd emeth.Command
 function M.register(name, cmd)
   local existing = commands[name]
+  -- A `config`-source command (derived from the agent's session configOptions,
+  -- e.g. /model) is authoritative for its name: it owns a native picker that
+  -- drives session/set_config_option. Don't let a same-named ACP-forwarded
+  -- slash command clobber it or chain onto it (submitting `/model` as prompt
+  -- text is a no-op over ACP), and don't let it clobber the config command.
+  if cmd.source == "acp" and existing and existing.source == "config" then
+    return
+  end
+  if cmd.source == "config" then
+    commands[name] = cmd
+    return
+  end
   if existing and (existing.source == "builtin" or existing._builtin) and cmd.source == "acp" then
     local builtin_execute = existing._builtin or existing.execute
     local acp_execute = cmd.execute
@@ -61,6 +73,17 @@ function M.clear_acp()
     elseif cmd._builtin then
       cmd.execute = cmd._builtin
       cmd._builtin = nil
+    end
+  end
+end
+
+--- Remove all config-derived (session configOptions) commands. Called when the
+--- session's option set changes or the integration tears down, so a stale
+--- /model picker can't linger against a dead session.
+function M.clear_config()
+  for name, cmd in pairs(commands) do
+    if cmd.source == "config" then
+      commands[name] = nil
     end
   end
 end
