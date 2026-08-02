@@ -24,10 +24,21 @@ local M = {}
 ---@param session acp.Session
 ---@return table
 function M.setup_integration(view, session)
-  local current_assistant_uuid = nil
-  local current_thinking_uuid = nil
-  local current_plan_uuid = nil
-  local tool_message_map = {} ---@type table<string, string>
+  -- Per-turn streaming state: which message each streaming update kind is
+  -- currently appending to, and the tool-call-id -> message-uuid map. Grouped
+  -- into one table so the update handlers take a single `state` handle rather
+  -- than closing over four separate upvalues, and so reset_state is one clear().
+  ---@class acp.StreamState
+  ---@field assistant_uuid string|nil  message the current agent text streams into
+  ---@field thinking_uuid string|nil   message the current thought streams into
+  ---@field plan_uuid string|nil       the live plan block, while it's still last
+  ---@field tool_map table<string, string>  toolCallId -> message uuid
+  local state = {
+    assistant_uuid = nil,
+    thinking_uuid = nil,
+    plan_uuid = nil,
+    tool_map = {},
+  }
   local selected_files = {} ---@type string[]
   -- FIFO of pending permission requests. Only the head owns the a/r keymaps at
   -- any time, so concurrent requests can't clobber each other's bindings.
@@ -128,10 +139,10 @@ function M.setup_integration(view, session)
   end
 
   local function reset_state()
-    current_assistant_uuid = nil
-    current_thinking_uuid = nil
-    current_plan_uuid = nil
-    tool_message_map = {}
+    state.assistant_uuid = nil
+    state.thinking_uuid = nil
+    state.plan_uuid = nil
+    state.tool_map = {}
   end
 
   local function refresh_file_display()
@@ -404,8 +415,8 @@ function M.setup_integration(view, session)
 
   -- ── Update dispatch table ──────────────────────────────────────
   -- One handler per `sessionUpdate` type. Each closes over the integration
-  -- state it needs (uuids, tool_message_map, schedule_reload, render_mode,
-  -- session, view).
+  -- state it needs (the `state` table, schedule_reload, render_mode, session,
+  -- view).
 
   ---@type table<string, fun(update: table)>
   local update_handlers = {}
@@ -430,14 +441,14 @@ function M.setup_integration(view, session)
     if not (update.content and update.content.type == "text") then
       return
     end
-    if current_assistant_uuid then
-      view:update_message(current_assistant_uuid, function(msg)
+    if state.assistant_uuid then
+      view:update_message(state.assistant_uuid, function(msg)
         msg:append_text(update.content.text)
       end)
     else
       local msg = Message:new("assistant", update.content.text)
-      current_assistant_uuid = msg.uuid
-      current_thinking_uuid = nil
+      state.assistant_uuid = msg.uuid
+      state.thinking_uuid = nil
       view:add_message(msg)
     end
   end
@@ -446,8 +457,8 @@ function M.setup_integration(view, session)
     if not (update.content and update.content.type == "text" and update.content.text ~= "") then
       return
     end
-    if current_thinking_uuid then
-      view:update_message(current_thinking_uuid, function(msg)
+    if state.thinking_uuid then
+      view:update_message(state.thinking_uuid, function(msg)
         for _, item in ipairs(msg.content) do
           if item.type == "thinking" then
             item.thinking = (item.thinking or "") .. update.content.text
@@ -460,16 +471,16 @@ function M.setup_integration(view, session)
         type = "thinking",
         thinking = update.content.text,
       })
-      current_thinking_uuid = msg.uuid
-      current_assistant_uuid = nil
+      state.thinking_uuid = msg.uuid
+      state.assistant_uuid = nil
       view:add_message(msg)
     end
   end
 
   function update_handlers.tool_call(update)
-    current_assistant_uuid = nil
-    current_thinking_uuid = nil
-    local existing_uuid = tool_message_map[update.toolCallId]
+    state.assistant_uuid = nil
+    state.thinking_uuid = nil
+    local existing_uuid = state.tool_map[update.toolCallId]
     if existing_uuid then
       view:update_message(existing_uuid, function(msg)
         for _, item in ipairs(msg.content) do
@@ -499,13 +510,13 @@ function M.setup_integration(view, session)
         input = update.rawInput or {},
         status = update.status or "pending",
       }, { tool_call = update })
-      tool_message_map[update.toolCallId] = msg.uuid
+      state.tool_map[update.toolCallId] = msg.uuid
       view:add_message(msg)
     end
   end
 
   function update_handlers.tool_call_update(update)
-    local uuid = tool_message_map[update.toolCallId]
+    local uuid = state.tool_map[update.toolCallId]
     if uuid then
       -- A content/rawOutput-only chunk (the common case while a tool streams)
       -- is throttled: apply it now, paint on the timer. Anything that changes
@@ -573,7 +584,7 @@ function M.setup_integration(view, session)
   function update_handlers.plan(update)
     -- Each `plan` update carries the FULL current plan and supersedes the
     -- previous one — it's a self-updating block, not an append. Render it once
-    -- per turn and rewrite in place as entries progress. `current_plan_uuid` is
+    -- per turn and rewrite in place as entries progress. `state.plan_uuid` is
     -- cleared only by reset_state (next prompt), so the plan keeps updating even
     -- as assistant text / tool calls interleave around it.
     local parts = { "**Plan:**" }
@@ -588,13 +599,13 @@ function M.setup_integration(view, session)
     -- instead of silently mutating the off-screen one.
     local messages = view:get_messages()
     local last = messages[#messages]
-    if current_plan_uuid and last and last.uuid == current_plan_uuid then
-      view:update_message(current_plan_uuid, function(msg)
+    if state.plan_uuid and last and last.uuid == state.plan_uuid then
+      view:update_message(state.plan_uuid, function(msg)
         msg.content = { { type = "text", text = text } }
       end)
     else
       local msg = Message:new("system", text)
-      current_plan_uuid = msg.uuid
+      state.plan_uuid = msg.uuid
       view:add_message(msg)
     end
   end
@@ -785,7 +796,7 @@ function M.setup_integration(view, session)
   session:on("permission", function(tool_call, options, callback)
     vim.schedule(function()
       -- Render via the same path as a regular tool_call update
-      if not tool_message_map[tool_call.toolCallId] then
+      if not state.tool_map[tool_call.toolCallId] then
         local update = vim.tbl_extend("keep", tool_call, { sessionUpdate = "tool_call" })
         session:_emit("update", update)
       end
