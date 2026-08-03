@@ -1,18 +1,46 @@
 --- Benchmark harness for emeth render hot paths.
 ---
---- Two consumers:
----   * `make bench` → runs every scenario and prints a timing table (human use).
----   * tests/test_perf.lua → asserts the *scaling* invariants that guard against
----     re-introducing quadratic renders. We assert ratios, never absolute
----     milliseconds, so the checks are machine-independent and non-flaky.
+--- Two consumers, with a deliberate split:
+---   * `make bench` → runs every scenario and prints a WALL-CLOCK timing table
+---     for humans. Timings are inherently machine- and load-dependent.
+---   * tests/test_perf.lua → asserts the scaling invariants via WORK COUNTS
+---     (how many times render_message runs), never timings. A count is
+---     deterministic, so the guard can't flake -- unlike a ratio of two tiny
+---     wall-clock samples, which sits at the timer-noise floor on a fast/loaded
+---     CI runner and produces spurious ratios. The count IS the invariant we
+---     care about: "streaming into the tail must not re-render the prefix."
 ---
 --- The scenarios all drive a real ChatView against real buffers (headless nvim),
 --- exercising `_render` exactly as the integration does during streaming.
 
 local ChatView = require("emeth.ui.chat_view")
 local Message = require("emeth.message")
+local Render = require("emeth.ui.render")
 
 local M = {}
+
+-- ── work counting ──────────────────────────────────────────────
+--- Count render_message invocations while running `fn`. render_message is the
+--- per-message render cost, so its call count is a proxy for render work that
+--- is independent of timer noise: a prefix rebuild / full re-render would call
+--- it once per visible message per render, whereas the incremental path calls
+--- it only for the dirty tail.
+---@param fn fun()
+---@return integer calls
+function M.count_render_calls(fn)
+  local calls = 0
+  local orig = Render.render_message
+  Render.render_message = function(...)
+    calls = calls + 1
+    return orig(...)
+  end
+  local ok, err = pcall(fn)
+  Render.render_message = orig
+  if not ok then
+    error(err)
+  end
+  return calls
+end
 
 -- ── timing ─────────────────────────────────────────────────────
 --- Median wall-clock (ms) of `fn` over `reps` runs. Median, not mean, so a
@@ -81,41 +109,64 @@ local function tool_message(n_lines)
 end
 
 -- ── scenarios ──────────────────────────────────────────────────
--- Each returns a numeric result the assertions can reason about.
+-- Each scenario exposes its work as a `*_run(prior)` closure driving the real
+-- render path. `M.time` wraps it for wall-clock (make bench);
+-- `M.count_render_calls` wraps it for the deterministic guard (test_perf).
 
---- Cost of one streaming chunk into the tail, as a function of prior session
---- size. The invariant: this must stay ~flat (O(tail), not O(transcript)).
+local STREAM_CHUNKS = 50
+local APPEND_COUNT = 20
+
+--- Returns a closure that streams STREAM_CHUNKS chunks into the tail message of
+--- a session already holding `prior` messages. The invariant: work here must be
+--- O(tail) -- i.e. render_message runs once per chunk (STREAM_CHUNKS total),
+--- independent of `prior`. A prefix rebuild would make it scale with `prior`.
 ---@param prior integer
----@return number ms_per_chunk
-function M.stream_chunk_cost(prior)
+---@return fun() run
+function M.stream_run(prior)
   local v = fresh_view()
   seed(v, prior)
   local live = Message:new("assistant", "")
   v:add_message(live)
+  v:_render()
   local uuid = live.uuid
-  return M.time(function()
-    for _ = 1, 50 do
+  return function()
+    for _ = 1, STREAM_CHUNKS do
       v:update_message(uuid, function(m)
         m:append_text("token ")
       end)
       v:_render()
     end
-  end)
+  end
 end
 
---- Cost of appending a brand-new message, as a function of prior session size.
---- Also must stay ~flat.
+--- Returns a closure that appends APPEND_COUNT new messages to a session
+--- holding `prior` messages. Work must be O(new): render_message runs once per
+--- appended message (APPEND_COUNT total), independent of `prior`.
 ---@param prior integer
----@return number ms_per_add
-function M.append_cost(prior)
+---@return fun() run
+function M.append_run(prior)
   local v = fresh_view()
   seed(v, prior)
-  return M.time(function()
-    for _ = 1, 20 do
+  return function()
+    for _ = 1, APPEND_COUNT do
       v:add_message(Message:new("assistant", PARAGRAPH))
       v:_render()
     end
-  end)
+  end
+end
+
+--- Wall-clock cost of streaming STREAM_CHUNKS chunks into the tail (make bench).
+---@param prior integer
+---@return number ms
+function M.stream_chunk_cost(prior)
+  return M.time(M.stream_run(prior))
+end
+
+--- Wall-clock cost of appending APPEND_COUNT messages (make bench).
+---@param prior integer
+---@return number ms
+function M.append_cost(prior)
+  return M.time(M.append_run(prior))
 end
 
 --- Cost of a SINGLE render of one heavy (expanded) tool result of `n_lines`.
@@ -131,79 +182,70 @@ function M.heavy_tool_render(n_lines)
   end)
 end
 
---- Cost of a streaming tool whose body GROWS to `n_lines`, re-rendered on each
---- chunk (mirrors tool_call_update replacing full content).
+--- A streaming tool whose body grows to `n_lines`, one chunk per line. Returns
+--- the view (so callers can inspect final buffer line count) and a run closure.
 ---
---- `expanded=false` (the DEFAULT, and how tools render until the user hits K)
---- is linear: a collapsed tool renders a single header line regardless of body
---- size, so N chunks => O(N).
----
---- `expanded=true` exposes the O(body^2) path: each chunk re-renders the whole
---- growing body, so N chunks => O(N^2). Only reachable when a tool is expanded
---- WHILE still streaming (or on the diff-box path, which always renders body).
+--- `coalesce` nil: render every chunk (what happens without the throttle).
+--- `coalesce` N:   apply chunks deferred, paint once per N (models the acp
+---                 integration's render throttle deterministically -- no timer,
+---                 so the bench stays time-independent).
 ---@param n_lines integer
----@param expanded? boolean  default false (realistic collapsed path)
----@return number ms_total
-function M.streaming_tool_growth(n_lines, expanded)
+---@param expanded boolean  true forces the heavy body path (K'd open mid-stream)
+---@param coalesce? integer  paint once per this many chunks (nil = every chunk)
+---@return chat_ui.ChatView view, fun() run
+function M.tool_growth_scenario(n_lines, expanded, coalesce)
   local v = fresh_view()
   local msg = Message:new("assistant", {
     { type = "tool_use", id = "t1", name = "Bash", input = {}, status = "in_progress" },
   })
   msg.metadata.tool_call = { content = { { type = "content", content = { text = "" } } }, status = "in_progress" }
-  msg.metadata._expanded = expanded or false
+  msg.metadata._expanded = expanded
   v:add_message(msg)
   local uuid = msg.uuid
   local chunk = string.rep("x", 40)
-  return M.time(function()
+  local run = function()
     local acc = {}
     for i = 1, n_lines do
       acc[i] = "  line_" .. i .. "  |  " .. chunk
       local text = table.concat(acc, "\n")
+      local defer = coalesce ~= nil
       v:update_message(uuid, function(m)
         m.metadata.tool_call.content = { { type = "content", content = { text = text } } }
-      end)
-      v:_render()
-    end
-  end, 3)
-end
-
---- Same growing expanded tool body, but with the integration's render throttle
---- modeled: chunks are applied with defer_render=true and painted only once per
---- `coalesce` chunks (the timer coalesces a burst into one render). This is what
---- the acp integration does via schedule_tool_render(); here we model the
---- coalescing deterministically so the bench is time-independent. Cost drops
---- from O(N^2) (render every chunk) to O(N^2 / coalesce) -- still the same shape,
---- but divided down by however many chunks land within one throttle interval,
---- which in practice makes it a non-issue at streaming rates.
----@param n_lines integer
----@param coalesce integer  chunks coalesced into one render (models the timer)
----@return number ms_total
-function M.streaming_tool_growth_throttled(n_lines, coalesce)
-  local v = fresh_view()
-  local msg = Message:new("assistant", {
-    { type = "tool_use", id = "t1", name = "Bash", input = {}, status = "in_progress" },
-  })
-  msg.metadata.tool_call = { content = { { type = "content", content = { text = "" } } }, status = "in_progress" }
-  msg.metadata._expanded = true
-  v:add_message(msg)
-  local uuid = msg.uuid
-  local chunk = string.rep("x", 40)
-  return M.time(function()
-    local acc = {}
-    for i = 1, n_lines do
-      acc[i] = "  line_" .. i .. "  |  " .. chunk
-      local text = table.concat(acc, "\n")
-      v:update_message(uuid, function(m)
-        m.metadata.tool_call.content = { { type = "content", content = { text = text } } }
-      end, { defer_render = true })
-      if i % coalesce == 0 then
+      end, { defer_render = defer })
+      if coalesce and i % coalesce == 0 then
         v:flush()
+        v:_render()
+      elseif not coalesce then
         v:_render()
       end
     end
-    v:flush()
-    v:_render()
-  end, 3)
+    if coalesce then
+      v:flush()
+      v:_render()
+    end
+  end
+  return v, run
+end
+
+--- Wall-clock cost of a growing tool body (make bench).
+--- expanded=false (DEFAULT) is the collapsed path -- a single header line
+--- regardless of body size, so O(N). expanded=true re-renders the whole growing
+--- body per chunk -- O(N^2); only reachable when a tool is K'd open mid-stream.
+---@param n_lines integer
+---@param expanded? boolean
+---@return number ms_total
+function M.streaming_tool_growth(n_lines, expanded)
+  local _, run = M.tool_growth_scenario(n_lines, expanded or false, nil)
+  return M.time(run, 3)
+end
+
+--- Wall-clock cost of the same body with the render throttle modeled (make bench).
+---@param n_lines integer
+---@param coalesce integer
+---@return number ms_total
+function M.streaming_tool_growth_throttled(n_lines, coalesce)
+  local _, run = M.tool_growth_scenario(n_lines, true, coalesce)
+  return M.time(run, 3)
 end
 
 -- ── runner (make bench) ────────────────────────────────────────
