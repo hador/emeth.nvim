@@ -205,6 +205,14 @@ function M.is_complete(fields, answers)
   for _, field in ipairs(fields) do
     if field.required then
       local v = answers[field.key]
+      -- Typing a free-text answer satisfies the field it belongs to; the agent
+      -- treats the companion as taking precedence over the selection.
+      if field.custom_key then
+        local custom = answers[field.custom_key]
+        if type(custom) == "string" and custom ~= "" then
+          v = custom
+        end
+      end
       if v == nil or v == "" then
         return false
       end
@@ -228,6 +236,16 @@ end
 function M.to_content(fields, answers)
   local content = {}
   for _, field in ipairs(fields) do
+    -- A free-text companion is its own property in the requested schema even
+    -- though a provider hook folds it into its sibling for display, and the
+    -- agent reads it from there in preference to the selection. It must be
+    -- emitted under its own key or the typed answer is silently dropped.
+    if field.custom_key then
+      local custom = answers[field.custom_key]
+      if type(custom) == "string" and custom ~= "" then
+        content[field.custom_key] = custom
+      end
+    end
     local v = answers[field.key]
     if v ~= nil and field.kind ~= "unsupported" then
       if field.kind == "multi_select" then

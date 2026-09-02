@@ -83,6 +83,13 @@ local function make_view()
 
   function view:open_file_manager() end
 
+  -- Records that focus moved to the input box (real impl scans windows).
+  view.focus_input_count = 0
+  function view:focus_input()
+    self.focus_input_count = self.focus_input_count + 1
+    return true
+  end
+
   -- Transient-prompt key claims. The real view binds these keys once and
   -- dispatches to registered owners; the mock just records the claims so
   -- `press` can walk them. Dispatch semantics (first owner wins, fallback to
@@ -1304,6 +1311,180 @@ h.describe("acp integration: elicitation", function()
     h.eq(2, #replies)
     h.eq("cancel", replies[1].action)
     h.eq("cancel", replies[2].action)
+  end)
+end)
+
+h.describe("acp integration: elicitation free-text via the input box", function()
+  local function elicit_setup()
+    local session, view = make_setup()
+    local replies = {}
+    local function ask(schema, message)
+      session:_emit("elicitation", {
+        mode = "form",
+        message = message or "Pick one",
+        requestedSchema = schema,
+      }, function(response)
+        replies[#replies + 1] = response
+      end)
+    end
+    return session, view, replies, ask
+  end
+
+  -- A select field whose provider-folded companion offers free text, which is
+  -- the shape claude-acp sends for AskUserQuestion.
+  local WITH_CUSTOM = {
+    type = "object",
+    properties = {
+      colour = { type = "string", oneOf = { { const = "red", title = "Red" } } },
+    },
+  }
+
+  --- Layout with one option: 1 header, 2 option, 3 type-your-own, 4 skip, 5 hint
+  local ROW_OPTION, ROW_INPUT, ROW_SKIP = 2, 3, 4
+
+  local function with_custom_field(session)
+    -- Stand in for the claude transform folding a `_custom` companion in.
+    session.client.agent_meta = nil
+    return WITH_CUSTOM
+  end
+
+  h.it("claims the input box instead of opening a modal prompt", function()
+    local session, view, _, ask = elicit_setup()
+    -- vim.ui.input must not be used for this any more.
+    local ui_input_calls = 0
+    local orig = vim.ui.input
+    vim.ui.input = function()
+      ui_input_calls = ui_input_calls + 1
+    end
+
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+
+    h.eq(0, ui_input_calls, "no modal prompt")
+    h.eq(1, view.focus_input_count, "focus moves to the input box")
+    vim.ui.input = orig
+  end)
+
+  h.it("routes the next submission to the answer, not the agent", function()
+    local session, view, replies, ask = elicit_setup()
+    local prompts = {}
+    session.client.send_prompt = function(_, _sid, prompt)
+      prompts[#prompts + 1] = prompt
+    end
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+
+    view.on_submit("chartreuse")
+    h.eq(0, #prompts, "the text must not be sent as a prompt")
+    h.eq(1, #replies)
+    h.eq("accept", replies[1].action)
+    h.eq("chartreuse", replies[1].content.colour_custom)
+  end)
+
+  h.it("shows in the prompt that the input box is claimed", function()
+    local session, view, _, ask = elicit_setup()
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    local prompt = view.messages[#view.messages]
+    h.is_true(prompt:text():find("type your own", 1, true) ~= nil)
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+    h.is_true(prompt:text():find("input box below", 1, true) ~= nil, "state must be visible")
+  end)
+
+  -- The escape hatch: an empty submission never reaches on_submit, so picking
+  -- another row has to be what abandons a pending free-text answer.
+  h.it("picking another option abandons the pending free-text answer", function()
+    local session, view, replies, ask = elicit_setup()
+    local prompts = {}
+    session.client.send_prompt = function(_, _sid, prompt)
+      prompts[#prompts + 1] = prompt
+    end
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+    view._cursor_offset = ROW_OPTION
+    press_on(view, "<CR>")
+    h.eq("red", replies[1].content.colour)
+
+    -- The input box must be the user's own again.
+    view.on_submit("a normal message")
+    h.eq(1, #prompts, "a later submission goes to the agent")
+  end)
+
+  h.it("does not leave the input box claimed after the prompt is skipped", function()
+    local session, view, replies, ask = elicit_setup()
+    local prompts = {}
+    session.client.send_prompt = function(_, _sid, prompt)
+      prompts[#prompts + 1] = prompt
+    end
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+    view._cursor_offset = ROW_SKIP
+    press_on(view, "<CR>")
+    h.eq("decline", replies[1].action)
+    view.on_submit("a normal message")
+    h.eq(1, #prompts)
+  end)
+
+  h.it("does not leave the input box claimed after a cancel", function()
+    local session, view, _, ask = elicit_setup()
+    local prompts = {}
+    session.client.send_prompt = function(_, _sid, prompt)
+      prompts[#prompts + 1] = prompt
+    end
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+    view.integration.cancel()
+    view.on_submit("a normal message")
+    h.eq(1, #prompts)
+  end)
+
+  h.it("keeps the question open when an empty answer arrives", function()
+    local session, view, replies, ask = elicit_setup()
+    view.integration.set_transform_elicitation(function(fields)
+      fields[1].custom_key = "colour_custom"
+      return fields
+    end)
+    ask(with_custom_field(session))
+    flush()
+    view._cursor_offset = ROW_INPUT
+    press_on(view, "<CR>")
+    view.on_submit("")
+    h.eq(0, #replies, "an empty answer must not resolve the question")
   end)
 end)
 
