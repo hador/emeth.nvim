@@ -598,3 +598,62 @@ h.describe("ChatView prompt key claims", function()
     h.eq(2, vim.api.nvim_win_get_cursor(0)[1], "builtin line-down motion must survive")
   end)
 end)
+
+h.describe("ChatView prompt key contract", function()
+  local Message = require("emeth.message")
+
+  -- prompt_keys() tells callers which slots they may claim. Every one of them
+  -- must actually be bound, or a prompt would offer an option that no keypress
+  -- can ever reach — the failure mode this indirection exists to prevent.
+  h.it("every advertised key is dispatched", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "prompt"))
+    view:_render()
+    local keys = view:prompt_keys()
+    h.is_true(#keys > 0)
+
+    local seen = {}
+    local claims = {}
+    for _, key in ipairs(keys) do
+      claims[key] = function()
+        seen[key] = true
+      end
+    end
+    view:set_prompt_keys("test", claims)
+
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    for _, key in ipairs(keys) do
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "x", false)
+      h.is_true(seen[key], "advertised key never dispatched: " .. key)
+    end
+  end)
+
+  h.it("does not hand out the confirm key as an option slot", function()
+    local view = make_view()
+    for _, key in ipairs(view:prompt_keys()) do
+      h.is_true(key ~= "<CR>", "<CR> means 'act on the row under the cursor', not an option")
+    end
+  end)
+
+  h.it("returns a copy so a caller cannot mutate the shared list", function()
+    local view = make_view()
+    local first = view:prompt_keys()
+    table.remove(first)
+    h.is_true(#view:prompt_keys() > #first, "the module list must be unaffected")
+  end)
+end)
+
+h.describe("ChatView:is_visible", function()
+  h.it("is true when the transcript is on screen", function()
+    local view = make_view()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    h.is_true(view:is_visible())
+  end)
+
+  h.it("is false when no window shows it", function()
+    local view = make_view()
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_win_set_buf(0, scratch)
+    h.eq(false, view:is_visible())
+  end)
+end)
