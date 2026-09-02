@@ -10,6 +10,10 @@
 --- Subagents: a stateless transform_update rewrites Task/Agent tool_call titles
 --- to show the description + subagent_type directly from the streaming rawInput.
 --- No lifecycle tracking — titles are enriched opportunistically as data arrives.
+---
+--- Goal: `_meta.goal` snapshots on `session_info_update` drive a winbar badge and
+--- transcript notes. See the goal section below for why the advertised
+--- `_session/goal` control method is intentionally not implemented.
 
 local Message = require("emeth.message")
 local Winbar = require("emeth.ui.winbar")
@@ -198,6 +202,114 @@ end
 -- Exposed for testing.
 M._transform_elicitation = transform_elicitation
 
+-- ── Goal extension ───────────────────────────────────────────────
+-- claude-acp publishes a goal snapshot as `_meta.goal` on `session_info_update`.
+-- It is a provider extension, not spec: it carries its own version and
+-- `controlMethod`, and neither `goal` nor its method appears in the ACP schema.
+--
+-- Only the snapshot is consumed. The advertised `_session/goal` control method is
+-- deliberately not implemented: the agent turns `{action="set", objective}` into
+-- the text prompt `/goal <objective>` and steers it, and `/goal` is not filtered
+-- out of the slash-command list, so the user can already set and clear goals by
+-- typing. Adding the method would be a second path to the same place.
+
+-- Status -> winbar highlight kind. Absent means "nothing worth flagging".
+local GOAL_STATUS_KINDS = {
+  blocked = "error",
+  limited = "warn",
+  paused = "warn",
+}
+
+---Read a goal snapshot off a session update, or nil when there isn't one.
+---@param update table
+---@return table|nil
+local function goal_from_update(update)
+  if not update or update.sessionUpdate ~= "session_info_update" then
+    return nil
+  end
+  local meta = update._meta
+  if type(meta) ~= "table" then
+    return nil
+  end
+  local goal = meta.goal
+  -- A cleared goal arrives as an explicit JSON null rather than a missing key.
+  if type(goal) ~= "table" then
+    return nil
+  end
+  return goal
+end
+
+---Whether a snapshot means "there is no live goal any more".
+---@param goal table
+---@return boolean
+local function goal_is_over(goal)
+  return goal.status == "complete" or (type(goal.objective) ~= "string" or goal.objective == "")
+end
+
+---Render goal snapshots: status in the winbar, objective changes in the
+---transcript. Returns a cleanup function.
+---@param session acp.Session
+---@param view chat_ui.ChatView
+---@return fun()
+local function attach_goal(session, view)
+  -- Snapshots repeat on every session_info_update, so both are tracked to keep
+  -- the transcript quiet unless something actually changed.
+  local last_objective, last_status = nil, nil
+
+  local function on_update(update)
+    local goal = goal_from_update(update)
+    if not goal then
+      return
+    end
+    local objective = type(goal.objective) == "string" and goal.objective or nil
+    local status = type(goal.status) == "string" and goal.status or nil
+
+    vim.schedule(function()
+      if goal_is_over(goal) then
+        if last_objective then
+          view:add_message(Message:new("system", "🎯 Goal complete: " .. last_objective))
+        end
+        Winbar.clear_badge("goal")
+        last_objective, last_status = nil, nil
+        return
+      end
+
+      if objective and objective ~= last_objective then
+        view:add_message(Message:new("system", "🎯 Goal: " .. objective))
+      elseif status and status ~= last_status and GOAL_STATUS_KINDS[status] then
+        -- Worth surfacing even without an objective change: blocked/limited mean
+        -- the agent has stopped making progress on its own.
+        view:add_message(
+          Message:new(
+            "system",
+            ("🎯 Goal %s%s"):format(status, goal.lastReason and (": " .. tostring(goal.lastReason)) or "")
+          )
+        )
+      end
+
+      if status then
+        local label = "🎯 " .. status
+        if type(goal.iterations) == "number" and goal.iterations > 0 then
+          label = label .. " ×" .. goal.iterations
+        end
+        Winbar.set_badge("goal", label)
+      end
+      last_objective, last_status = objective, status
+    end)
+  end
+
+  session:on("update", on_update)
+  return function()
+    session:off("update", on_update)
+    Winbar.clear_badge("goal")
+  end
+end
+
+-- Exposed for testing.
+M._goal_from_update = goal_from_update
+M._goal_is_over = goal_is_over
+M._attach_goal = attach_goal
+
 ---Hook claude-code-specific notifications and the title transform.
 ---@param session acp.Session
 ---@param view chat_ui.ChatView
@@ -221,6 +333,7 @@ function M.setup(session, view)
   end
 
   session:on("notification", on_notification)
+  local goal_cleanup = attach_goal(session, view)
 
   if view.integration and view.integration.set_transform_update then
     view.integration.set_transform_update(transform_update)
@@ -231,6 +344,7 @@ function M.setup(session, view)
 
   return function()
     session:off("notification", on_notification)
+    goal_cleanup()
     Winbar.clear_badge("model")
     Winbar.clear_badge("mode")
     Winbar.clear_badge("cost")
