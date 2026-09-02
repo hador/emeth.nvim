@@ -10,6 +10,18 @@ local api = vim.api
 local _emeth_paste_orig = nil ---@type function|nil
 local _emeth_paste_wrapper = nil ---@type function|nil
 
+-- Keys bound once for transient prompts (permission requests, elicitations) and
+-- never created or deleted at runtime: a prompt that bound its own keys and
+-- deleted them on resolve would destroy whatever permanent binding shared that
+-- key -- this is how answering a permission request used to delete `r`, the retry
+-- binding, for the rest of the session. A prompt registers a claim instead and
+-- the dispatch consults it before the key's own default.
+--
+-- Option slots carry a prompt's choices; the confirm key is separate because it
+-- means "act on the row under the cursor", not "pick option 5".
+local PROMPT_OPTION_KEYS = { "a", "A", "r", "R" }
+local PROMPT_CONFIRM_KEY = "<CR>"
+
 ---@class chat_ui.ChatView
 ---@field result_buf number
 ---@field input_buf number
@@ -98,16 +110,9 @@ function ChatView:new(opts)
     view._scroll = true
   end
 
-  -- Keys that a transient prompt (permission request, elicitation) may claim.
-  -- They are bound ONCE, here, and never created or deleted at runtime: a prompt
-  -- that bound its own keys and deleted them on resolve would destroy whatever
-  -- permanent binding shared that key (this is how answering a permission
-  -- request used to delete `r`, the retry binding, for the rest of the session).
-  -- Instead a prompt registers a claim and the dispatch below consults it first.
-  --
   -- `a`/`A`/`R` need no fallback: result_buf is nomodifiable, so their normal
   -- meaning (enter insert/replace) cannot work here anyway.
-  local PROMPT_KEYS = { "a", "A", "r", "R", "<CR>" }
+  local PROMPT_KEYS = vim.list_extend({ PROMPT_CONFIRM_KEY }, PROMPT_OPTION_KEYS)
   view._prompt_key_owners = {} ---@type { owner: string, keys: table<string, fun(): boolean?> }[]
 
   ---Default action for a prompt key when no prompt claimed it.
@@ -355,6 +360,27 @@ end
 ---the option the cursor sits on) without knowing where that message was laid
 ---out. Returns nil when the cursor isn't in the result window or is on a row no
 ---message owns (blank separators between messages).
+---Whether the transcript is currently on screen. A prompt that blocks the agent
+---is invisible when it isn't, so callers use this to nudge out of band.
+---@return boolean
+function ChatView:is_visible()
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == self.result_buf then
+      return true
+    end
+  end
+  return false
+end
+
+---The keys bound for transient prompts, in preference order. A prompt must claim
+---from this set — a claim on anything else is never dispatched, which would leave
+---whatever it was offering unanswerable. `<CR>` is excluded: it is the confirm
+---key, not an option slot.
+---@return string[]
+function ChatView:prompt_keys()
+  return vim.deepcopy(PROMPT_OPTION_KEYS)
+end
+
 ---Move focus to the input box and start insert mode.
 ---@param insert? boolean  enter insert mode (default true)
 ---@return boolean focused  false when the input window isn't currently shown
