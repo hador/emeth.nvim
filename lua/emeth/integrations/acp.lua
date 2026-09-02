@@ -43,11 +43,11 @@ function M.setup_integration(view, session)
     tool_map = {},
   }
   local selected_files = {} ---@type string[]
-  -- FIFO of pending permission requests. Only the head owns the a/r keymaps at
-  -- any time, so concurrent requests can't clobber each other's bindings.
+  -- FIFO of pending permission requests. Only the head claims the a/A/r/R keys
+  -- at any time, so concurrent requests can't clobber each other's claims.
   local permission_queue = {} ---@type { tool_call: table, options: table[], callback: fun(option_id: string|nil), prompt_uuid?: string }[]
   -- FIFO of pending elicitations, same discipline as permissions: only the head
-  -- owns the <CR> keymap, so concurrent requests can't clobber each other.
+  -- claims <CR>, so concurrent requests can't clobber each other.
   ---@class acp.PendingElicitation
   ---@field request acp.CreateElicitationRequest
   ---@field callback fun(response: acp.CreateElicitationResponse)
@@ -762,17 +762,32 @@ function M.setup_integration(view, session)
     if #permission_queue > 1 then
       lines[#lines + 1] = ("  (%d more pending)"):format(#permission_queue - 1)
     end
+    -- Keys must come from the set the view binds permanently, otherwise the
+    -- claim would never fire and the option would be unanswerable. The four ACP
+    -- kinds map 1:1; an unknown kind takes whichever slot is still free.
     local keys = {}
+    local taken = {}
     for _, opt in ipairs(req.options or {}) do
-      local key = kind_keys[opt.kind] or opt.kind:sub(1, 1)
-      keys[#keys + 1] = key
-      lines[#lines + 1] = "  [" .. key .. "] " .. (opt.name or opt.kind)
+      local key = kind_keys[opt.kind]
+      if not key or taken[key] then
+        for _, candidate in ipairs({ "a", "A", "r", "R" }) do
+          if not taken[candidate] then
+            key = candidate
+            break
+          end
+        end
+      end
+      if key then
+        taken[key] = true
+        keys[#keys + 1] = key
+        lines[#lines + 1] = "  [" .. key .. "] " .. (opt.name or opt.kind)
+      end
     end
     return lines, keys
   end
 
-  -- Activate the request at the head of the queue: render its prompt and bind
-  -- the a/A/r/R keys to it. Only ever one active at a time, so the fixed keys
+  -- Activate the request at the head of the queue: render its prompt and claim
+  -- the a/A/r/R keys for it. Only ever one active at a time, so the fixed keys
   -- can't collide across concurrent requests. Forward-declared for recursion.
   local activate_permission
   activate_permission = function()
@@ -787,9 +802,7 @@ function M.setup_integration(view, session)
     req.prompt_uuid = prompt_msg.uuid
 
     local function resolve(option_id)
-      for _, key in ipairs(keys) do
-        pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", key)
-      end
+      view:clear_prompt_keys("permission")
       view:update_message(prompt_msg.uuid, function(m)
         m.visible = false
       end)
@@ -801,15 +814,15 @@ function M.setup_integration(view, session)
       end
     end
 
+    -- Claim rather than bind: these keys are owned permanently by the view, so
+    -- releasing the claim can't delete a binding something else relies on.
+    local claims = {}
     for i, opt in ipairs(req.options or {}) do
-      vim.api.nvim_buf_set_keymap(view.result_buf, "n", keys[i], "", {
-        noremap = true,
-        silent = true,
-        callback = function()
-          resolve(opt.optionId)
-        end,
-      })
+      claims[keys[i]] = function()
+        resolve(opt.optionId)
+      end
     end
+    view:set_prompt_keys("permission", claims)
   end
 
   -- Re-render the head prompt's pending count when the queue depth changes
@@ -1015,7 +1028,7 @@ function M.setup_integration(view, session)
     if not req then
       return
     end
-    pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", "<CR>")
+    view:clear_prompt_keys("elicitation")
     if req.prompt_uuid then
       local summary = elicitation_summary(req, response)
       view:update_message(req.prompt_uuid, function(m)
@@ -1138,11 +1151,9 @@ function M.setup_integration(view, session)
     view:add_message(prompt)
     req.prompt_uuid = prompt.uuid
 
-    vim.api.nvim_buf_set_keymap(view.result_buf, "n", "<CR>", "", {
-      noremap = true,
-      silent = true,
-      callback = on_elicitation_cr,
-    })
+    -- Claim <CR> rather than binding it: the view owns it permanently, so
+    -- releasing the claim restores its default instead of deleting the mapping.
+    view:set_prompt_keys("elicitation", { ["<CR>"] = on_elicitation_cr })
     elicitation_badge()
   end
 
@@ -1156,7 +1167,7 @@ function M.setup_integration(view, session)
     end
     local queued = elicitation_queue
     elicitation_queue = {}
-    pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", "<CR>")
+    view:clear_prompt_keys("elicitation")
     for _, req in ipairs(queued) do
       if req.prompt_uuid then
         local summary = elicitation_summary(req, { action = "cancel" })
