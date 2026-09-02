@@ -38,6 +38,21 @@ function Line:set_highlights(ns_id, bufnr, line, offset)
   end
 end
 
+---Prefix the line with `prefix`, in place.
+---
+---Inserted as its own unhighlighted section so the existing sections keep their
+---highlight groups; `set_highlights` walks sections in order and derives columns
+---from their widths, so the offsets stay correct without adjustment.
+---@param prefix string
+---@return chat_ui.Line self
+function Line:indent(prefix)
+  -- Indenting a blank line would only add trailing whitespace.
+  if prefix ~= "" and tostring(self) ~= "" then
+    table.insert(self.sections, 1, { prefix })
+  end
+  return self
+end
+
 function Line:__tostring()
   local parts = {}
   for _, s in ipairs(self.sections) do

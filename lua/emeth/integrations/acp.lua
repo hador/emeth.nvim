@@ -572,6 +572,29 @@ function M.setup_integration(view, session)
     end
   end
 
+  ---Give a subagent's spawning tool an expand hook that shows/hides the calls
+  ---nested under it. Installed on demand (the first child to arrive) and
+  ---idempotent, since the parent tool_call is created before we know it has any.
+  ---
+  ---Takes over from the renderer's default `_expanded` toggle because the two
+  ---have to move together: the parent's own body is empty for a subagent tool,
+  ---and what the user wants to see is its children.
+  ---@param parent chat_ui.Message
+  local function attach_subagent_expand(parent)
+    if parent.metadata.on_expand then
+      return
+    end
+    parent.metadata.on_expand = function(msg)
+      local expanded = msg.metadata._expanded ~= true
+      msg.metadata._expanded = expanded
+      for _, m in ipairs(view:get_messages()) do
+        if m.metadata and m.metadata.parent_tool_call_id == msg.content[1].id then
+          m.visible = expanded
+        end
+      end
+    end
+  end
+
   function update_handlers.tool_call(update, stream)
     stream.assistant_uuid = nil
     stream.thinking_uuid = nil
@@ -598,13 +621,31 @@ function M.setup_integration(view, session)
         end
       end)
     else
+      local metadata = { tool_call = update }
+      -- A tool run by a subagent is folded into the tool that spawned it: one
+      -- subagent easily runs dozens of calls, and left at top level they bury
+      -- the main conversation. `parent_tool_call_id` is set by a provider
+      -- transform, so this stays namespace-agnostic.
+      local parent_uuid = update.parent_tool_call_id and stream.tool_map[update.parent_tool_call_id]
+      local parent = parent_uuid and view:get_message(parent_uuid) or nil
+      if parent then
+        metadata.parent_tool_call_id = update.parent_tool_call_id
+      end
       local msg = Message:new("assistant", {
         type = "tool_use",
         name = update.kind or update.title or "tool",
         id = update.toolCallId,
         input = update.rawInput or {},
         status = update.status or "pending",
-      }, { tool_call = update })
+      }, metadata)
+      if parent then
+        -- Hidden while the parent is collapsed; a child arriving after the user
+        -- expanded it shows up straight away.
+        msg.visible = parent.metadata._expanded == true
+        parent.metadata.subagent_children = (parent.metadata.subagent_children or 0) + 1
+        attach_subagent_expand(parent)
+        view:invalidate()
+      end
       stream.tool_map[update.toolCallId] = msg.uuid
       view:add_message(msg)
     end

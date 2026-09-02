@@ -252,6 +252,15 @@ local function render_tool_use(item, msg, messages, tool_results)
       header[#header + 1] = { ": " }
       header[#header + 1] = { tool_param, HL.TOOL_PARAM }
     end
+    -- A subagent's spawning tool stands in for everything it ran, so say how
+    -- much is folded away under it — otherwise the row looks inert.
+    local children = msg.metadata.subagent_children
+    if type(children) == "number" and children > 0 then
+      header[#header + 1] = {
+        ("  ⊳ %d tool%s"):format(children, children == 1 and "" or "s"),
+        HL.MUTED,
+      }
+    end
     -- Collapse non-diff tool bodies by default (K to expand).
     if not msg.metadata._expanded then
       header[1] = { "── " }
@@ -380,6 +389,13 @@ local function render_assistant_message(msg, messages, tool_results)
       lines[#lines + 1] = Line:new({ { "" } })
     end
     -- tool_result is rendered as part of tool_use, skip
+  end
+  -- Indent a subagent's calls so an expanded parent reads as one nested block
+  -- rather than as more top-level tool rows.
+  if msg.metadata and msg.metadata.parent_tool_call_id then
+    for _, line in ipairs(lines) do
+      line:indent("  ")
+    end
   end
   return lines
 end
