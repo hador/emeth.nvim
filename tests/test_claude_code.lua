@@ -211,3 +211,184 @@ h.describe("claude-code transform_update", function()
     h.eq("Side quest", u.title)
   end)
 end)
+
+h.describe("claude-code goal snapshot extraction", function()
+  local from = CC._goal_from_update
+
+  h.it("reads _meta.goal off a session_info_update", function()
+    local goal = from({
+      sessionUpdate = "session_info_update",
+      _meta = { goal = { objective = "ship it", status = "active" } },
+    })
+    h.eq("ship it", goal.objective)
+    h.eq("active", goal.status)
+  end)
+
+  h.it("ignores other update types carrying a goal-shaped _meta", function()
+    h.is_nil(from({
+      sessionUpdate = "agent_message_chunk",
+      _meta = { goal = { objective = "x", status = "active" } },
+    }))
+  end)
+
+  h.it("ignores a session_info_update with no goal", function()
+    h.is_nil(from({ sessionUpdate = "session_info_update", title = "renamed" }))
+    h.is_nil(from({ sessionUpdate = "session_info_update", _meta = {} }))
+  end)
+
+  h.it("treats a JSON-null goal as absent", function()
+    -- A cleared goal arrives as an explicit null, not a missing key.
+    h.is_nil(from({ sessionUpdate = "session_info_update", _meta = { goal = vim.NIL } }))
+  end)
+
+  h.it("tolerates malformed input", function()
+    h.is_nil(from(nil))
+    h.is_nil(from({ sessionUpdate = "session_info_update", _meta = vim.NIL }))
+  end)
+end)
+
+h.describe("claude-code goal termination", function()
+  local over = CC._goal_is_over
+
+  h.it("is over when complete", function()
+    h.is_true(over({ objective = "ship it", status = "complete" }))
+  end)
+
+  h.it("is over when the objective is gone", function()
+    h.is_true(over({ status = "active" }))
+    h.is_true(over({ objective = "", status = "active" }))
+  end)
+
+  h.it("is not over while the agent is still working or stuck", function()
+    for _, status in ipairs({ "active", "paused", "blocked", "limited" }) do
+      h.eq(false, over({ objective = "ship it", status = status }), status .. " is still a live goal")
+    end
+  end)
+end)
+
+h.describe("claude-code goal rendering", function()
+  local Winbar = require("emeth.ui.winbar")
+
+  --- Fake session + view, with the winbar badge calls recorded.
+  local function goal_setup()
+    local listeners = {}
+    local session = {
+      on = function(_, _event, fn)
+        listeners[#listeners + 1] = fn
+      end,
+      off = function(_, _event, fn)
+        for i = #listeners, 1, -1 do
+          if listeners[i] == fn then
+            table.remove(listeners, i)
+          end
+        end
+      end,
+    }
+    local view = { messages = {} }
+    function view:add_message(m)
+      table.insert(self.messages, m)
+    end
+
+    local badges = {}
+    local set, clear = Winbar.set_badge, Winbar.clear_badge
+    Winbar.set_badge = function(k, v)
+      badges[k] = v
+    end
+    Winbar.clear_badge = function(k)
+      badges[k] = nil
+    end
+
+    local cleanup = CC._attach_goal(session, view)
+    local function emit(goal)
+      for _, fn in ipairs(listeners) do
+        fn({ sessionUpdate = "session_info_update", _meta = { goal = goal } })
+      end
+      vim.wait(20)
+    end
+    local function restore()
+      Winbar.set_badge, Winbar.clear_badge = set, clear
+    end
+    return view, badges, emit, cleanup, restore
+  end
+
+  local function texts(view)
+    local out = {}
+    for _, m in ipairs(view.messages) do
+      out[#out + 1] = m:text()
+    end
+    return out
+  end
+
+  h.it("announces a new goal and shows its status in the winbar", function()
+    local view, badges, emit, _, restore = goal_setup()
+    emit({ objective = "ship elicitation", status = "active" })
+    h.eq({ "🎯 Goal: ship elicitation" }, texts(view))
+    h.eq("🎯 active", badges.goal)
+    restore()
+  end)
+
+  -- Snapshots repeat on every session_info_update, so an unchanged one must not
+  -- add another transcript line.
+  h.it("stays quiet when the same snapshot repeats", function()
+    local view, _, emit, _, restore = goal_setup()
+    emit({ objective = "ship it", status = "active" })
+    emit({ objective = "ship it", status = "active" })
+    emit({ objective = "ship it", status = "active" })
+    h.eq(1, #view.messages)
+    restore()
+  end)
+
+  h.it("reports a blocked goal with its reason", function()
+    local view, badges, emit, _, restore = goal_setup()
+    emit({ objective = "ship it", status = "active" })
+    emit({ objective = "ship it", status = "blocked", lastReason = "needs credentials" })
+    h.eq(2, #view.messages)
+    h.is_true(view.messages[2]:text():find("blocked", 1, true) ~= nil)
+    h.is_true(view.messages[2]:text():find("needs credentials", 1, true) ~= nil)
+    h.eq("🎯 blocked", badges.goal)
+    restore()
+  end)
+
+  h.it("does not announce a status change that carries no signal", function()
+    local view, _, emit, _, restore = goal_setup()
+    emit({ objective = "ship it", status = "blocked" })
+    -- active is the normal working state; going back to it is not news.
+    emit({ objective = "ship it", status = "active" })
+    h.eq(1, #view.messages)
+    restore()
+  end)
+
+  h.it("announces a new objective when the goal is replaced", function()
+    local view, _, emit, _, restore = goal_setup()
+    emit({ objective = "first goal", status = "active" })
+    emit({ objective = "second goal", status = "active" })
+    h.eq({ "🎯 Goal: first goal", "🎯 Goal: second goal" }, texts(view))
+    restore()
+  end)
+
+  h.it("clears the badge and names the finished goal on completion", function()
+    local view, badges, emit, _, restore = goal_setup()
+    emit({ objective = "ship it", status = "active" })
+    emit({ objective = "ship it", status = "complete" })
+    h.eq("🎯 Goal complete: ship it", view.messages[2]:text())
+    h.is_nil(badges.goal)
+    restore()
+  end)
+
+  h.it("shows the iteration count once the agent has looped", function()
+    local _, badges, emit, _, restore = goal_setup()
+    emit({ objective = "ship it", status = "active", iterations = 3 })
+    h.eq("🎯 active ×3", badges.goal)
+    restore()
+  end)
+
+  h.it("stops listening and drops the badge on cleanup", function()
+    local view, badges, emit, cleanup, restore = goal_setup()
+    emit({ objective = "ship it", status = "active" })
+    cleanup()
+    h.is_nil(badges.goal)
+    emit({ objective = "another", status = "active" })
+    h.eq(1, #view.messages, "no updates after cleanup")
+    restore()
+  end)
+end)
