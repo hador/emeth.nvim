@@ -28,6 +28,7 @@ local _emeth_paste_wrapper = nil ---@type function|nil
 ---@field _paste_seq integer
 ---@field _line_to_msg table<integer, chat_ui.Message>  buffer row (1-based) -> message
 ---@field _line_to_msg_max? integer  highest row populated in _line_to_msg
+---@field _prompt_key_owners { owner: string, keys: table<string, fun(): boolean?> }[]
 ---@field _line_cache table<string, { lines: table[], text: string[] }>  uuid -> rendered
 ---@field _dirty_from? integer  index of first message needing re-render
 ---@field _render_pending? boolean
@@ -97,6 +98,62 @@ function ChatView:new(opts)
     view._scroll = true
   end
 
+  -- Keys that a transient prompt (permission request, elicitation) may claim.
+  -- They are bound ONCE, here, and never created or deleted at runtime: a prompt
+  -- that bound its own keys and deleted them on resolve would destroy whatever
+  -- permanent binding shared that key (this is how answering a permission
+  -- request used to delete `r`, the retry binding, for the rest of the session).
+  -- Instead a prompt registers a claim and the dispatch below consults it first.
+  --
+  -- `a`/`A`/`R` need no fallback: result_buf is nomodifiable, so their normal
+  -- meaning (enter insert/replace) cannot work here anyway.
+  local PROMPT_KEYS = { "a", "A", "r", "R", "<CR>" }
+  view._prompt_key_owners = {} ---@type { owner: string, keys: table<string, fun(): boolean?> }[]
+
+  ---Default action for a prompt key when no prompt claimed it.
+  local prompt_key_fallback = {
+    r = function()
+      -- Retry: resend the user prompt under the cursor.
+      local row = api.nvim_win_get_cursor(0)[1]
+      local msg = view._line_to_msg[row]
+      if msg and msg.role == "user" and view.on_submit then
+        local text = msg:text()
+        if text ~= "" then
+          view.on_submit(text)
+          vim.schedule(function()
+            local lc = api.nvim_buf_line_count(result_buf)
+            pcall(api.nvim_win_set_cursor, 0, { lc, 0 })
+          end)
+        end
+      end
+    end,
+    ["<CR>"] = function()
+      -- Preserve the builtin line-down motion when nothing is being asked.
+      pcall(vim.cmd, "normal! \r")
+    end,
+  }
+
+  for _, key in ipairs(PROMPT_KEYS) do
+    api.nvim_buf_set_keymap(result_buf, "n", key, "", {
+      noremap = true,
+      silent = true,
+      callback = function()
+        -- First registration wins, so two prompts claiming one key stay
+        -- deterministic (in practice their key sets are disjoint).
+        for _, entry in ipairs(view._prompt_key_owners) do
+          local fn = entry.keys[key]
+          if fn and fn() ~= false then
+            return
+          end
+        end
+        local fallback = prompt_key_fallback[key]
+        if fallback then
+          fallback()
+        end
+      end,
+    })
+  end
+
   api.nvim_buf_set_keymap(result_buf, "n", "K", "", {
     noremap = true,
     silent = true,
@@ -128,26 +185,6 @@ function ChatView:new(opts)
             invalidate_msg(msg)
             return
           end
-        end
-      end
-    end,
-  })
-
-  -- Retry: resend the user prompt under cursor
-  api.nvim_buf_set_keymap(result_buf, "n", "r", "", {
-    noremap = true,
-    silent = true,
-    callback = function()
-      local row = api.nvim_win_get_cursor(0)[1]
-      local msg = view._line_to_msg[row]
-      if msg and msg.role == "user" and view.on_submit then
-        local text = msg:text()
-        if text ~= "" then
-          view.on_submit(text)
-          vim.schedule(function()
-            local lc = api.nvim_buf_line_count(result_buf)
-            pcall(api.nvim_win_set_cursor, 0, { lc, 0 })
-          end)
         end
       end
     end,
@@ -324,6 +361,28 @@ end
 ---the option the cursor sits on) without knowing where that message was laid
 ---out. Returns nil when the cursor isn't in the result window or is on a row no
 ---message owns (blank separators between messages).
+---Claim keys for a transient prompt. `keys` maps a key to a handler; returning
+---`false` declines the press so it falls through to the next owner or to the
+---key's default. The keys must come from the set bound at construction
+---(`a`, `A`, `r`, `R`, `<CR>`) — nothing is bound or unbound at runtime, so a
+---prompt can never destroy a permanent binding it happens to share.
+---@param owner string
+---@param keys table<string, fun(): boolean?>
+function ChatView:set_prompt_keys(owner, keys)
+  self:clear_prompt_keys(owner)
+  self._prompt_key_owners[#self._prompt_key_owners + 1] = { owner = owner, keys = keys }
+end
+
+---Drop a prompt's key claims.
+---@param owner string
+function ChatView:clear_prompt_keys(owner)
+  for i = #self._prompt_key_owners, 1, -1 do
+    if self._prompt_key_owners[i].owner == owner then
+      table.remove(self._prompt_key_owners, i)
+    end
+  end
+end
+
 ---Only meaningful while the result buffer is the current one — it reads the
 ---cursor from the current window, matching the buffer-local keymaps that call it.
 ---@return chat_ui.Message|nil msg, integer|nil offset
