@@ -83,6 +83,23 @@ local function make_view()
 
   function view:open_file_manager() end
 
+  -- Transient-prompt key claims. The real view binds these keys once and
+  -- dispatches to registered owners; the mock just records the claims so
+  -- `press` can walk them. Dispatch semantics (first owner wins, fallback to
+  -- the key's default) are covered by ChatView's own tests.
+  view._prompt_key_owners = {}
+  function view:set_prompt_keys(owner, keys)
+    self:clear_prompt_keys(owner)
+    self._prompt_key_owners[#self._prompt_key_owners + 1] = { owner = owner, keys = keys }
+  end
+  function view:clear_prompt_keys(owner)
+    for i = #self._prompt_key_owners, 1, -1 do
+      if self._prompt_key_owners[i].owner == owner then
+        table.remove(self._prompt_key_owners, i)
+      end
+    end
+  end
+
   -- Stands in for the real cursor lookup, which needs a rendered buffer.
   -- Tests set `_cursor_offset` (and optionally `_cursor_msg`) to say which line
   -- of which message the cursor is on. Offset alignment against a real render
@@ -141,13 +158,27 @@ local function flush()
   vim.wait(0)
 end
 
---- Press a normal-mode key that the permission UI bound.
+--- Press a real buffer keymap (e.g. <C-c>, which the integration still binds
+--- directly because it is not a transient-prompt key).
 local function press(key)
   local cb = bound_keymaps[key]
   if cb then
     cb()
   end
   return cb ~= nil
+end
+
+--- Press a key claimed by a transient prompt. Returns false when nothing
+--- claimed it, which is what the view would treat as "fall through to default".
+local function press_on(view, key)
+  for _, entry in ipairs(view._prompt_key_owners) do
+    local fn = entry.keys[key]
+    if fn then
+      fn()
+      return true
+    end
+  end
+  return false
 end
 
 -- ── Helper: build session + view + integration ─────────────────
@@ -812,30 +843,30 @@ h.describe("acp integration: permission queue", function()
   }
 
   h.it("resolves a single request when its key is pressed", function()
-    local _, _, resolved, request = perm_setup()
+    local _, view, resolved, request = perm_setup()
     request({ toolCallId = "t1", title = "Read a.lua" }, OPTS)
     flush()
-    h.is_true(press("a"), "allow key should be bound")
+    h.is_true(press_on(view, "a"), "allow key should be bound")
     h.eq(1, #resolved)
     h.eq("t1", resolved[1].id)
     h.eq("allow_once", resolved[1].option)
   end)
 
   h.it("serializes concurrent requests: answering the head activates the next", function()
-    local _, _, resolved, request = perm_setup()
+    local _, view, resolved, request = perm_setup()
     -- Two requests arrive before the user answers either.
     request({ toolCallId = "t1", title = "Read a.lua" }, OPTS)
     request({ toolCallId = "t2", title = "Read b.lua" }, OPTS)
     flush()
 
     -- Only the head (t1) is answerable right now.
-    h.is_true(press("a"), "head keymap bound")
+    h.is_true(press_on(view, "a"), "head keymap bound")
     h.eq(1, #resolved)
     h.eq("t1", resolved[1].id)
     h.eq("allow_once", resolved[1].option)
 
     -- The second request is now active; the same key resolves it (no collision).
-    h.is_true(press("r"), "next keymap rebound after head resolved")
+    h.is_true(press_on(view, "r"), "next keymap rebound after head resolved")
     h.eq(2, #resolved)
     h.eq("t2", resolved[2].id)
     h.eq("reject_once", resolved[2].option)
@@ -856,14 +887,14 @@ h.describe("acp integration: permission queue", function()
   end)
 
   h.it("preserves FIFO order across three requests", function()
-    local _, _, resolved, request = perm_setup()
+    local _, view, resolved, request = perm_setup()
     request({ toolCallId = "t1" }, OPTS)
     request({ toolCallId = "t2" }, OPTS)
     request({ toolCallId = "t3" }, OPTS)
     flush()
-    press("a")
-    press("a")
-    press("a")
+    press_on(view, "a")
+    press_on(view, "a")
+    press_on(view, "a")
     h.eq(3, #resolved)
     h.eq("t1", resolved[1].id)
     h.eq("t2", resolved[2].id)
@@ -1113,7 +1144,7 @@ h.describe("acp integration: elicitation", function()
     ask(TWO_OPTIONS)
     flush()
     view._cursor_offset = ROW_B
-    h.is_true(press("<CR>"), "<CR> should be bound while a question is open")
+    h.is_true(press_on(view, "<CR>"), "<CR> should be bound while a question is open")
     h.eq(1, #replies)
     h.eq("accept", replies[1].action)
     h.eq({ choice = "b" }, replies[1].content)
@@ -1124,7 +1155,7 @@ h.describe("acp integration: elicitation", function()
     ask(TWO_OPTIONS)
     flush()
     view._cursor_offset = ROW_SKIP
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq("decline", replies[1].action)
     h.is_nil(replies[1].content)
   end)
@@ -1134,7 +1165,7 @@ h.describe("acp integration: elicitation", function()
     ask(TWO_OPTIONS)
     flush()
     view._cursor_offset = 1 -- the header
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq(0, #replies, "the question must stay open")
   end)
 
@@ -1158,14 +1189,14 @@ h.describe("acp integration: elicitation", function()
 
     view._cursor_msg = head
     view._cursor_offset = ROW_A + 1
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq(1, #replies)
     h.eq({ choice = "a" }, replies[1].content)
 
     -- The second question is now active with no pending line, so rows shift back.
     view._cursor_msg = nil
     view._cursor_offset = ROW_B
-    h.is_true(press("<CR>"), "<CR> should be rebound for the next question")
+    h.is_true(press_on(view, "<CR>"), "<CR> should be rebound for the next question")
     h.eq(2, #replies)
     h.eq({ choice = "b" }, replies[2].content)
   end)
@@ -1184,12 +1215,12 @@ h.describe("acp integration: elicitation", function()
     flush()
     -- Layout: 1 header, 2 X, 3 Y, 4 submit, 5 skip, 6 hint
     view._cursor_offset = 2
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq(0, #replies, "toggling must not submit")
     view._cursor_offset = 3
-    press("<CR>")
+    press_on(view, "<CR>")
     view._cursor_offset = 4 -- submit
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq(1, #replies)
     h.eq("accept", replies[1].action)
     h.eq({ "x", "y" }, replies[1].content.feats)
@@ -1206,10 +1237,10 @@ h.describe("acp integration: elicitation", function()
     flush()
     -- Layout: 1 header, 2 X, 3 submit, 4 skip, 5 hint
     view._cursor_offset = 2
-    press("<CR>")
-    press("<CR>") -- toggle back off
+    press_on(view, "<CR>")
+    press_on(view, "<CR>") -- toggle back off
     view._cursor_offset = 3
-    press("<CR>")
+    press_on(view, "<CR>")
     -- The field is optional, so submitting with nothing ticked is a real answer
     -- ("none of these") rather than a skip — but it must not send an empty list.
     h.eq("accept", replies[1].action)
@@ -1231,10 +1262,10 @@ h.describe("acp integration: elicitation", function()
     -- Multi-field layout adds a per-field label line:
     --   1 header (n/2), 2 label, 3 option, 4 skip, 5 hint
     view._cursor_offset = 3
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq(0, #replies, "answering the first field advances rather than submitting")
     view._cursor_offset = 3
-    press("<CR>")
+    press_on(view, "<CR>")
     h.eq(1, #replies)
     h.eq({ question_0 = "a1", question_1 = "b1" }, replies[1].content)
   end)
@@ -1245,7 +1276,7 @@ h.describe("acp integration: elicitation", function()
     flush()
     local prompt = view.messages[#view.messages]
     view._cursor_offset = ROW_A
-    press("<CR>")
+    press_on(view, "<CR>")
     local text = prompt:text()
     h.is_true(text:find("Which one?", 1, true) ~= nil, "keeps the question")
     h.is_true(text:find("Option A", 1, true) ~= nil, "records the chosen label, not the wire value")

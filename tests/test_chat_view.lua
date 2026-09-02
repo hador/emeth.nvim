@@ -471,3 +471,130 @@ h.describe("ChatView:cursor_message_line", function()
     h.is_nil((view:cursor_message_line()))
   end)
 end)
+
+h.describe("ChatView prompt key claims", function()
+  local Message = require("emeth.message")
+
+  --- Press a key in the result buffer the way a user would, so the real
+  --- buffer-local dispatch (claims first, then the key's default) is exercised.
+  local function press(view, key)
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "x", false)
+  end
+
+  h.it("routes a claimed key to the claiming prompt", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "prompt"))
+    view:_render()
+    local hits = 0
+    view:set_prompt_keys("permission", {
+      a = function()
+        hits = hits + 1
+      end,
+    })
+    press(view, "a")
+    h.eq(1, hits)
+  end)
+
+  -- Regression: answering a permission request used to `del_keymap` its keys,
+  -- which destroyed the permanent `r` retry binding for the rest of the session.
+  h.it("restores r to retry after a prompt claims and releases it", function()
+    local view = make_view()
+    local submitted = {}
+    view.on_submit = function(text)
+      submitted[#submitted + 1] = text
+    end
+    view:add_message(Message:new("user", "resend me"))
+    view:_render()
+
+    -- A prompt claims `r` (as a reject_once option would) and then releases it.
+    local rejected = 0
+    view:set_prompt_keys("permission", {
+      r = function()
+        rejected = rejected + 1
+      end,
+    })
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    press(view, "r")
+    h.eq(1, rejected)
+    h.eq(0, #submitted, "the claim consumes r while the prompt is active")
+
+    view:clear_prompt_keys("permission")
+    -- Cursor on the user message: r must retry again.
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    for row = 1, vim.api.nvim_buf_line_count(view.result_buf) do
+      if (vim.api.nvim_buf_get_lines(view.result_buf, row - 1, row, false)[1] or ""):find("resend me", 1, true) then
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        break
+      end
+    end
+    press(view, "r")
+    h.eq({ "resend me" }, submitted, "retry must survive a prompt claiming r")
+  end)
+
+  h.it("lets two prompts hold disjoint keys at once", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "prompt"))
+    view:_render()
+    local seen = {}
+    view:set_prompt_keys("permission", {
+      a = function()
+        seen[#seen + 1] = "perm"
+      end,
+    })
+    view:set_prompt_keys("elicitation", {
+      ["<CR>"] = function()
+        seen[#seen + 1] = "elicit"
+      end,
+    })
+    press(view, "a")
+    press(view, "<CR>")
+    h.eq({ "perm", "elicit" }, seen)
+  end)
+
+  h.it("clearing one owner leaves the other's claim intact", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "prompt"))
+    view:_render()
+    local hits = 0
+    view:set_prompt_keys("permission", { a = function() end })
+    view:set_prompt_keys("elicitation", {
+      ["<CR>"] = function()
+        hits = hits + 1
+      end,
+    })
+    view:clear_prompt_keys("permission")
+    press(view, "<CR>")
+    h.eq(1, hits)
+  end)
+
+  h.it("re-claiming replaces that owner's previous keys rather than stacking", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "prompt"))
+    view:_render()
+    local first, second = 0, 0
+    view:set_prompt_keys("permission", {
+      a = function()
+        first = first + 1
+      end,
+    })
+    view:set_prompt_keys("permission", {
+      a = function()
+        second = second + 1
+      end,
+    })
+    press(view, "a")
+    h.eq(0, first)
+    h.eq(1, second)
+  end)
+
+  h.it("<CR> still moves down a line when no prompt claims it", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "one\ntwo\nthree"))
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    press(view, "<CR>")
+    h.eq(2, vim.api.nvim_win_get_cursor(0)[1], "builtin line-down motion must survive")
+  end)
+end)
