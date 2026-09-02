@@ -24,6 +24,7 @@ end
 ---@field protocol_version number
 ---@field capabilities acp.ClientCapabilities
 ---@field agent_capabilities acp.AgentCapabilities|nil
+---@field agent_meta table|nil  InitializeResponse `_meta` (extension capabilities)
 ---@field auth_methods acp.AuthMethod[]
 ---@field config acp.ClientConfig
 ---@field callbacks table<number, fun(result: table|nil, err: acp.ACPError|nil)>
@@ -62,6 +63,7 @@ function ACPClient:new(config)
       elicitation = { form = vim.empty_dict() },
     },
     agent_capabilities = nil,
+    agent_meta = nil,
     auth_methods = {},
     _log_file = nil,
     _log_path = nil,
@@ -566,6 +568,11 @@ function ACPClient:initialize(callback)
     end
     self.protocol_version = result.protocolVersion
     self.agent_capabilities = result.agentCapabilities
+    -- Extension capabilities that aren't part of `agentCapabilities` ride on the
+    -- InitializeResponse's own `_meta` (claude-acp advertises steering, goal and
+    -- its AIR capabilities there, while `agentCapabilities._meta` carries only
+    -- `claudeCode`). Keep it so feature probes can consult it.
+    self.agent_meta = type(result._meta) == "table" and result._meta or nil
     self.auth_methods = result.authMethods or {}
     local auth_method = self.config.auth_method
     if auth_method then
@@ -581,6 +588,43 @@ function ACPClient:initialize(callback)
       self:_set_state("ready")
       callback(nil)
     end
+  end)
+end
+
+---Whether the agent accepts steering — injecting a message into the turn that is
+---already running instead of queueing it behind that turn.
+---
+---Advertised on the InitializeResponse `_meta` rather than in `agentCapabilities`,
+---so it is a `_meta` probe rather than a spec capability check.
+---@return boolean
+function ACPClient:supports_steering()
+  local steering = self.agent_meta and self.agent_meta.steering
+  return type(steering) == "table" and steering.supported == true
+end
+
+---Inject `prompt` into the in-flight turn.
+---
+---`idleBehavior = "promptRequired"` is deliberate. Without it, an agent that
+---finds no turn running starts one itself, detached — its result never reaches
+---our `session/prompt` callback, so our activity state would never settle. With
+---it, the agent instead answers `promptRequired` and leaves the content alone,
+---so the caller can send it as a normal prompt whose lifecycle we own. That race
+---is real: a turn can finish between deciding to steer and this request landing.
+---@param session_id string
+---@param prompt acp.Content[]
+---@param callback fun(outcome: string|nil, err: acp.ACPError|nil)
+function ACPClient:steer(session_id, prompt, callback)
+  callback = callback or function() end
+  self:_send_request("_session/steering", {
+    sessionId = session_id,
+    prompt = prompt,
+    _meta = { steering = { idleBehavior = "promptRequired" } },
+  }, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(type(result) == "table" and result.outcome or nil, nil)
   end)
 end
 

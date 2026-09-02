@@ -1307,6 +1307,125 @@ h.describe("acp integration: elicitation", function()
   end)
 end)
 
+h.describe("acp integration: steering", function()
+  --- A session whose agent supports steering, with the wire call captured.
+  local function steer_setup(supported)
+    local session, view, integration = make_setup()
+    local calls = {} ---@type { prompt: table[], cb: fun(outcome: string|nil, err: table|nil) }[]
+    session.client.agent_meta = supported and { steering = { supported = true } } or nil
+    -- Stub at the client boundary: the wire format is covered by the client
+    -- tests, what matters here is which path the integration chooses.
+    session.client.steer = function(_, _sid, prompt, cb)
+      calls[#calls + 1] = { prompt = prompt, cb = cb }
+    end
+    local prompts = {} ---@type table[][]
+    session.client.send_prompt = function(_, _sid, prompt, _cb)
+      prompts[#prompts + 1] = prompt
+    end
+    return session, view, integration, calls, prompts
+  end
+
+  h.it("steers instead of refusing when a turn is running", function()
+    local _, view, _, calls, prompts = steer_setup(true)
+    view.on_submit("first")
+    h.eq(1, #prompts, "the first submit starts a normal turn")
+    view.on_submit("actually use tabs")
+    h.eq(1, #calls, "the second submit steers")
+    h.eq("actually use tabs", calls[1].prompt[1].text)
+    h.eq(1, #prompts, "and does not start a second turn")
+  end)
+
+  h.it("renders the steered message as a user turn", function()
+    local _, view = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("and also this")
+    local last = view.messages[#view.messages]
+    h.eq("user", last.role)
+    h.eq("and also this", last:text())
+  end)
+
+  -- The in-flight session/prompt callback still owns settling the activity
+  -- state. Bumping the epoch (as begin() does) would invalidate it and strand
+  -- the winbar in "generating" forever.
+  h.it("leaves the running turn owning completion, so it still settles", function()
+    -- Record winbar states for this test only; the module-level stub swallows them.
+    local states = {}
+    local prev = Winbar.set_state
+    Winbar.set_state = function(s)
+      states[#states + 1] = s
+    end
+
+    local session, view, _, calls = steer_setup(true)
+    local captured
+    session.client.send_prompt = function(_, _sid, _prompt, cb)
+      captured = cb
+    end
+    view.on_submit("first")
+    h.eq("generating", states[#states])
+
+    local n = #states
+    view.on_submit("steered")
+    h.eq(1, #calls)
+    h.eq(n, #states, "steering must not re-enter a generating phase")
+
+    -- The original turn finishing must still return the UI to ready. If the
+    -- steer had bumped the epoch, this callback would be ignored as stale.
+    captured(nil, nil)
+    vim.wait(20)
+    h.eq("ready", states[#states], "the original turn must still settle the UI")
+
+    Winbar.set_state = prev
+  end)
+
+  h.it("falls back to a normal prompt when the turn already ended", function()
+    local _, view, _, calls, prompts = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    h.eq(1, #calls)
+    -- The agent found no running turn and left the content alone.
+    calls[1].cb("promptRequired", nil)
+    vim.wait(20)
+    h.eq(2, #prompts, "the steered content must be sent as its own turn")
+    h.eq("steered", prompts[2][1].text)
+  end)
+
+  h.it("does not re-send when the steer was injected", function()
+    local _, view, _, calls, prompts = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    calls[1].cb("injected", nil)
+    vim.wait(20)
+    h.eq(1, #prompts, "injected content is already in the running turn")
+  end)
+
+  h.it("reports a steer error in the transcript", function()
+    local _, view, _, calls = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    calls[1].cb(nil, { code = -32000, message = "session ended" })
+    vim.wait(20)
+    local last = view.messages[#view.messages]
+    h.is_true(last:text():find("session ended", 1, true) ~= nil)
+  end)
+
+  h.it("still refuses mid-turn input when the agent has no steering support", function()
+    local _, view, _, calls, prompts = steer_setup(false)
+    view.on_submit("first")
+    local before = #view.messages
+    view.on_submit("second")
+    h.eq(0, #calls, "must not steer an agent that never advertised it")
+    h.eq(1, #prompts)
+    h.eq(before, #view.messages, "the refused submit adds no user message")
+  end)
+
+  h.it("sends a normal prompt when idle even though steering is supported", function()
+    local _, view, _, calls, prompts = steer_setup(true)
+    view.on_submit("only")
+    h.eq(0, #calls)
+    h.eq(1, #prompts)
+  end)
+end)
+
 -- Restore stubs
 for k, fn in pairs(_orig_winbar) do
   Winbar[k] = fn
