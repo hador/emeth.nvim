@@ -14,11 +14,12 @@ CONTENTS                                                      *emeth-contents*
   5. Commands ............................................. |emeth-commands|
   6. Lua API ............................................. |emeth-lua-api|
   7. Mappings ............................................. |emeth-mappings|
-  8. Mentions ............................................. |emeth-mentions|
-  9. Provider Switching .......................... |emeth-provider-switching|
-  10. Adding a Provider ................................ |emeth-new-provider|
-  11. Statusline ......................................... |emeth-statusline|
-  12. Health ............................................... |emeth-health|
+  8. Agent Interaction ....................... |emeth-agent-interaction|
+  9. Mentions ............................................. |emeth-mentions|
+  10. Provider Switching ......................... |emeth-provider-switching|
+  11. Adding a Provider ................................ |emeth-new-provider|
+  12. Statusline ......................................... |emeth-statusline|
+  13. Health ............................................... |emeth-health|
 
 ==============================================================================
 1. INTRODUCTION                                                  *emeth-intro*
@@ -181,16 +182,62 @@ require("emeth").send_selection()                      *emeth.send_selection()*
 ==============================================================================
 7. MAPPINGS                                                   *emeth-mappings*
 
-Default mappings inside the sidebar buffers:
+Input buffer:
 
   Key        Mode     Action ~
   `<C-s>`      Insert   Send message
   `<CR>`       Normal   Send message
+  `<C-c>`      Both     Cancel the request, or abort a stuck connection
   `<Tab>`      Normal   Switch between input and result
   `q` / `<Esc>`  Normal   Close sidebar
 
+Result buffer. These act on the message under the cursor:
+
+  Key        Action ~
+  `K`          Expand/collapse what is under the cursor: a tool body, a user
+             message's details, or a subagent's nested tool calls
+  `r`          Resend the user prompt under the cursor
+  `e`          Edit the user prompt under the cursor in the input box
+  `<CR>`       Answer the question under the cursor
+             (|emeth-agent-interaction|); otherwise moves down a line
+  `a` `A` `r` `R`  Answer a permission request: allow once/always,
+             reject once/always
+
 ==============================================================================
-8. MENTIONS                                                   *emeth-mentions*
+8. AGENT INTERACTION                                 *emeth-agent-interaction*
+
+STEERING
+
+Submitting while the agent is working delivers the message *into* the running
+turn instead of declining it, so a long edit can be corrected part-way through
+without cancelling and losing the work in flight.
+
+Steered messages are marked "steered" in the transcript, since they appear
+mid-stream between the agent's own output. If the turn finishes just as you
+submit, the message becomes an ordinary prompt instead.
+
+Requires an agent that advertises steering (currently claude-code). Others
+decline input while a turn is in flight, as before.
+
+QUESTIONS FROM THE AGENT
+
+Agents can ask you things: a multiple-choice question at a decision point, an
+MCP server needing input, or a consent prompt. These render inline in the
+transcript rather than as a popup, so nothing steals focus or swallows
+keystrokes meant for the buffer you were editing.
+
+Put the cursor on a line and press `<CR>` to answer. `K` expands full option
+descriptions and any preview content the agent attached. Choosing "type your
+own" claims the input box for your next submission, giving normal editing
+instead of a single-line popup; picking any other row backs out of it.
+Multi-select questions toggle with `<CR>` and carry their own submit row.
+
+While a question is waiting the winbar shows an "input needed" badge, and if
+the sidebar is closed you get a notification -- the agent stays blocked until
+the question is answered.
+
+==============================================================================
+9. MENTIONS                                                   *emeth-mentions*
 
 Type these in the input buffer to attach context:
 
@@ -201,7 +248,7 @@ Type these in the input buffer to attach context:
   `@prompts`     Pick a prompt template from |emeth-prompt_dirs|
 
 ==============================================================================
-9. PROVIDER SWITCHING                                *emeth-provider-switching*
+10. PROVIDER SWITCHING                              *emeth-provider-switching*
 
 Switch providers on the fly: >vim
 
@@ -215,7 +262,7 @@ When switching, the chat clears and a fresh session starts. If
 for the new provider is resumed automatically.
 
 ==============================================================================
-10. ADDING A PROVIDER                                     *emeth-new-provider*
+11. ADDING A PROVIDER                                     *emeth-new-provider*
 
 Add an entry to `acp.providers` in your config: >lua
 
@@ -239,7 +286,7 @@ For custom notifications beyond the ACP spec, create a module at
 See the README for the full extension API.
 
 ==============================================================================
-11. STATUSLINE                                              *emeth-statusline*
+12. STATUSLINE                                              *emeth-statusline*
 
 The result buffer uses `filetype=emeth`. Add this to your statusline plugin's
 disabled filetypes to keep the sidebar clean. Example for lualine: >lua
@@ -252,7 +299,7 @@ disabled filetypes to keep the sidebar clean. Example for lualine: >lua
 <
 
 ==============================================================================
-12. HEALTH                                                      *emeth-health*
+13. HEALTH                                                      *emeth-health*
 
 Run `:checkhealth emeth` to verify the plugin loaded and ACP providers are
 available on PATH.
