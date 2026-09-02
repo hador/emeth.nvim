@@ -8,6 +8,9 @@
 ---   format_mode(mode_id) → render_desc       { badge?, tag?, tag_kind? }
 ---   extract_session_info(result, extensions) populate non-spec session info
 ---
+--- Extensions may also register two in-place transforms during `setup`, via
+--- `integration.set_transform_update` and `set_transform_elicitation`.
+---
 --- This file knows nothing about claude-code, kiro-cli, etc. — it only knows
 --- the shape of these hooks.
 
@@ -43,6 +46,18 @@ function M.setup_integration(view, session)
   -- FIFO of pending permission requests. Only the head owns the a/r keymaps at
   -- any time, so concurrent requests can't clobber each other's bindings.
   local permission_queue = {} ---@type { tool_call: table, options: table[], callback: fun(option_id: string|nil), prompt_uuid?: string }[]
+  -- FIFO of pending elicitations, same discipline as permissions: only the head
+  -- owns the <CR> keymap, so concurrent requests can't clobber each other.
+  ---@class acp.PendingElicitation
+  ---@field request acp.CreateElicitationRequest
+  ---@field callback fun(response: acp.CreateElicitationResponse)
+  ---@field fields acp.ElicitationField[]
+  ---@field answers table<string, any>
+  ---@field index integer          which field is being answered
+  ---@field expanded boolean       K toggles descriptions + previews
+  ---@field rows table<integer, table>  message line offset -> action
+  ---@field prompt_uuid? string
+  local elicitation_queue = {} ---@type acp.PendingElicitation[]
   local roots = Roots.attach(view)
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
 
@@ -59,6 +74,8 @@ function M.setup_integration(view, session)
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
   local render_model ---@type fun()
+  -- Defined with the elicitation UI further down; do_cancel is declared above it.
+  local cancel_elicitations ---@type fun()
   -- (Re)registers a slash command per session config option (e.g. /model).
   -- Forward-declared so the config_option_update handler can call it.
   local register_config_option_commands ---@type fun()
@@ -68,6 +85,12 @@ function M.setup_integration(view, session)
   -- `integration.set_transform_update(fn)` from inside `ext.setup`.
   ---@type fun(update: table)|nil
   local transform_update_fn = nil
+  -- Hook for provider extensions to enrich parsed elicitation fields (fold a
+  -- provider's free-text companion field into its sibling, attach option
+  -- previews, reorder). Returns the field list to use. Registered via
+  -- `integration.set_transform_elicitation(fn)`.
+  ---@type fun(fields: acp.ElicitationField[], request: table): acp.ElicitationField[]|nil
+  local transform_elicitation_fn = nil
 
   local function flush_reloads()
     local target_win = util.find_source_win()
@@ -318,6 +341,15 @@ function M.setup_integration(view, session)
   ---Cancel is a total function: converge the UI to ready, cancelling whatever
   ---that requires based on `activity` alone.
   local function do_cancel()
+    -- Before the activity checks below: an open question always belongs to an
+    -- agent request the user is now abandoning, and it can outlive `generating`
+    -- (a question answered during the trailing update tail leaves activity
+    -- idle). Answering `cancel` aborts the originating tool call cleanly instead
+    -- of leaving a prompt nobody intends to answer. No-op when none are open.
+    if cancel_elicitations then
+      cancel_elicitations()
+    end
+
     if activity == "connecting" then
       -- Abort a stuck handshake (no session to cancel yet). Tear down fully
       -- and clear the module-level integration so the next :Emeth reconnects
@@ -819,6 +851,383 @@ function M.setup_integration(view, session)
     end)
   end)
 
+  -- ── Elicitation ──────────────────────────────────────────────
+  -- The agent asks the user a structured question and blocks its turn on the
+  -- answer. Rendered inline in the transcript with cursor-positioned <CR>, not
+  -- as a picker: elicitations arrive unpredictably, and a modal window would
+  -- steal focus (and keystrokes) from whatever buffer the user is editing.
+
+  -- Every agent-supplied string placed on a single line must be flattened
+  -- first: the renderer splits embedded newlines into extra buffer rows, which
+  -- would shift every row index after it and misalign the <CR> action map.
+  ---@param s string|nil
+  ---@param width? integer  truncate beyond this display width
+  ---@return string
+  local function oneline(s, width)
+    local out = (s or ""):gsub("%s+", " ")
+    if width and vim.fn.strdisplaywidth(out) > width then
+      out = vim.fn.strcharpart(out, 0, width - 1) .. "…"
+    end
+    return out
+  end
+
+  ---Lines for the active field, plus the row->action map that makes <CR> work.
+  ---Row keys are 1-based offsets within the rendered message, which line up
+  ---1:1 with this array because system messages render one row per text line.
+  ---@param req acp.PendingElicitation
+  ---@return string[] lines, table<integer, table> rows
+  local function elicitation_lines(req)
+    local field = req.fields[req.index]
+    local lines = {}
+    local rows = {}
+
+    local header = oneline(req.request.message, 200)
+    if header == "" then
+      header = "The agent needs input"
+    end
+    if #req.fields > 1 then
+      header = ("%s  (%d/%d)"):format(header, req.index, #req.fields)
+    end
+    lines[#lines + 1] = "❓ " .. header
+    if #elicitation_queue > 1 then
+      lines[#lines + 1] = ("  (%d more waiting)"):format(#elicitation_queue - 1)
+    end
+
+    -- A field's own title/description only add value when they aren't already
+    -- the header (single-field forms carry the question in `message`).
+    local label = field.title or field.description
+    if label and #req.fields > 1 then
+      lines[#lines + 1] = "  " .. oneline(label, 200)
+    end
+
+    local selected = req.answers[field.key]
+    for _, opt in ipairs(field.options or {}) do
+      local marker
+      if field.kind == "multi_select" then
+        marker = vim.tbl_contains(type(selected) == "table" and selected or {}, opt.value) and "✓" or "▸"
+      else
+        marker = selected == opt.value and "✓" or "▸"
+      end
+      local line = "  " .. marker .. " " .. oneline(opt.label, 60)
+      if opt.description and not req.expanded then
+        line = line .. "  " .. oneline(opt.description, 48)
+      end
+      lines[#lines + 1] = line
+      rows[#lines] = { kind = "option", value = opt.value }
+      -- Expanded: full description and any provider-supplied preview body.
+      if req.expanded then
+        for _, extra in ipairs({ opt.description, opt.preview }) do
+          for _, l in ipairs(vim.split(extra or "", "\n", { plain = true })) do
+            if l ~= "" then
+              lines[#lines + 1] = "      " .. l
+            end
+          end
+        end
+      end
+    end
+
+    if field.kind == "text" or field.kind == "number" then
+      lines[#lines + 1] = "  ▸ type an answer…"
+      rows[#lines] = { kind = "input" }
+    elseif field.custom_key then
+      -- Provider hook folded a free-text companion into this field.
+      lines[#lines + 1] = "  ▸ type your own…"
+      rows[#lines] = { kind = "input", key = field.custom_key }
+    end
+    if field.kind == "boolean" then
+      for _, v in ipairs({ true, false }) do
+        lines[#lines + 1] = "  " .. (selected == v and "✓" or "▸") .. " " .. (v and "yes" or "no")
+        rows[#lines] = { kind = "bool", value = v }
+      end
+    end
+    if field.kind == "multi_select" then
+      lines[#lines + 1] = "  ⏎ submit"
+      rows[#lines] = { kind = "submit" }
+    end
+    lines[#lines + 1] = "  ✗ skip"
+    rows[#lines] = { kind = "skip" }
+    lines[#lines + 1] = "  _cursor to a line and press <CR>; K expands_"
+
+    return lines, rows
+  end
+
+  local activate_elicitation
+  local function elicitation_badge()
+    if #elicitation_queue > 0 then
+      Winbar.set_badge("ask", "❓ input needed")
+    else
+      Winbar.clear_badge("ask")
+    end
+  end
+
+  ---Re-render the head prompt in place (selection changed, expanded, or the
+  ---queue depth moved).
+  local function refresh_elicitation()
+    local req = elicitation_queue[1]
+    if not req or not req.prompt_uuid then
+      return
+    end
+    local lines, rows = elicitation_lines(req)
+    req.rows = rows
+    view:update_message(req.prompt_uuid, function(m)
+      m.content = { { type = "text", text = table.concat(lines, "\n") } }
+    end)
+  end
+
+  ---Collapse an answered prompt into a one-line-per-answer record. Leaving the
+  ---live prompt in place would keep offering "skip" and "press <CR>" on a
+  ---question that is already closed.
+  ---@param req acp.PendingElicitation
+  ---@param response acp.CreateElicitationResponse
+  ---@return string
+  local function elicitation_summary(req, response)
+    if response.action ~= "accept" then
+      local why = response.action == "cancel" and "cancelled" or "skipped"
+      return "❓ " .. oneline(req.request.message, 120) .. "  — " .. why
+    end
+    local lines = { "❓ " .. oneline(req.request.message, 120) }
+    for _, field in ipairs(req.fields) do
+      local answer = req.answers[field.custom_key] or req.answers[field.key]
+      if answer ~= nil then
+        if type(answer) == "table" then
+          answer = table.concat(answer, ", ")
+        elseif type(answer) == "boolean" then
+          answer = answer and "yes" or "no"
+        end
+        -- Show the option's label rather than its wire value when they differ.
+        for _, opt in ipairs(field.options or {}) do
+          if opt.value == answer then
+            answer = opt.label
+            break
+          end
+        end
+        local prefix = #req.fields > 1 and (oneline(field.title or field.key, 40) .. ": ") or ""
+        lines[#lines + 1] = "  ✓ " .. prefix .. oneline(tostring(answer), 120)
+      end
+    end
+    return table.concat(lines, "\n")
+  end
+
+  ---Finish the head request and start the next one.
+  ---@param response acp.CreateElicitationResponse
+  local function finish_elicitation(response)
+    local req = table.remove(elicitation_queue, 1)
+    if not req then
+      return
+    end
+    pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", "<CR>")
+    if req.prompt_uuid then
+      local summary = elicitation_summary(req, response)
+      view:update_message(req.prompt_uuid, function(m)
+        m.metadata.on_expand = nil
+        m.content = { { type = "text", text = summary } }
+      end)
+    end
+    pcall(req.callback, response)
+    elicitation_badge()
+    if elicitation_queue[1] then
+      activate_elicitation()
+    end
+  end
+
+  ---Accept if we have everything required, otherwise decline — an accept
+  ---carrying blanks would look like a real answer to the agent.
+  local function submit_elicitation(req)
+    local Elicit = require("emeth.acp.elicitation")
+    if not Elicit.is_complete(req.fields, req.answers) then
+      finish_elicitation({ action = "decline" })
+      return
+    end
+    finish_elicitation({ action = "accept", content = Elicit.to_content(req.fields, req.answers) })
+  end
+
+  ---Move to the next unanswered field, or submit when the form is done.
+  local function advance_elicitation(req)
+    req.index = req.index + 1
+    -- Fields we can't render contribute nothing to the response; skip them
+    -- rather than showing an empty prompt the user can't act on.
+    while req.fields[req.index] and req.fields[req.index].kind == "unsupported" do
+      req.index = req.index + 1
+    end
+    if not req.fields[req.index] then
+      submit_elicitation(req)
+      return
+    end
+    req.expanded = false
+    refresh_elicitation()
+  end
+
+  ---Act on the row under the cursor.
+  local function on_elicitation_cr()
+    local req = elicitation_queue[1]
+    if not req then
+      return
+    end
+    local msg, offset = view:cursor_message_line()
+    if not msg or msg.uuid ~= req.prompt_uuid or not offset then
+      return
+    end
+    local action = req.rows[offset]
+    if not action then
+      return
+    end
+    local field = req.fields[req.index]
+
+    if action.kind == "skip" then
+      -- Skipping any field abandons the whole form: the agent reads `decline`
+      -- as "the user chose not to answer", which is exactly what happened.
+      finish_elicitation({ action = "decline" })
+    elseif action.kind == "submit" then
+      advance_elicitation(req)
+    elseif action.kind == "bool" then
+      req.answers[field.key] = action.value
+      advance_elicitation(req)
+    elseif action.kind == "option" then
+      if field.kind == "multi_select" then
+        local list = type(req.answers[field.key]) == "table" and req.answers[field.key] or {}
+        local at = nil
+        for i, v in ipairs(list) do
+          if v == action.value then
+            at = i
+            break
+          end
+        end
+        if at then
+          table.remove(list, at)
+        else
+          list[#list + 1] = action.value
+        end
+        req.answers[field.key] = list
+        refresh_elicitation()
+      else
+        req.answers[field.key] = action.value
+        advance_elicitation(req)
+      end
+    elseif action.kind == "input" then
+      -- vim.ui.input is user-initiated here (they pressed <CR> on this line),
+      -- so prompting is not the focus theft we're avoiding elsewhere.
+      vim.ui.input({ prompt = oneline(field.title or "Answer", 60) .. ": " }, function(text)
+        if not text or text == "" then
+          return
+        end
+        req.answers[action.key or field.key] = text
+        advance_elicitation(req)
+      end)
+    end
+  end
+
+  activate_elicitation = function()
+    local req = elicitation_queue[1]
+    if not req then
+      return
+    end
+    local lines, rows = elicitation_lines(req)
+    req.rows = rows
+    local prompt = Message:new("system", table.concat(lines, "\n"), {
+      -- Picked up by the result buffer's K handler.
+      on_expand = function()
+        req.expanded = not req.expanded
+        local l, r = elicitation_lines(req)
+        req.rows = r
+        local m = view:get_message(req.prompt_uuid)
+        if m then
+          m.content = { { type = "text", text = table.concat(l, "\n") } }
+        end
+      end,
+    })
+    view:add_message(prompt)
+    req.prompt_uuid = prompt.uuid
+
+    vim.api.nvim_buf_set_keymap(view.result_buf, "n", "<CR>", "", {
+      noremap = true,
+      silent = true,
+      callback = on_elicitation_cr,
+    })
+    elicitation_badge()
+  end
+
+  -- Drain every pending question, answering `cancel` (the turn is going away,
+  -- so the originating tool call should abort rather than proceed answerless).
+  -- Drains directly rather than looping finish_elicitation, which would render
+  -- each queued prompt on its way to killing it.
+  cancel_elicitations = function()
+    if not elicitation_queue[1] then
+      return
+    end
+    local queued = elicitation_queue
+    elicitation_queue = {}
+    pcall(vim.api.nvim_buf_del_keymap, view.result_buf, "n", "<CR>")
+    for _, req in ipairs(queued) do
+      if req.prompt_uuid then
+        local summary = elicitation_summary(req, { action = "cancel" })
+        view:update_message(req.prompt_uuid, function(m)
+          m.metadata.on_expand = nil
+          m.content = { { type = "text", text = summary } }
+        end)
+      end
+      pcall(req.callback, { action = "cancel" })
+    end
+    elicitation_badge()
+  end
+
+  session:on("elicitation", function(request, callback)
+    vim.schedule(function()
+      local fields = require("emeth.acp.elicitation").parse(request.requestedSchema)
+      if transform_elicitation_fn then
+        local ok, replaced = pcall(transform_elicitation_fn, fields, request)
+        if ok and type(replaced) == "table" then
+          fields = replaced
+        end
+      end
+      -- Nothing renderable (empty or wholly unsupported schema): decline
+      -- immediately rather than showing a prompt with no answerable lines.
+      local renderable = false
+      for _, f in ipairs(fields) do
+        if f.kind ~= "unsupported" then
+          renderable = true
+          break
+        end
+      end
+      if not renderable then
+        callback({ action = "decline" })
+        return
+      end
+
+      local req = {
+        request = request,
+        callback = callback,
+        fields = fields,
+        answers = {},
+        index = 1,
+        expanded = false,
+        rows = {},
+      }
+      while req.fields[req.index] and req.fields[req.index].kind == "unsupported" do
+        req.index = req.index + 1
+      end
+
+      elicitation_queue[#elicitation_queue + 1] = req
+      if #elicitation_queue == 1 then
+        activate_elicitation()
+      else
+        refresh_elicitation()
+      end
+      -- The transcript prompt and the winbar badge are both invisible when the
+      -- sidebar is closed, and the agent stays blocked until it's answered — so
+      -- that case needs an out-of-band nudge.
+      local shown = false
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == view.result_buf then
+          shown = true
+          break
+        end
+      end
+      if not shown then
+        vim.notify("emeth: the agent is asking for input (:Emeth to answer)", vim.log.levels.INFO)
+      end
+    end)
+  end)
+
   session:on("error", function(err)
     view:add_message(Message:new("assistant", "**Error:** " .. util.fmt_err(err)))
   end)
@@ -834,6 +1243,9 @@ function M.setup_integration(view, session)
   local ext_integration = {
     set_transform_update = function(fn)
       transform_update_fn = fn
+    end,
+    set_transform_elicitation = function(fn)
+      transform_elicitation_fn = fn
     end,
   }
 
@@ -1234,6 +1646,13 @@ function M.setup_integration(view, session)
     ---@param fn fun(update: table)|nil
     set_transform_update = function(fn)
       transform_update_fn = fn
+    end,
+
+    ---Register a function that enriches parsed elicitation fields before they
+    ---are rendered, returning the list to use. Pass nil to clear.
+    ---@param fn fun(fields: acp.ElicitationField[], request: table): acp.ElicitationField[]|nil
+    set_transform_elicitation = function(fn)
+      transform_elicitation_fn = fn
     end,
   }
 
