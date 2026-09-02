@@ -491,12 +491,10 @@ function M.setup_integration(view, session)
     if session:is_connected() and activity == "generating" and session:supports_steering() then
       local prompt = build_prompt(text)
       local msg = add_user_message(text)
-      view:invalidate()
       session:steer(prompt, function(outcome, err)
         vim.schedule(function()
           if err then
             view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
-            view:invalidate()
             return
           end
           -- The turn finished between our check and the request landing. The
@@ -513,7 +511,6 @@ function M.setup_integration(view, session)
           view:update_message(msg.uuid, function(m)
             m.metadata.steered = true
           end)
-          view:invalidate()
         end)
       end)
       return
@@ -669,9 +666,13 @@ function M.setup_integration(view, session)
         -- Hidden while the parent is collapsed; a child arriving after the user
         -- expanded it shows up straight away.
         msg.visible = parent.metadata._expanded == true
-        parent.metadata.subagent_children = (parent.metadata.subagent_children or 0) + 1
-        attach_subagent_expand(parent)
-        view:invalidate()
+        -- Repaint just the parent, whose child count changed. The child's own
+        -- add_message below only dirties from the child down, so the parent row
+        -- would otherwise keep a stale count.
+        view:update_message(parent_uuid, function(m)
+          m.metadata.subagent_children = (m.metadata.subagent_children or 0) + 1
+          attach_subagent_expand(m)
+        end)
       end
       stream.tool_map[update.toolCallId] = msg.uuid
       view:add_message(msg)
@@ -875,6 +876,21 @@ function M.setup_integration(view, session)
     end
   end)
 
+  -- Flatten an agent-supplied string onto one line, optionally truncating.
+  -- Newlines matter beyond looks: the renderer splits them into extra buffer
+  -- rows, which would shift the elicitation row->action map and select the wrong
+  -- option.
+  ---@param s string|nil
+  ---@param width? integer  truncate beyond this display width
+  ---@return string
+  local function oneline(s, width)
+    local out = (s or ""):gsub("%s+", " ")
+    if width and vim.fn.strdisplaywidth(out) > width then
+      out = vim.fn.strcharpart(out, 0, width - 1) .. "…"
+    end
+    return out
+  end
+
   local kind_keys = { allow_once = "a", allow_always = "A", reject_once = "r", reject_always = "R" }
 
   --- Build the prompt body for a queued permission request. The tool_call card
@@ -884,11 +900,7 @@ function M.setup_integration(view, session)
   ---@param req { tool_call: table, options: table[] }
   ---@return string[] lines, string[] keys  keys aligned to req.options order
   local function permission_lines(req)
-    local tool_name = req.tool_call.title or req.tool_call.kind or "tool"
-    tool_name = tool_name:gsub("%s+", " ")
-    if vim.fn.strdisplaywidth(tool_name) > 60 then
-      tool_name = vim.fn.strcharpart(tool_name, 0, 59) .. "…"
-    end
+    local tool_name = oneline(req.tool_call.title or req.tool_call.kind or "tool", 60)
     local lines = { "Agent wants permission for: " .. tool_name }
     if #permission_queue > 1 then
       lines[#lines + 1] = ("  (%d more pending)"):format(#permission_queue - 1)
@@ -901,7 +913,7 @@ function M.setup_integration(view, session)
     for _, opt in ipairs(req.options or {}) do
       local key = kind_keys[opt.kind]
       if not key or taken[key] then
-        for _, candidate in ipairs({ "a", "A", "r", "R" }) do
+        for _, candidate in ipairs(view:prompt_keys()) do
           if not taken[candidate] then
             key = candidate
             break
@@ -1003,20 +1015,6 @@ function M.setup_integration(view, session)
   -- as a picker: elicitations arrive unpredictably, and a modal window would
   -- steal focus (and keystrokes) from whatever buffer the user is editing.
 
-  -- Every agent-supplied string placed on a single line must be flattened
-  -- first: the renderer splits embedded newlines into extra buffer rows, which
-  -- would shift every row index after it and misalign the <CR> action map.
-  ---@param s string|nil
-  ---@param width? integer  truncate beyond this display width
-  ---@return string
-  local function oneline(s, width)
-    local out = (s or ""):gsub("%s+", " ")
-    if width and vim.fn.strdisplaywidth(out) > width then
-      out = vim.fn.strcharpart(out, 0, width - 1) .. "…"
-    end
-    return out
-  end
-
   ---Lines for the active field, plus the row->action map that makes <CR> work.
   ---Row keys are 1-based offsets within the rendered message, which line up
   ---1:1 with this array because system messages render one row per text line.
@@ -1074,13 +1072,13 @@ function M.setup_integration(view, session)
 
     -- While armed, the row says where the answer is going; the agent is blocked
     -- and the input box looks no different from a normal prompt otherwise.
-    local typing = req.awaiting_input ~= nil
+    local claimed = req.awaiting_input and "  ✎ answer in the input box below, then submit" or nil
     if field.kind == "text" or field.kind == "number" then
-      lines[#lines + 1] = typing and "  ✎ answer in the input box below, then submit" or "  ▸ type an answer…"
+      lines[#lines + 1] = claimed or "  ▸ type an answer…"
       rows[#lines] = { kind = "input" }
     elseif field.custom_key then
       -- Provider hook folded a free-text companion into this field.
-      lines[#lines + 1] = typing and "  ✎ answer in the input box below, then submit" or "  ▸ type your own…"
+      lines[#lines + 1] = claimed or "  ▸ type your own…"
       rows[#lines] = { kind = "input", key = field.custom_key }
     end
     if field.kind == "boolean" then
@@ -1383,14 +1381,7 @@ function M.setup_integration(view, session)
       -- The transcript prompt and the winbar badge are both invisible when the
       -- sidebar is closed, and the agent stays blocked until it's answered — so
       -- that case needs an out-of-band nudge.
-      local shown = false
-      for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == view.result_buf then
-          shown = true
-          break
-        end
-      end
-      if not shown then
+      if not view:is_visible() then
         vim.notify("emeth: the agent is asking for input (:Emeth to answer)", vim.log.levels.INFO)
       end
     end)
