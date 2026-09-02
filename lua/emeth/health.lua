@@ -12,7 +12,14 @@ function M.check()
       vim.health.ok(name .. ": `" .. provider.command .. "` found")
       found_any = true
     else
-      vim.health.warn(name .. ": `" .. provider.command .. "` not found on PATH")
+      -- Neovim inherits PATH from whatever launched it, and a version manager
+      -- that resolves tools per directory can leave the command missing here
+      -- even though it resolves in a shell — so say where to look.
+      vim.health.warn(name .. ": `" .. provider.command .. "` not found on PATH", {
+        "If it works in your shell, Neovim's PATH differs from your shell's.",
+        "Using mise/asdf? Check the version this directory pins is installed (`mise install`)",
+        "— an uninstalled pinned version drops the tool from PATH entirely.",
+      })
     end
   end
   if not found_any then
