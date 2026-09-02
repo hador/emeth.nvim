@@ -14,7 +14,7 @@ Session.__index = Session
 
 -- ── Event emitter ──────────────────────────────────────────────
 
----@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"state_change"|"permission"
+---@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"state_change"|"permission"|"elicitation"
 
 ---Register a listener for a session event.
 ---@param event acp.SessionEvent
@@ -38,6 +38,21 @@ function Session:off(event, fn)
       return
     end
   end
+end
+
+---Whether anything would observe `event` — a session listener or the global
+---config fallback. Mirrors `_emit`'s two sources. Needed for events that answer
+---a blocking agent request: with no observer the agent would wait forever, so
+---the caller has to synthesize a refusal instead of emitting into the void.
+---@param event acp.SessionEvent
+---@return boolean
+---@private
+function Session:_has_listener(event)
+  local list = self._listeners[event]
+  if list and #list > 0 then
+    return true
+  end
+  return require("emeth.acp").config["on_" .. event] ~= nil
 end
 
 ---Emit an event to session listeners, then fall back to global config callback.
@@ -115,6 +130,20 @@ function Session:new(provider_name)
           end
           callback(fallback or (options and #options > 0 and options[1].optionId) or nil)
         end
+      end,
+      on_elicitation = function(request, callback)
+        -- No auto-answer counterpart to `auto_approve_tools` here: an
+        -- elicitation asks for something only the user knows, so inventing an
+        -- answer would put words in their mouth.
+        --
+        -- The agent's turn is blocked on this, and `_emit` is a no-op when
+        -- nothing is listening (headless use, or a session with no view), so
+        -- decline rather than emitting into the void and hanging the turn.
+        if not session:_has_listener("elicitation") then
+          callback({ action = "decline" })
+          return
+        end
+        session:_emit("elicitation", request, callback)
       end,
       on_read_file = function(path, line, limit, callback, error_callback)
         vim.schedule(function()

@@ -222,6 +222,19 @@ h.describe("ACPClient _handle_incoming routing", function()
     h.is_true(routed)
   end)
 
+  h.it("routes elicitation/create only when message_id present", function()
+    local c = make_client()
+    local routed = false
+    c._handle_elicitation = function()
+      routed = true
+    end
+    -- A notification carries no id to respond to, so there is nothing to answer.
+    c:_handle_incoming(nil, "elicitation/create", { sessionId = "s1", mode = "form" })
+    h.eq(false, routed)
+    c:_handle_incoming(7, "elicitation/create", { sessionId = "s1", mode = "form" })
+    h.is_true(routed)
+  end)
+
   h.it("routes fs/read_text_file only when message_id present", function()
     local c = make_client()
     local routed = false
@@ -299,6 +312,82 @@ h.describe("ACPClient _handle_read_text_file", function()
     c:_handle_read_text_file(1, { sessionId = "s1", path = "/a" })
     local decoded = vim.json.decode(sent[1])
     h.eq(ACPClient.ERROR_CODES.METHOD_NOT_FOUND, decoded.error.code)
+  end)
+end)
+
+-- ── _handle_elicitation ────────────────────────────────────────
+
+h.describe("ACPClient _handle_elicitation", function()
+  --- The agent blocks its turn on this response, so every path must answer.
+  --- `decline` means "user provided nothing" and lets the turn continue;
+  --- `cancel` aborts the originating tool call.
+  h.it("declines when no on_elicitation handler is configured", function()
+    local c, sent = make_client({})
+    c:_handle_elicitation(1, { mode = "form", message = "?" })
+    local decoded = vim.json.decode(sent[1])
+    h.eq(1, decoded.id)
+    h.eq("decline", decoded.result.action)
+  end)
+
+  h.it("declines a mode it cannot render rather than treating it as a form", function()
+    local called = false
+    local c, sent = make_client({
+      on_elicitation = function()
+        called = true
+      end,
+    })
+    -- Only `form` is advertised; url/unknown modes must not reach the handler.
+    c:_handle_elicitation(2, { mode = "url", url = "https://example.com" })
+    h.eq(false, called)
+    h.eq("decline", vim.json.decode(sent[1]).result.action)
+  end)
+
+  h.it("passes a form request to the handler and sends its response", function()
+    local captured
+    local c, sent = make_client({
+      on_elicitation = function(request, callback)
+        captured = request
+        callback({ action = "accept", content = { q = "answer" } })
+      end,
+    })
+    c:_handle_elicitation(3, { mode = "form", message = "pick", requestedSchema = { type = "object" } })
+    vim.wait(50, function()
+      return #sent > 0
+    end)
+    h.eq("pick", captured.message)
+    local decoded = vim.json.decode(sent[1])
+    h.eq("accept", decoded.result.action)
+    h.eq({ q = "answer" }, decoded.result.content)
+  end)
+
+  h.it("answers only once even if the handler resolves twice", function()
+    local c, sent = make_client({
+      on_elicitation = function(_, callback)
+        callback({ action = "accept", content = { a = "1" } })
+        callback({ action = "cancel" })
+      end,
+    })
+    c:_handle_elicitation(4, { mode = "form" })
+    vim.wait(50, function()
+      return #sent > 0
+    end)
+    h.eq(1, #sent, "a second response would break the JSON-RPC id contract")
+    h.eq("accept", vim.json.decode(sent[1]).result.action)
+  end)
+end)
+
+-- ── client capabilities ────────────────────────────────────────
+
+h.describe("ACPClient capabilities", function()
+  h.it("advertises form elicitation as an empty object, not an array", function()
+    local real = ACPClient:new({ command = "true" })
+    -- A bare Lua `{}` would encode as `[]`; the spec requires an object here.
+    h.eq('{"form":{}}', vim.json.encode(real.capabilities.elicitation))
+  end)
+
+  h.it("does not advertise url elicitation, which needs elicitation/complete", function()
+    local real = ACPClient:new({ command = "true" })
+    h.is_nil(real.capabilities.elicitation.url)
   end)
 end)
 

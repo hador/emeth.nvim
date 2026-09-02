@@ -114,6 +114,90 @@ end
 -- Exposed for testing.
 M._transform_update = transform_update
 
+-- `_meta` keys claude-acp attaches to elicitation payloads. Both are
+-- underscore-prefixed, which the ACP spec reserves for implementation-specific
+-- extensions — hence provider-local knowledge rather than generic handling.
+local CUSTOM_ANSWER_META = "_askUserQuestionCustomAnswer"
+local OPTION_META = "_claude/askUserQuestionOption"
+
+---Enrich parsed elicitation fields with claude-acp's AskUserQuestion shape.
+---
+---The generic renderer already handles these forms correctly — claude-acp maps
+---questions onto standard schema fields (`title` is the header chip,
+---`description` the question text, `oneOf` the options). Two provider-specific
+---touches remain:
+---
+---  1. Each select field is followed by a `question_<n>_custom` free-text field
+---     that is really the CLI's per-question "Other" box. Folding it into its
+---     sibling turns two prompts into one "type your own…" line.
+---  2. An option's `preview` (mockups, code snippets) rides in the option's
+---     `_meta` because `EnumOption` has no slot for it. Lift it so K can show it.
+---
+---Also restores question order: `parse` sorts keys, which is stable but puts
+---`question_10` before `question_2`.
+---@param fields acp.ElicitationField[]
+---@return acp.ElicitationField[]
+local function transform_elicitation(fields)
+  -- Index the custom-answer companions by the question they belong to, and
+  -- collect them for removal. The `_meta` marker is authoritative; the
+  -- `question_<n>_custom` name is only a fallback for a reshaped payload.
+  local custom_for = {} ---@type table<string, string>
+  local is_custom = {} ---@type table<string, boolean>
+  for _, field in ipairs(fields) do
+    local marker = type(field.meta) == "table" and field.meta[CUSTOM_ANSWER_META] or nil
+    local owner = type(marker) == "table" and type(marker.questionId) == "string" and marker.questionId or nil
+    if not owner then
+      local base = field.key:match("^(.+)_custom$")
+      if base and field.kind == "text" then
+        owner = base
+      end
+    end
+    if owner then
+      custom_for[owner] = field.key
+      is_custom[field.key] = true
+    end
+  end
+
+  local out = {}
+  for _, field in ipairs(fields) do
+    if not is_custom[field.key] then
+      field.custom_key = custom_for[field.key]
+      for _, opt in ipairs(field.options or {}) do
+        local meta = type(opt.meta) == "table" and opt.meta[OPTION_META] or nil
+        if type(meta) == "table" and type(meta.preview) == "string" and meta.preview ~= "" then
+          opt.preview = meta.preview
+        end
+      end
+      out[#out + 1] = field
+    end
+  end
+
+  -- Sort `question_<n>` fields by numeric index; anything else keeps its
+  -- relative position after them.
+  local order = {}
+  for i, field in ipairs(out) do
+    local n = field.key:match("^question_(%d+)$")
+    order[field.key] = { n = n and tonumber(n) or nil, i = i }
+  end
+  table.sort(out, function(a, b)
+    local oa, ob = order[a.key], order[b.key]
+    if oa.n and ob.n then
+      return oa.n < ob.n
+    end
+    if oa.n ~= nil then
+      return true
+    end
+    if ob.n ~= nil then
+      return false
+    end
+    return oa.i < ob.i
+  end)
+  return out
+end
+
+-- Exposed for testing.
+M._transform_elicitation = transform_elicitation
+
 ---Hook claude-code-specific notifications and the title transform.
 ---@param session acp.Session
 ---@param view chat_ui.ChatView
@@ -141,6 +225,9 @@ function M.setup(session, view)
   if view.integration and view.integration.set_transform_update then
     view.integration.set_transform_update(transform_update)
   end
+  if view.integration and view.integration.set_transform_elicitation then
+    view.integration.set_transform_elicitation(transform_elicitation)
+  end
 
   return function()
     session:off("notification", on_notification)
@@ -149,6 +236,9 @@ function M.setup(session, view)
     Winbar.clear_badge("cost")
     if view.integration and view.integration.set_transform_update then
       view.integration.set_transform_update(nil)
+    end
+    if view.integration and view.integration.set_transform_elicitation then
+      view.integration.set_transform_elicitation(nil)
     end
   end
 end

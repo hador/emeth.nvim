@@ -3,10 +3,18 @@
 
 ---@class acp.ClientCapabilities
 ---@field fs acp.FileSystemCapability
+---@field elicitation? acp.ElicitationCapabilities
 
 ---@class acp.FileSystemCapability
 ---@field readTextFile boolean
 ---@field writeTextFile boolean
+
+--- Elicitation modes the client can render. Per spec an empty *object* (`{}`)
+--- advertises support, so these must be built with `vim.empty_dict()` — a bare
+--- Lua `{}` serializes to `[]`.
+---@class acp.ElicitationCapabilities
+---@field form? table
+---@field url? table
 
 ---@class acp.AgentCapabilities
 ---@field loadSession boolean
@@ -182,6 +190,35 @@
 ---@field outcome "cancelled" | "selected"
 ---@field optionId string|nil
 
+--- Inbound `elicitation/create`. `mode` is "form" (renders `requestedSchema`)
+--- or "url" (send the user to `url`, then await `elicitation/complete`).
+--- Unknown modes must not be rendered as a known mode.
+---@class acp.CreateElicitationRequest
+---@field mode "form" | "url" | string
+---@field message string
+---@field sessionId? string
+---@field toolCallId? string
+---@field requestId? string|number
+---@field requestedSchema? acp.ElicitationSchema
+---@field elicitationId? string
+---@field url? string
+---@field _meta? table
+
+---@class acp.ElicitationSchema
+---@field type "object"
+---@field title? string
+---@field description? string
+---@field properties table<string, table>
+---@field required? string[]
+
+---@alias acp.ElicitationAction "accept" | "decline" | "cancel"
+
+--- Response to `elicitation/create`. `content` is only meaningful for "accept",
+--- and its values must match the types the requested schema declared.
+---@class acp.CreateElicitationResponse
+---@field action acp.ElicitationAction
+---@field content? table<string, string|number|boolean|string[]>
+
 ---@class acp.ACPTransport
 ---@field send function
 ---@field start function
@@ -197,6 +234,7 @@
 ---@class acp.Handlers
 ---@field on_session_update? fun(update: acp.AgentMessageChunk | acp.AgentThoughtChunk | acp.ToolCallUpdate | acp.PlanUpdate | acp.AvailableCommandsUpdate, session_id: string)
 ---@field on_request_permission? fun(tool_call: table, options: table[], callback: fun(option_id: string|nil)): nil
+---@field on_elicitation? fun(request: acp.CreateElicitationRequest, callback: fun(response: acp.CreateElicitationResponse)): nil
 ---@field on_read_file? fun(path: string, line: integer|nil, limit: integer|nil, callback: fun(content: string), error_callback: fun(message: string, code: integer|nil)): nil
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
 ---@field on_error? fun(error: table)

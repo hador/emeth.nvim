@@ -220,6 +220,46 @@ h.describe("Session permission event", function()
   end)
 end)
 
+h.describe("Session elicitation event", function()
+  h.it("emits elicitation with the request and callback", function()
+    local s = Session:new("test")
+    local received = {}
+    s:on("elicitation", function(request, callback)
+      received.request = request
+      received.callback = callback
+    end)
+    local cb = function() end
+    s.client.config.handlers.on_elicitation({ mode = "form", message = "pick one" }, cb)
+    h.eq("pick one", received.request.message)
+    h.is_true(received.callback ~= nil)
+  end)
+
+  h.it("declines when nothing is listening, so the agent's turn cannot hang", function()
+    -- `_emit` is a no-op with no listeners, and the agent blocks on this
+    -- response — so the session layer has to answer on its own.
+    local s = Session:new("test")
+    local response = nil
+    s.client.config.handlers.on_elicitation({ mode = "form" }, function(r)
+      response = r
+    end)
+    h.eq("decline", response.action)
+  end)
+
+  h.it("does not auto-answer just because auto_approve_tools is set", function()
+    -- Tool permission can be blanket-approved; a question cannot, because only
+    -- the user knows the answer.
+    require("emeth.acp").config.auto_approve_tools = true
+    local s = Session:new("test")
+    local answered = false
+    s:on("elicitation", function() end)
+    s.client.config.handlers.on_elicitation({ mode = "form" }, function()
+      answered = true
+    end)
+    h.eq(false, answered)
+    require("emeth.acp").config.auto_approve_tools = false
+  end)
+end)
+
 h.describe("Session _extract_session_info provider delegation", function()
   -- Inject a fake provider extension module on the fly. We use a unique name
   -- so the require cache miss doesn't clash with real integrations.
