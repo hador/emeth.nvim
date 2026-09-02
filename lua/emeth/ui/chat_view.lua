@@ -107,6 +107,14 @@ function ChatView:new(opts)
         return
       end
 
+      -- Generic expand hook: a message can carry its own toggle (set by whoever
+      -- built it) so this file doesn't need to know every expandable kind.
+      if msg.metadata and type(msg.metadata.on_expand) == "function" then
+        msg.metadata.on_expand(msg)
+        invalidate_msg(msg)
+        return
+      end
+
       if msg.role == "user" and has_user_details(msg) then
         msg._show_details = not msg._show_details
         invalidate_msg(msg)
@@ -308,6 +316,31 @@ function ChatView:get_message(uuid)
       return msg
     end
   end
+end
+
+---The message under the cursor plus the cursor's 1-based line offset within it.
+---
+---Lets a caller act on a specific *line* of a multi-line message (e.g. picking
+---the option the cursor sits on) without knowing where that message was laid
+---out. Returns nil when the cursor isn't in the result window or is on a row no
+---message owns (blank separators between messages).
+---Only meaningful while the result buffer is the current one — it reads the
+---cursor from the current window, matching the buffer-local keymaps that call it.
+---@return chat_ui.Message|nil msg, integer|nil offset
+function ChatView:cursor_message_line()
+  if vim.api.nvim_get_current_buf() ~= self.result_buf then
+    return nil, nil
+  end
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local msg = self._line_to_msg[row]
+  if not msg then
+    return nil, nil
+  end
+  local first = row
+  while first > 1 and self._line_to_msg[first - 1] == msg do
+    first = first - 1
+  end
+  return msg, row - first + 1
 end
 
 function ChatView:_schedule_render()

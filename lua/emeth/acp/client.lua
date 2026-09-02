@@ -54,7 +54,13 @@ function ACPClient:new(config)
   local client = setmetatable({
     id_counter = 0,
     protocol_version = 1,
-    capabilities = { fs = { readTextFile = true, writeTextFile = true } },
+    -- `elicitation.form` must be an empty *object* per spec; a bare `{}` would
+    -- serialize to `[]`. Only `form` is advertised: `url` mode additionally
+    -- requires handling the `elicitation/complete` notification.
+    capabilities = {
+      fs = { readTextFile = true, writeTextFile = true },
+      elicitation = { form = vim.empty_dict() },
+    },
     agent_capabilities = nil,
     auth_methods = {},
     _log_file = nil,
@@ -366,6 +372,10 @@ function ACPClient:_handle_incoming(message_id, method, params)
     if message_id then
       self:_handle_request_permission(message_id, params)
     end
+  elseif method == "elicitation/create" then
+    if message_id then
+      self:_handle_elicitation(message_id, params)
+    end
   elseif method == "fs/read_text_file" then
     if message_id then
       self:_handle_read_text_file(message_id, params)
@@ -406,6 +416,40 @@ function ACPClient:_handle_request_permission(message_id, params)
       end)
     end)
   end
+end
+
+---Handle an inbound `elicitation/create`.
+---
+---The agent blocks its turn on this response, so every path must answer exactly
+---once: a missing handler or an unrenderable mode replies `decline` rather than
+---leaving the turn hanging. `decline` (not `cancel`) is the right refusal — it
+---means "the user provided nothing", which lets the agent carry on, whereas
+---`cancel` aborts the originating tool call.
+---@param message_id number
+---@param params table
+function ACPClient:_handle_elicitation(message_id, params)
+  -- Guard the response: the UI resolves from keymaps and callbacks that could
+  -- otherwise fire twice (e.g. answered just as the session tears down).
+  local answered = false
+  local function respond(response)
+    if answered then
+      return
+    end
+    answered = true
+    self:_send_result(message_id, response)
+  end
+
+  local handler = self.config.handlers and self.config.handlers.on_elicitation
+  -- We only advertise `form`, so any other mode is either a spec violation or a
+  -- future/custom mode we must not render as if it were a known one.
+  if not handler or type(params) ~= "table" or params.mode ~= "form" then
+    respond({ action = "decline" })
+    return
+  end
+
+  vim.schedule(function()
+    handler(params, respond)
+  end)
 end
 
 ---@param message_id number

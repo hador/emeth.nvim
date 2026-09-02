@@ -83,6 +83,19 @@ local function make_view()
 
   function view:open_file_manager() end
 
+  -- Stands in for the real cursor lookup, which needs a rendered buffer.
+  -- Tests set `_cursor_offset` (and optionally `_cursor_msg`) to say which line
+  -- of which message the cursor is on. Offset alignment against a real render
+  -- is covered by ChatView:cursor_message_line's own tests.
+  view._cursor_offset = nil
+  view._cursor_msg = nil
+  function view:cursor_message_line()
+    if not self._cursor_offset then
+      return nil, nil
+    end
+    return self._cursor_msg or self.messages[#self.messages], self._cursor_offset
+  end
+
   -- These are touched by integration setup but we don't care about effects.
   view.result_buf = 0
   view.input_buf = 0
@@ -1057,6 +1070,209 @@ h.describe("acp integration: session config options (/model etc.)", function()
     h.is_true(Commands.get("model") ~= nil)
     integration.disconnect()
     h.is_nil(Commands.get("model"))
+  end)
+end)
+
+h.describe("acp integration: elicitation", function()
+  --- Emit an elicitation the way the session layer does and capture the reply.
+  local function elicit_setup()
+    local session, view = make_setup()
+    local replies = {} ---@type table[]
+    ---@param schema table
+    local function ask(schema, message)
+      session:_emit("elicitation", {
+        mode = "form",
+        message = message or "Pick one",
+        requestedSchema = schema,
+      }, function(response)
+        replies[#replies + 1] = response
+      end)
+    end
+    return session, view, replies, ask
+  end
+
+  local TWO_OPTIONS = {
+    type = "object",
+    properties = {
+      choice = {
+        type = "string",
+        oneOf = {
+          { const = "a", title = "Option A", description = "first" },
+          { const = "b", title = "Option B", description = "second" },
+        },
+      },
+    },
+  }
+
+  --- Rendered layout for a single 2-option select:
+  ---   1 header, 2 option A, 3 option B, 4 skip, 5 hint
+  local ROW_A, ROW_B, ROW_SKIP = 2, 3, 4
+
+  h.it("accepts the option under the cursor", function()
+    local _, view, replies, ask = elicit_setup()
+    ask(TWO_OPTIONS)
+    flush()
+    view._cursor_offset = ROW_B
+    h.is_true(press("<CR>"), "<CR> should be bound while a question is open")
+    h.eq(1, #replies)
+    h.eq("accept", replies[1].action)
+    h.eq({ choice = "b" }, replies[1].content)
+  end)
+
+  h.it("declines when the skip line is chosen", function()
+    local _, view, replies, ask = elicit_setup()
+    ask(TWO_OPTIONS)
+    flush()
+    view._cursor_offset = ROW_SKIP
+    press("<CR>")
+    h.eq("decline", replies[1].action)
+    h.is_nil(replies[1].content)
+  end)
+
+  h.it("ignores <CR> on a line with no action", function()
+    local _, view, replies, ask = elicit_setup()
+    ask(TWO_OPTIONS)
+    flush()
+    view._cursor_offset = 1 -- the header
+    press("<CR>")
+    h.eq(0, #replies, "the question must stay open")
+  end)
+
+  h.it("declines a schema with nothing renderable instead of showing a dead prompt", function()
+    local _, _, replies, ask = elicit_setup()
+    ask({ type = "object", properties = { odd = { type = "_customThing" } } })
+    flush()
+    h.eq(1, #replies)
+    h.eq("decline", replies[1].action)
+  end)
+
+  h.it("serializes concurrent questions and answers them in order", function()
+    local _, view, replies, ask = elicit_setup()
+    ask(TWO_OPTIONS, "first question")
+    ask(TWO_OPTIONS, "second question")
+    flush()
+    -- The head prompt reports the one waiting behind it, which shifts its rows
+    -- down by one (header, pending, optA, optB, skip, hint).
+    local head = view.messages[#view.messages]
+    h.is_true(head:text():find("1 more waiting") ~= nil, "head should report the queued question")
+
+    view._cursor_msg = head
+    view._cursor_offset = ROW_A + 1
+    press("<CR>")
+    h.eq(1, #replies)
+    h.eq({ choice = "a" }, replies[1].content)
+
+    -- The second question is now active with no pending line, so rows shift back.
+    view._cursor_msg = nil
+    view._cursor_offset = ROW_B
+    h.is_true(press("<CR>"), "<CR> should be rebound for the next question")
+    h.eq(2, #replies)
+    h.eq({ choice = "b" }, replies[2].content)
+  end)
+
+  h.it("toggles multi-select entries and submits them together", function()
+    local _, view, replies, ask = elicit_setup()
+    ask({
+      type = "object",
+      properties = {
+        feats = {
+          type = "array",
+          items = { anyOf = { { const = "x", title = "X" }, { const = "y", title = "Y" } } },
+        },
+      },
+    })
+    flush()
+    -- Layout: 1 header, 2 X, 3 Y, 4 submit, 5 skip, 6 hint
+    view._cursor_offset = 2
+    press("<CR>")
+    h.eq(0, #replies, "toggling must not submit")
+    view._cursor_offset = 3
+    press("<CR>")
+    view._cursor_offset = 4 -- submit
+    press("<CR>")
+    h.eq(1, #replies)
+    h.eq("accept", replies[1].action)
+    h.eq({ "x", "y" }, replies[1].content.feats)
+  end)
+
+  h.it("untoggles an entry that is selected twice", function()
+    local _, view, replies, ask = elicit_setup()
+    ask({
+      type = "object",
+      properties = {
+        feats = { type = "array", items = { anyOf = { { const = "x", title = "X" } } } },
+      },
+    })
+    flush()
+    -- Layout: 1 header, 2 X, 3 submit, 4 skip, 5 hint
+    view._cursor_offset = 2
+    press("<CR>")
+    press("<CR>") -- toggle back off
+    view._cursor_offset = 3
+    press("<CR>")
+    -- The field is optional, so submitting with nothing ticked is a real answer
+    -- ("none of these") rather than a skip — but it must not send an empty list.
+    h.eq("accept", replies[1].action)
+    h.is_nil(replies[1].content.feats)
+  end)
+
+  h.it("walks a multi-field form one question at a time", function()
+    local _, view, replies, ask = elicit_setup()
+    ask({
+      type = "object",
+      properties = {
+        -- Titles matter here: the per-field label line is only rendered when the
+        -- field has a title or description of its own.
+        question_0 = { type = "string", title = "First", oneOf = { { const = "a1", title = "A1" } } },
+        question_1 = { type = "string", title = "Second", oneOf = { { const = "b1", title = "B1" } } },
+      },
+    })
+    flush()
+    -- Multi-field layout adds a per-field label line:
+    --   1 header (n/2), 2 label, 3 option, 4 skip, 5 hint
+    view._cursor_offset = 3
+    press("<CR>")
+    h.eq(0, #replies, "answering the first field advances rather than submitting")
+    view._cursor_offset = 3
+    press("<CR>")
+    h.eq(1, #replies)
+    h.eq({ question_0 = "a1", question_1 = "b1" }, replies[1].content)
+  end)
+
+  h.it("replaces the prompt with a record of the answer", function()
+    local _, view, _, ask = elicit_setup()
+    ask(TWO_OPTIONS, "Which one?")
+    flush()
+    local prompt = view.messages[#view.messages]
+    view._cursor_offset = ROW_A
+    press("<CR>")
+    local text = prompt:text()
+    h.is_true(text:find("Which one?", 1, true) ~= nil, "keeps the question")
+    h.is_true(text:find("Option A", 1, true) ~= nil, "records the chosen label, not the wire value")
+    h.is_true(text:find("skip", 1, true) == nil, "no leftover live controls")
+  end)
+
+  h.it("K expands option descriptions in place", function()
+    local _, view, _, ask = elicit_setup()
+    ask(TWO_OPTIONS)
+    flush()
+    local prompt = view.messages[#view.messages]
+    h.is_true(type(prompt.metadata.on_expand) == "function", "prompt must carry the K hook")
+    prompt.metadata.on_expand(prompt)
+    h.is_true(prompt:text():find("first", 1, true) ~= nil, "expanded shows full descriptions")
+  end)
+
+  h.it("cancels open questions when the turn is cancelled", function()
+    local _, view, replies, ask = elicit_setup()
+    ask(TWO_OPTIONS)
+    ask(TWO_OPTIONS)
+    flush()
+    -- Ctrl-C path: the turn is going away, so the tool call should abort rather
+    -- than proceed with no answer.
+    view.integration.cancel()
+    h.eq(2, #replies)
+    h.eq("cancel", replies[1].action)
+    h.eq("cancel", replies[2].action)
   end)
 end)
 

@@ -395,3 +395,79 @@ h.describe("ChatView paste lifecycle", function()
     h.eq(sentinel, vim.paste)
   end)
 end)
+
+h.describe("ChatView:cursor_message_line", function()
+  local Message = require("emeth.message")
+
+  --- Render a multi-line system message and put the cursor on one of its rows.
+  ---@param body string
+  ---@param row_of string  substring identifying the row to move the cursor to
+  local function place(body, row_of)
+    local view = make_view()
+    local msg = Message:new("system", body)
+    view:add_message(msg)
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    local lines = vim.api.nvim_buf_get_lines(view.result_buf, 0, -1, false)
+    for i, l in ipairs(lines) do
+      if l:find(row_of, 1, true) then
+        vim.api.nvim_win_set_cursor(0, { i, 0 })
+        return view, msg
+      end
+    end
+    error("row not found: " .. row_of .. " in\n" .. table.concat(lines, "\n"))
+  end
+
+  -- The elicitation UI maps a row->action table keyed by this offset, so an
+  -- off-by-N here would select the wrong option.
+  h.it("reports the 1-based line offset within the message", function()
+    local view, msg = place("first\nsecond\nthird", "second")
+    local got, offset = view:cursor_message_line()
+    h.eq(msg.uuid, got.uuid)
+    h.eq(2, offset)
+  end)
+
+  h.it("offsets stay aligned for the last line of a long message", function()
+    local body = {}
+    for i = 1, 12 do
+      body[#body + 1] = "line " .. i
+    end
+    local view = make_view()
+    local msg = Message:new("system", table.concat(body, "\n"))
+    view:add_message(msg)
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    local total = vim.api.nvim_buf_line_count(view.result_buf)
+    vim.api.nvim_win_set_cursor(0, { total, 0 })
+    local got, offset = view:cursor_message_line()
+    h.eq(msg.uuid, got.uuid)
+    h.eq(12, offset, "last row of a 12-line message must be offset 12")
+  end)
+
+  h.it("offsets are relative to the message, not the buffer", function()
+    -- A preceding message must not shift the second message's offsets.
+    local view = make_view()
+    view:add_message(Message:new("system", "earlier\nmessage"))
+    local msg = Message:new("system", "alpha\nbeta")
+    view:add_message(msg)
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    local lines = vim.api.nvim_buf_get_lines(view.result_buf, 0, -1, false)
+    for i, l in ipairs(lines) do
+      if l:find("beta", 1, true) then
+        vim.api.nvim_win_set_cursor(0, { i, 0 })
+      end
+    end
+    local got, offset = view:cursor_message_line()
+    h.eq(msg.uuid, got.uuid)
+    h.eq(2, offset)
+  end)
+
+  h.it("returns nil when the result buffer is not current", function()
+    local view = make_view()
+    view:add_message(Message:new("system", "x"))
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.input_buf)
+    h.is_nil((view:cursor_message_line()))
+  end)
+end)
