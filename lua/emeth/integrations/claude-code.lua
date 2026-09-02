@@ -92,15 +92,34 @@ function M.build_session_meta(emeth_config)
   }
 end
 
----Stateless transform: enrich Task/Agent tool_call titles with the
----description and subagent_type from rawInput as it streams in.
+---Stateless transform: lift claude's subagent attribution onto generic fields,
+---and enrich Task/Agent tool_call titles with the description and subagent_type
+---from rawInput as it streams in.
+---
+---Subagent work arrives on the main session already attributed, so nesting it
+---needs no capability negotiation — only a translation from claude's `_meta`
+---namespace into fields the core integration can nest by:
+---  * the spawning tool is marked `subagent = true` (its own title is the
+---    literal "Task" until `rawInput.description` shows up)
+---  * everything it runs carries `parentToolUseId` = that tool's `toolCallId`
 ---@param update table
 local function transform_update(update)
-  if not update or not update._meta then
+  if not update or type(update._meta) ~= "table" then
     return
   end
   local meta = update._meta.claudeCode
-  if not meta or (meta.toolName ~= "Task" and meta.toolName ~= "Agent") then
+  if type(meta) ~= "table" then
+    return
+  end
+
+  if type(meta.parentToolUseId) == "string" and meta.parentToolUseId ~= "" then
+    update.parent_tool_call_id = meta.parentToolUseId
+  end
+  if meta.subagent == true then
+    update.subagent_parent = true
+  end
+
+  if meta.toolName ~= "Task" and meta.toolName ~= "Agent" then
     return
   end
   local raw = type(update.rawInput) == "table" and update.rawInput or {}
