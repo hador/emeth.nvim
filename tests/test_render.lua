@@ -211,3 +211,82 @@ h.describe("Render", function()
     h.eq("2 scenarios (2 passed)", text)
   end)
 end)
+
+h.describe("render: subagent nesting", function()
+  local function tool_msg(opts)
+    return Message:new("assistant", {
+      type = "tool_use",
+      name = opts.name or "Bash",
+      id = opts.id or "t1",
+      input = {},
+      status = opts.status or "completed",
+    }, opts.metadata or {})
+  end
+
+  h.it("reports how many calls are folded under a subagent tool", function()
+    local msg = tool_msg({
+      name = "Explore watchlist handling",
+      metadata = { tool_call = { title = "Explore watchlist handling" }, subagent_children = 12 },
+    })
+    local text = tostring(Render.render_message(msg, { msg })[1])
+    h.is_true(text:find("12 tools", 1, true) ~= nil, "collapsed row must show the count: " .. text)
+  end)
+
+  h.it("singularizes a lone nested call", function()
+    local msg = tool_msg({ metadata = { tool_call = { title = "One step" }, subagent_children = 1 } })
+    local text = tostring(Render.render_message(msg, { msg })[1])
+    h.is_true(text:find("1 tool", 1, true) ~= nil)
+    h.is_true(text:find("1 tools", 1, true) == nil, "no plural for one")
+  end)
+
+  h.it("says nothing when a tool has no nested calls", function()
+    local msg = tool_msg({ metadata = { tool_call = { title = "Read x" } } })
+    local text = tostring(Render.render_message(msg, { msg })[1])
+    h.is_true(text:find("tool", 1, true) == nil or text:find("⊳", 1, true) == nil)
+  end)
+
+  h.it("indents a nested call so it reads as part of its parent", function()
+    local child = tool_msg({
+      id = "c1",
+      metadata = { tool_call = { title = "grep -r foo" }, parent_tool_call_id = "toolu_parent" },
+    })
+    local nested = tostring(Render.render_message(child, { child })[1])
+    local plain = tool_msg({ id = "c1", metadata = { tool_call = { title = "grep -r foo" } } })
+    local top = tostring(Render.render_message(plain, { plain })[1])
+    h.eq("  " .. top, nested, "nested rows are the same row, indented")
+  end)
+end)
+
+h.describe("Line:indent", function()
+  local Line = require("emeth.ui.line")
+
+  h.it("prefixes the rendered text", function()
+    h.eq("  ab", tostring(Line:new({ { "a" }, { "b" } }):indent("  ")))
+  end)
+
+  h.it("is a no-op for an empty prefix", function()
+    local line = Line:new({ { "a" } })
+    h.eq(1, #line:indent("").sections)
+  end)
+
+  h.it("leaves a blank line blank rather than adding trailing whitespace", function()
+    h.eq("", tostring(Line:new({ { "" } }):indent("  ")))
+  end)
+
+  -- Highlight columns are derived by walking sections in order, so the prefix has
+  -- to be its own section or every highlight after it would be off by its width.
+  h.it("shifts highlight columns by the prefix width", function()
+    local line = Line:new({ { "ab", "HlA" } }):indent("··")
+    local marks = {}
+    local orig = vim.api.nvim_buf_add_highlight
+    vim.api.nvim_buf_add_highlight = function(_, _, hl, _, from, to)
+      marks[#marks + 1] = { hl = hl, from = from, to = to }
+    end
+    local buf = vim.api.nvim_create_buf(false, true)
+    line:set_highlights(0, buf, 0, nil)
+    vim.api.nvim_buf_add_highlight = orig
+    h.eq(1, #marks)
+    h.eq("HlA", marks[1].hl)
+    h.eq(#"··", marks[1].from, "highlight must start after the prefix")
+  end)
+end)
