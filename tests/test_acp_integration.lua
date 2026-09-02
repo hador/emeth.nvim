@@ -1307,6 +1307,76 @@ h.describe("acp integration: elicitation", function()
   end)
 end)
 
+h.describe("acp integration: per-session stream isolation", function()
+  -- A subagent's output arrives under its OWN session id. Sharing one streaming
+  -- state table would let two live streams append into each other's messages.
+  local function chunk(text)
+    return { sessionUpdate = "agent_message_chunk", content = { type = "text", text = text } }
+  end
+
+  h.it("keeps concurrent sessions in separate messages", function()
+    local session, view = make_setup()
+    session:_emit("update", chunk("parent one "), "main")
+    session:_emit("update", chunk("child one "), "sub-1")
+    session:_emit("update", chunk("parent two"), "main")
+    session:_emit("update", chunk("child two"), "sub-1")
+    h.eq(2, #view.messages, "one message per session, not one per chunk")
+    h.eq("parent one parent two", view.messages[1]:text())
+    h.eq("child one child two", view.messages[2]:text())
+  end)
+
+  h.it("still appends within a single session", function()
+    local session, view = make_setup()
+    session:_emit("update", chunk("a"), "main")
+    session:_emit("update", chunk("b"), "main")
+    h.eq(1, #view.messages)
+    h.eq("ab", view.messages[1]:text())
+  end)
+
+  h.it("does not let one session's tool call resolve into another's", function()
+    local session, view = make_setup()
+    -- Same toolCallId in two sessions must not collide in the tool map.
+    local function tool(id, title)
+      return { sessionUpdate = "tool_call", toolCallId = id, title = title, kind = "read", status = "pending" }
+    end
+    session:_emit("update", tool("t1", "parent reads"), "main")
+    session:_emit("update", tool("t1", "child reads"), "sub-1")
+    h.eq(2, #view.messages, "each session gets its own tool card")
+    session:_emit("update", {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      status = "completed",
+    }, "sub-1")
+    flush()
+    -- Only the child's card completed; the parent's is untouched.
+    h.eq("pending", view.messages[1].content[1].status)
+    h.eq("completed", view.messages[2].content[1].status)
+  end)
+
+  h.it("separates thinking blocks per session", function()
+    local session, view = make_setup()
+    local function thought(text)
+      return { sessionUpdate = "agent_thought_chunk", content = { type = "text", text = text } }
+    end
+    session:_emit("update", thought("parent thinks"), "main")
+    session:_emit("update", thought("child thinks"), "sub-1")
+    h.eq(2, #view.messages)
+    h.eq("parent thinks", view.messages[1].content[1].thinking)
+    h.eq("child thinks", view.messages[2].content[1].thinking)
+  end)
+
+  h.it("drops every session's stream when the transcript is reset", function()
+    local session, view = make_setup()
+    session:_emit("update", chunk("before"), "main")
+    view.integration.new_session()
+    flush()
+    -- A chunk after the reset must start a fresh message rather than appending
+    -- to the one that is no longer in the transcript.
+    session:_emit("update", chunk("after"), "main")
+    h.eq("after", view.messages[#view.messages]:text())
+  end)
+end)
+
 h.describe("acp integration: steering", function()
   --- A session whose agent supports steering, with the wire call captured.
   local function steer_setup(supported)

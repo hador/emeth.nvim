@@ -28,20 +28,32 @@ local M = {}
 ---@return table
 function M.setup_integration(view, session)
   -- Per-turn streaming state: which message each streaming update kind is
-  -- currently appending to, and the tool-call-id -> message-uuid map. Grouped
-  -- into one table so the update handlers take a single `state` handle rather
-  -- than closing over four separate upvalues, and so reset_state is one clear().
+  -- currently appending to, and the tool-call-id -> message-uuid map.
   ---@class acp.StreamState
   ---@field assistant_uuid string|nil  message the current agent text streams into
   ---@field thinking_uuid string|nil   message the current thought streams into
   ---@field plan_uuid string|nil       the live plan block, while it's still last
   ---@field tool_map table<string, string>  toolCallId -> message uuid
-  local state = {
-    assistant_uuid = nil,
-    thinking_uuid = nil,
-    plan_uuid = nil,
-    tool_map = {},
-  }
+
+  -- Keyed by the session the updates belong to. `session/update` carries a
+  -- sessionId, and a subagent's output arrives under its OWN session id, so two
+  -- streams can be live at once — sharing one state table would let them append
+  -- into each other's messages. Handlers receive their stream as an argument
+  -- rather than closing over a single table.
+  local streams = {} ---@type table<string, acp.StreamState>
+
+  ---The stream for `session_id`, created on first use.
+  ---@param session_id string|nil
+  ---@return acp.StreamState
+  local function stream_for(session_id)
+    local key = session_id or "?"
+    local s = streams[key]
+    if not s then
+      s = { tool_map = {} }
+      streams[key] = s
+    end
+    return s
+  end
   local selected_files = {} ---@type string[]
   -- FIFO of pending permission requests. Only the head claims the a/A/r/R keys
   -- at any time, so concurrent requests can't clobber each other's claims.
@@ -162,10 +174,7 @@ function M.setup_integration(view, session)
   end
 
   local function reset_state()
-    state.assistant_uuid = nil
-    state.thinking_uuid = nil
-    state.plan_uuid = nil
-    state.tool_map = {}
+    streams = {}
   end
 
   local function refresh_file_display()
@@ -502,7 +511,9 @@ function M.setup_integration(view, session)
   -- state it needs (the `state` table, schedule_reload, render_mode, session,
   -- view).
 
-  ---@type table<string, fun(update: table)>
+  ---Each handler receives the update plus the streaming state for the session
+  ---that update belongs to. Handlers that keep no streaming state ignore it.
+  ---@type table<string, fun(update: table, stream: acp.StreamState)>
   local update_handlers = {}
 
   -- `sessionUpdate` types that are pure metadata and shouldn't flip the
@@ -521,28 +532,28 @@ function M.setup_integration(view, session)
     end
   end
 
-  function update_handlers.agent_message_chunk(update)
+  function update_handlers.agent_message_chunk(update, stream)
     if not (update.content and update.content.type == "text") then
       return
     end
-    if state.assistant_uuid then
-      view:update_message(state.assistant_uuid, function(msg)
+    if stream.assistant_uuid then
+      view:update_message(stream.assistant_uuid, function(msg)
         msg:append_text(update.content.text)
       end)
     else
       local msg = Message:new("assistant", update.content.text)
-      state.assistant_uuid = msg.uuid
-      state.thinking_uuid = nil
+      stream.assistant_uuid = msg.uuid
+      stream.thinking_uuid = nil
       view:add_message(msg)
     end
   end
 
-  function update_handlers.agent_thought_chunk(update)
+  function update_handlers.agent_thought_chunk(update, stream)
     if not (update.content and update.content.type == "text" and update.content.text ~= "") then
       return
     end
-    if state.thinking_uuid then
-      view:update_message(state.thinking_uuid, function(msg)
+    if stream.thinking_uuid then
+      view:update_message(stream.thinking_uuid, function(msg)
         for _, item in ipairs(msg.content) do
           if item.type == "thinking" then
             item.thinking = (item.thinking or "") .. update.content.text
@@ -555,16 +566,16 @@ function M.setup_integration(view, session)
         type = "thinking",
         thinking = update.content.text,
       })
-      state.thinking_uuid = msg.uuid
-      state.assistant_uuid = nil
+      stream.thinking_uuid = msg.uuid
+      stream.assistant_uuid = nil
       view:add_message(msg)
     end
   end
 
-  function update_handlers.tool_call(update)
-    state.assistant_uuid = nil
-    state.thinking_uuid = nil
-    local existing_uuid = state.tool_map[update.toolCallId]
+  function update_handlers.tool_call(update, stream)
+    stream.assistant_uuid = nil
+    stream.thinking_uuid = nil
+    local existing_uuid = stream.tool_map[update.toolCallId]
     if existing_uuid then
       view:update_message(existing_uuid, function(msg)
         for _, item in ipairs(msg.content) do
@@ -594,13 +605,13 @@ function M.setup_integration(view, session)
         input = update.rawInput or {},
         status = update.status or "pending",
       }, { tool_call = update })
-      state.tool_map[update.toolCallId] = msg.uuid
+      stream.tool_map[update.toolCallId] = msg.uuid
       view:add_message(msg)
     end
   end
 
-  function update_handlers.tool_call_update(update)
-    local uuid = state.tool_map[update.toolCallId]
+  function update_handlers.tool_call_update(update, stream)
+    local uuid = stream.tool_map[update.toolCallId]
     if uuid then
       -- A content/rawOutput-only chunk (the common case while a tool streams)
       -- is throttled: apply it now, paint on the timer. Anything that changes
@@ -665,10 +676,10 @@ function M.setup_integration(view, session)
     end
   end
 
-  function update_handlers.plan(update)
+  function update_handlers.plan(update, stream)
     -- Each `plan` update carries the FULL current plan and supersedes the
     -- previous one — it's a self-updating block, not an append. Render it once
-    -- per turn and rewrite in place as entries progress. `state.plan_uuid` is
+    -- per turn and rewrite in place as entries progress. `stream.plan_uuid` is
     -- cleared only by reset_state (next prompt), so the plan keeps updating even
     -- as assistant text / tool calls interleave around it.
     local parts = { "**Plan:**" }
@@ -683,13 +694,13 @@ function M.setup_integration(view, session)
     -- instead of silently mutating the off-screen one.
     local messages = view:get_messages()
     local last = messages[#messages]
-    if state.plan_uuid and last and last.uuid == state.plan_uuid then
-      view:update_message(state.plan_uuid, function(msg)
+    if stream.plan_uuid and last and last.uuid == stream.plan_uuid then
+      view:update_message(stream.plan_uuid, function(msg)
         msg.content = { { type = "text", text = text } }
       end)
     else
       local msg = Message:new("system", text)
-      state.plan_uuid = msg.uuid
+      stream.plan_uuid = msg.uuid
       view:add_message(msg)
     end
   end
@@ -776,7 +787,7 @@ function M.setup_integration(view, session)
     end)
   end
 
-  session:on("update", function(update)
+  session:on("update", function(update, update_session_id)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
     -- tool_call's title) before we consume it. Keep this lightweight —
     -- transforms run on every event.
@@ -792,7 +803,7 @@ function M.setup_integration(view, session)
 
     local handler = update_handlers[update.sessionUpdate]
     if handler then
-      handler(update)
+      handler(update, stream_for(update_session_id))
     end
   end)
 
@@ -892,10 +903,12 @@ function M.setup_integration(view, session)
 
   session:on("permission", function(tool_call, options, callback)
     vim.schedule(function()
-      -- Render via the same path as a regular tool_call update
-      if not state.tool_map[tool_call.toolCallId] then
+      -- Render via the same path as a regular tool_call update. The permission
+      -- event carries no session id, so attribute it to the main session — the
+      -- same stream this tool call's real updates arrive on.
+      if not stream_for(session.session_id).tool_map[tool_call.toolCallId] then
         local update = vim.tbl_extend("keep", tool_call, { sessionUpdate = "tool_call" })
-        session:_emit("update", update)
+        session:_emit("update", update, session.session_id)
       end
 
       -- If auto-approve is on, session layer already called the callback
