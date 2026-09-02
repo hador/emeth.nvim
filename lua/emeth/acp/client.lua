@@ -164,14 +164,27 @@ function ACPClient:_create_stdio_transport()
     return false
   end
 
+  ---Close pipes that were opened for a spawn that never happened, so a failed
+  ---start doesn't leak file descriptors.
+  local function close_pipes(...)
+    for _, pipe in ipairs({ ... }) do
+      if pipe and not pipe:is_closing() then
+        pipe:close()
+      end
+    end
+  end
+
+  ---Start the agent process.
+  ---@return boolean ok, string|nil err  a human-readable reason when ok is false
   function transport.start(transport_self, on_message)
     self:_set_state("connecting")
     local stdin = uv.new_pipe(false)
     local stdout = uv.new_pipe(false)
     local stderr = uv.new_pipe(false)
     if not stdin or not stdout or not stderr then
+      close_pipes(stdin, stdout, stderr)
       self:_set_state("error")
-      error("Failed to create pipes for ACP agent")
+      return false, "Failed to create pipes for the ACP agent"
     end
 
     local args = vim.deepcopy(self.config.args or {})
@@ -192,7 +205,7 @@ function ACPClient:_create_stdio_transport()
     end
 
     ---@diagnostic disable-next-line: missing-fields
-    local handle, pid = uv.spawn(self.config.command, {
+    local handle, pid, err_name = uv.spawn(self.config.command, {
       args = args,
       env = final_env,
       stdio = { stdin, stdout, stderr },
@@ -222,11 +235,25 @@ function ACPClient:_create_stdio_transport()
       end
     end)
 
-    debug_log_print("Spawned ACP agent process with PID " .. tostring(pid))
     if not handle then
+      -- `pid` carries the message and `err_name` the code when spawn fails.
+      close_pipes(stdin, stdout, stderr)
       self:_set_state("error")
-      error("Failed to spawn ACP agent process: " .. (self.config.command or "nil"))
+      local command = self.config.command or "?"
+      if err_name == "ENOENT" then
+        -- Overwhelmingly the interesting case, and the one whose default message
+        -- ("no such file or directory") sends people looking for the wrong thing.
+        -- Neovim's PATH is inherited from whatever launched it, so a version
+        -- manager that resolves tools per directory (mise, asdf) can leave the
+        -- command missing here even though it works in a shell.
+        return false,
+          ("`%s` was not found on PATH. Neovim's PATH may differ from your shell's — if you use a version manager (mise, asdf), check that the tool version this directory pins is actually installed. `:checkhealth emeth` lists provider commands."):format(
+            command
+          )
+      end
+      return false, ("Failed to start `%s`: %s"):format(command, tostring(pid or err_name or "unknown error"))
     end
+    debug_log_print("Spawned ACP agent process with PID " .. tostring(pid))
 
     transport_self.process = handle
     transport_self.stdin = stdin
@@ -265,6 +292,7 @@ function ACPClient:_create_stdio_transport()
         self:_debug_log("stderr: " .. data .. "\n")
       end
     end)
+    return true
   end
 
   function transport.stop(transport_self)
@@ -527,9 +555,17 @@ function ACPClient:connect(callback)
     })
   end
 
-  self.transport:start(vim.schedule_wrap(function(message)
+  -- A failed start is reported through the callback, not raised: the caller owns
+  -- the UI state it entered to connect, and an uncaught error here would leave it
+  -- stuck in "connecting" with only a stack trace to explain why.
+  local ok, start_err = self.transport:start(vim.schedule_wrap(function(message)
     self:_handle_message(message)
   end))
+  if ok == false then
+    active_client = nil
+    callback(self:_create_error(self.ERROR_CODES.INTERNAL_ERROR, start_err or "Failed to start the ACP agent"))
+    return
+  end
   self:initialize(callback)
 end
 
