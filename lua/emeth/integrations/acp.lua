@@ -425,15 +425,17 @@ function M.setup_integration(view, session)
   ---input back (a steered message's replay is consumed agent-side), so this is
   ---the only place a user message comes from.
   ---@param text string
+  ---@return chat_ui.Message
   local function add_user_message(text)
     local exts = session.extensions or {}
-    view:add_message(Message:new("user", text, {
+    local msg = Message:new("user", text, {
       selected_files = vim.deepcopy(selected_files),
       provider = session.provider_name,
       model = exts.model_id,
       mode = exts.mode_id,
       badges = Winbar.get_badges(),
-    }))
+    })
+    view:add_message(msg)
     if session.session_id then
       Sessions.touch(session.session_id)
       local entry = Sessions.get(session.session_id)
@@ -441,6 +443,7 @@ function M.setup_integration(view, session)
         Sessions.update_title(session.session_id, text:sub(1, 80):gsub("\n", " "))
       end
     end
+    return msg
   end
 
   ---Start a fresh turn and own its completion.
@@ -487,7 +490,7 @@ function M.setup_integration(view, session)
     -- "generating" forever.
     if session:is_connected() and activity == "generating" and session:supports_steering() then
       local prompt = build_prompt(text)
-      add_user_message(text)
+      local msg = add_user_message(text)
       view:invalidate()
       session:steer(prompt, function(outcome, err)
         vim.schedule(function()
@@ -501,7 +504,16 @@ function M.setup_integration(view, session)
           -- normal prompt whose lifecycle we own.
           if outcome == "promptRequired" then
             start_turn(prompt)
+            return
           end
+          -- Mark it only now that the agent confirmed the injection. Marking at
+          -- submit time would claim a steer for the `promptRequired` race, which
+          -- is an ordinary turn. Reading back, "did this cut into a running turn
+          -- or start one?" is otherwise unrecoverable.
+          view:update_message(msg.uuid, function(m)
+            m.metadata.steered = true
+          end)
+          view:invalidate()
         end)
       end)
       return
@@ -1652,19 +1664,24 @@ function M.setup_integration(view, session)
 
   -- ── Public API ─────────────────────────────────────────────────
 
+  ---Record which session the transcript now belongs to.
+  ---
+  ---Announced at every session boundary, not just connect: `/new` and loading a
+  ---session both replace the session id, and previously said nothing about it, so
+  ---there was no way to tell which session the transcript in front of you was.
+  ---@param what string
+  local function announce_session(what)
+    vim.schedule(function()
+      view:add_message(Message:new("system", ("%s  Session: %s"):format(what, session.session_id or "?")))
+    end)
+  end
+
   local integration = {
     connect = function(cb)
       lifecycle({ save = true }, function(opts, done)
         session:connect(opts, function(err)
           if not err then
-            vim.schedule(function()
-              view:add_message(
-                Message:new(
-                  "system",
-                  "Connected to " .. session.provider_name .. ".  Session: " .. (session.session_id or "?")
-                )
-              )
-            end)
+            announce_session("Connected to " .. session.provider_name .. ".")
           end
           done(err)
         end)
@@ -1675,14 +1692,24 @@ function M.setup_integration(view, session)
       -- Hydrate roots from the persisted session entry before re-loading
       roots:hydrate_from(Sessions.get(session_id))
       lifecycle({ clear = true, touch = true }, function(opts, done)
-        session:load(session_id, opts, done)
+        session:load(session_id, function(err)
+          if not err then
+            announce_session("Session loaded.")
+          end
+          done(err)
+        end)
       end, cb)
     end,
 
     connect_and_load = function(session_id, cb)
       roots:hydrate_from(Sessions.get(session_id))
       lifecycle({ touch = true }, function(opts, done)
-        session:connect_and_load(session_id, opts, done)
+        session:connect_and_load(session_id, opts, function(err)
+          if not err then
+            announce_session("Connected to " .. session.provider_name .. ".")
+          end
+          done(err)
+        end)
       end, cb)
     end,
 
@@ -1750,9 +1777,7 @@ function M.setup_integration(view, session)
       lifecycle({ save = true }, function(opts, done)
         session:new_session(opts, function(err)
           if not err then
-            vim.schedule(function()
-              view:add_message(Message:new("system", "New session started."))
-            end)
+            announce_session("New session started.")
           end
           done(err)
         end)

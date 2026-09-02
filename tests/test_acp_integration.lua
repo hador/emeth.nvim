@@ -1837,6 +1837,68 @@ h.describe("acp integration: steering", function()
     h.eq(0, #calls)
     h.eq(1, #prompts)
   end)
+
+  h.it("marks the message as steered once the agent confirms the injection", function()
+    local _, view, _, calls = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    local msg = view.messages[#view.messages]
+    h.is_nil(msg.metadata.steered, "not claimed before the outcome is known")
+    calls[1].cb("injected", nil)
+    vim.wait(20)
+    h.eq(true, msg.metadata.steered)
+  end)
+
+  -- The marker must not lie: promptRequired means the turn had already ended and
+  -- the content went out as an ordinary prompt.
+  h.it("does not mark it when the steer became a normal prompt", function()
+    local _, view, _, calls = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    local msg = view.messages[#view.messages]
+    calls[1].cb("promptRequired", nil)
+    vim.wait(20)
+    h.is_nil(msg.metadata.steered)
+  end)
+
+  h.it("does not mark it when the steer failed", function()
+    local _, view, _, calls = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    local msg = view.messages[#view.messages]
+    calls[1].cb(nil, { code = -32000, message = "session ended" })
+    vim.wait(20)
+    h.is_nil(msg.metadata.steered)
+  end)
+
+  h.it("leaves an ordinary prompt unmarked", function()
+    local _, view = steer_setup(true)
+    view.on_submit("only")
+    h.is_nil(view.messages[#view.messages].metadata.steered)
+  end)
+end)
+
+h.describe("acp integration: session id at every boundary", function()
+  -- /new and load used to replace the session id while saying nothing about it,
+  -- leaving no way to tell which session the transcript in front of you was.
+  local function texts(view)
+    local out = {}
+    for _, m in ipairs(view.messages) do
+      out[#out + 1] = m:text()
+    end
+    return table.concat(out, "\n")
+  end
+
+  h.it("names the session when a new one is started", function()
+    local session, view = make_setup()
+    session.client.create_session = function(_, _cwd, _mcp, _opts, cb)
+      cb("sess-new", nil, {})
+    end
+    view.integration.new_session()
+    vim.wait(50)
+    h.is_true(texts(view):find("New session started", 1, true) ~= nil)
+    h.is_true(texts(view):find("sess-new", 1, true) ~= nil, "the new id must be recorded")
+  end)
 end)
 
 -- Restore stubs
