@@ -30,7 +30,10 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 - Markdown rendering with treesitter highlighting
 - Tool call visualization with box-drawing, inline diffs, status glyphs
 - Thinking/reasoning blocks (collapsible)
-- Winbar with spinner, context usage %, compaction indicator
+- Subagent tool calls folded under the task that spawned them
+- The agent can ask you questions, answered inline without stealing focus
+- Steering: redirect a running turn instead of cancelling it
+- Winbar with spinner, context usage %, compaction indicator, goal status
 - File context mentions: `@file`, `@buffers`, `@files`
 - Prompt templates via `/prompts` (local `.md` files + MCP server prompts)
 - Session history: list, load, resume previous conversations
@@ -186,6 +189,60 @@ When switching, the chat clears and a fresh session starts. If `resume_last_sess
 | `<C-c>` | Insert/Normal | Cancel the current request, or abort a stuck connection |
 | `<Tab>` | Normal | Switch between input/result |
 | `q` / `<Esc>` | Normal | Close sidebar |
+
+### Result buffer
+
+Keys act on the message under the cursor.
+
+| Key | Action |
+|-----|--------|
+| `K` | Expand/collapse the thing under the cursor: a tool body, a user message's details, or a subagent's nested tool calls |
+| `r` | Resend the user prompt under the cursor |
+| `e` | Put the user prompt under the cursor back in the input box to edit |
+| `<CR>` | Answer the question under the cursor (see below); otherwise moves down a line |
+| `a` `A` `r` `R` | Answer a permission request: allow once / always, reject once / always |
+
+### Steering a running turn
+
+Submitting while the agent is working delivers your message **into** the running
+turn instead of refusing it — so you can correct a long edit part-way through
+without cancelling and losing the work in flight:
+
+> The agent is 30 seconds into a refactor. You type "use tabs, not spaces" and
+> submit. It picks that up and carries on in the same turn.
+
+Steered messages are marked `⤳ steered` in the transcript, since they appear
+mid-stream between the agent's own output. If the turn happens to finish just as
+you submit, the message becomes an ordinary prompt instead.
+
+Requires an agent that advertises steering (currently claude-code). Others keep
+the previous behaviour of declining input while a turn is in flight.
+
+### Answering the agent's questions
+
+Agents can ask *you* things — a multiple-choice question at a decision point, an
+MCP server needing input, or a consent prompt. These render inline in the
+transcript rather than as a popup, so nothing steals focus or swallows keystrokes
+meant for the buffer you were editing.
+
+Put the cursor on a line and press `<CR>`:
+
+```
+❓ Which library should we use for date formatting?
+  ▸ date-fns    tree-shakeable, smaller bundle
+  ▸ Luxon       richer timezone handling
+  ▸ type your own…
+  ✗ skip
+  cursor to a line and press <CR>; K expands
+```
+
+- `K` expands full option descriptions and any preview content (code snippets,
+  mockups) the agent attached.
+- `type your own…` claims the input box for your next submission, so you get
+  normal editing rather than a single-line popup. Pick any other row to back out.
+- Multi-select questions toggle with `<CR>` and have their own `⏎ submit` row.
+- While a question is waiting, the winbar shows `❓ input needed`. If the sidebar
+  is closed you get a notification, since the agent is blocked until you answer.
 
 ### Mentions
 
