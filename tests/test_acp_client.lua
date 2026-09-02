@@ -376,6 +376,51 @@ h.describe("ACPClient _handle_elicitation", function()
   end)
 end)
 
+-- ── connect: transport start failure ───────────────────────────
+
+h.describe("ACPClient connect when the agent cannot be started", function()
+  --- A client whose transport refuses to start, the way uv.spawn does when the
+  --- command is not on PATH.
+  local function failing_client(reason)
+    local c = make_client()
+    c.state = "disconnected"
+    c.transport = {
+      start = function()
+        return false, reason
+      end,
+      stop = function() end,
+      send = function() end,
+    }
+    return c
+  end
+
+  -- Regression: this used to `error()`, so the callback never ran. The caller had
+  -- already entered its "connecting" UI state and nothing was left to settle it,
+  -- leaving the sidebar stuck with only a stack trace to explain why.
+  h.it("reports the failure through the callback instead of raising", function()
+    local c = failing_client("`npx` was not found on PATH")
+    local got
+    local ok = pcall(function()
+      c:connect(function(err)
+        got = err
+      end)
+    end)
+    h.is_true(ok, "connect must not raise")
+    h.is_true(got ~= nil, "callback must receive an error")
+    h.is_true(got.message:find("not found on PATH", 1, true) ~= nil)
+  end)
+
+  h.it("does not proceed to initialize after a failed start", function()
+    local c = failing_client("nope")
+    local initialized = false
+    c.initialize = function()
+      initialized = true
+    end
+    c:connect(function() end)
+    h.eq(false, initialized)
+  end)
+end)
+
 -- ── steering ───────────────────────────────────────────────────
 
 h.describe("ACPClient steering", function()
