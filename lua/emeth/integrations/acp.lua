@@ -68,6 +68,7 @@ function M.setup_integration(view, session)
   ---@field index integer          which field is being answered
   ---@field expanded boolean       K toggles descriptions + previews
   ---@field rows table<integer, table>  message line offset -> action
+  ---@field awaiting_input? string  answer key the input box is currently claimed for
   ---@field prompt_uuid? string
   local elicitation_queue = {} ---@type acp.PendingElicitation[]
   local roots = Roots.attach(view)
@@ -88,6 +89,10 @@ function M.setup_integration(view, session)
   local render_model ---@type fun()
   -- Defined with the elicitation UI further down; do_cancel is declared above it.
   local cancel_elicitations ---@type fun()
+  -- Set while a prompt is waiting for free text from the input box; the next
+  -- submission goes here instead of to the agent. Declared up here because
+  -- `on_submit` is defined before the elicitation UI that arms it.
+  local input_capture = nil ---@type fun(text: string)|nil
   -- (Re)registers a slash command per session config option (e.g. /model).
   -- Forward-declared so the config_option_update handler can call it.
   local register_config_option_commands ---@type fun()
@@ -465,6 +470,16 @@ function M.setup_integration(view, session)
   end
 
   view.on_submit = function(text)
+    -- A prompt may have claimed the next submission (a free-text elicitation
+    -- answer). It reuses the input box rather than a modal prompt so the user
+    -- gets normal editing — multiline, paste folding — and nothing steals focus.
+    if input_capture then
+      local capture = input_capture
+      input_capture = nil
+      capture(text)
+      return
+    end
+
     -- Steering: while a turn is running, deliver the message *into* it instead
     -- of refusing the submit. Note this deliberately does NOT call begin() — the
     -- in-flight session/prompt still owns settling the activity state, and
@@ -1045,12 +1060,15 @@ function M.setup_integration(view, session)
       end
     end
 
+    -- While armed, the row says where the answer is going; the agent is blocked
+    -- and the input box looks no different from a normal prompt otherwise.
+    local typing = req.awaiting_input ~= nil
     if field.kind == "text" or field.kind == "number" then
-      lines[#lines + 1] = "  ▸ type an answer…"
+      lines[#lines + 1] = typing and "  ✎ answer in the input box below, then submit" or "  ▸ type an answer…"
       rows[#lines] = { kind = "input" }
     elseif field.custom_key then
       -- Provider hook folded a free-text companion into this field.
-      lines[#lines + 1] = "  ▸ type your own…"
+      lines[#lines + 1] = typing and "  ✎ answer in the input box below, then submit" or "  ▸ type your own…"
       rows[#lines] = { kind = "input", key = field.custom_key }
     end
     if field.kind == "boolean" then
@@ -1135,6 +1153,12 @@ function M.setup_integration(view, session)
       return
     end
     view:clear_prompt_keys("elicitation")
+    -- Never leave the input box hijacked: an armed capture would swallow the
+    -- user's next real prompt.
+    if req.awaiting_input then
+      req.awaiting_input = nil
+      input_capture = nil
+    end
     if req.prompt_uuid then
       local summary = elicitation_summary(req, response)
       view:update_message(req.prompt_uuid, function(m)
@@ -1192,6 +1216,13 @@ function M.setup_integration(view, session)
     end
     local field = req.fields[req.index]
 
+    -- Picking anything else abandons a pending free-text answer — this is also
+    -- the way out of it, since an empty submission never reaches on_submit.
+    if action.kind ~= "input" and req.awaiting_input then
+      req.awaiting_input = nil
+      input_capture = nil
+    end
+
     if action.kind == "skip" then
       -- Skipping any field abandons the whole form: the agent reads `decline`
       -- as "the user chose not to answer", which is exactly what happened.
@@ -1223,15 +1254,22 @@ function M.setup_integration(view, session)
         advance_elicitation(req)
       end
     elseif action.kind == "input" then
-      -- vim.ui.input is user-initiated here (they pressed <CR> on this line),
-      -- so prompting is not the focus theft we're avoiding elsewhere.
-      vim.ui.input({ prompt = oneline(field.title or "Answer", 60) .. ": " }, function(text)
-        if not text or text == "" then
-          return
+      -- Answer in the sidebar input box rather than a modal prompt: the user
+      -- gets real editing (multiline, paste folding, their own keymaps), and
+      -- focus moves only because they asked for it by pressing <CR> here.
+      local key = action.key or field.key
+      req.awaiting_input = key
+      input_capture = function(text)
+        req.awaiting_input = nil
+        if text and text ~= "" then
+          req.answers[key] = text
+          advance_elicitation(req)
+        else
+          refresh_elicitation()
         end
-        req.answers[action.key or field.key] = text
-        advance_elicitation(req)
-      end)
+      end
+      refresh_elicitation()
+      view:focus_input()
     end
   end
 
@@ -1274,6 +1312,7 @@ function M.setup_integration(view, session)
     local queued = elicitation_queue
     elicitation_queue = {}
     view:clear_prompt_keys("elicitation")
+    input_capture = nil
     for _, req in ipairs(queued) do
       if req.prompt_uuid then
         local summary = elicitation_summary(req, { action = "cancel" })

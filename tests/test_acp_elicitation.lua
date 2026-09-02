@@ -300,3 +300,45 @@ h.describe("claude-code transform_elicitation", function()
     end
   end)
 end)
+
+h.describe("acp.elicitation custom-answer companions", function()
+  --- A select field whose free-text companion a provider hook folded in: the
+  --- companion is no longer its own entry in the field list, but it is still a
+  --- property of the requested schema and the agent reads it from there.
+  local function folded()
+    local fields = Elicit.parse({
+      type = "object",
+      properties = {
+        q = { type = "string", oneOf = { { const = "a", title = "A" } } },
+        q_custom = { type = "string", title = "Other" },
+      },
+      required = { "q" },
+    })
+    return ClaudeCode._transform_elicitation(fields)
+  end
+
+  -- Regression: to_content walked the field list only, so a typed answer under a
+  -- folded-away companion key never reached the agent -- it was silently dropped.
+  h.it("emits a typed answer under the companion's own key", function()
+    local fields = folded()
+    h.eq({ q_custom = "my own answer" }, Elicit.to_content(fields, { q_custom = "my own answer" }))
+  end)
+
+  h.it("emits both when a selection and a typed answer are present", function()
+    local fields = folded()
+    local content = Elicit.to_content(fields, { q = "a", q_custom = "override" })
+    h.eq("a", content.q)
+    h.eq("override", content.q_custom, "the agent decides which wins")
+  end)
+
+  h.it("ignores a blank typed answer", function()
+    local fields = folded()
+    h.eq({ q = "a" }, Elicit.to_content(fields, { q = "a", q_custom = "" }))
+  end)
+
+  h.it("a typed answer satisfies a required field", function()
+    local fields = folded()
+    h.eq(false, Elicit.is_complete(fields, {}))
+    h.is_true(Elicit.is_complete(fields, { q_custom = "typed instead" }))
+  end)
+end)
