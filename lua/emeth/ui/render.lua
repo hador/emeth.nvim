@@ -332,6 +332,12 @@ local function render_user_message(msg)
   local lines = {}
   -- Compact header: HH:MM · provider · N files
   local parts = { msg.timestamp:match("%d%d:%d%d") or msg.timestamp }
+  -- A steered message cut into a turn that was already running, which is why it
+  -- appears mid-stream between the agent's own output. Shown in the header rather
+  -- than behind K: a marker explaining an oddity has to be visible unprompted.
+  if msg.metadata.steered then
+    parts[#parts + 1] = "⤳ steered"
+  end
   local files = msg.metadata.selected_files or {}
   if #files > 0 then
     parts[#parts + 1] = #files .. (#files == 1 and " file" or " files")

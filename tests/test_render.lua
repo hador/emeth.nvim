@@ -290,3 +290,29 @@ h.describe("Line:indent", function()
     h.eq(#"··", marks[1].from, "highlight must start after the prefix")
   end)
 end)
+
+h.describe("render: steered marker", function()
+  h.it("shows in the user header when the message cut into a running turn", function()
+    local msg = Message:new("user", "use tabs", { steered = true })
+    local header = tostring(Render.render_message(msg, { msg })[2])
+    h.is_true(header:find("steered", 1, true) ~= nil, "header was: " .. header)
+  end)
+
+  h.it("says nothing for an ordinary prompt", function()
+    local msg = Message:new("user", "hello", {})
+    local header = tostring(Render.render_message(msg, { msg })[2])
+    h.is_true(header:find("steered", 1, true) == nil)
+  end)
+
+  -- Visible without K: it explains why a user message appears mid-stream, which
+  -- is no use if you have to know to go looking for it.
+  h.it("is visible without expanding details", function()
+    local msg = Message:new("user", "use tabs", { steered = true, model = "opus" })
+    h.eq(false, msg._show_details == true)
+    local text = table.concat(
+      vim.tbl_map(tostring, Render.render_message(msg, { msg })),
+      "\n"
+    )
+    h.is_true(text:find("steered", 1, true) ~= nil)
+  end)
+end)
