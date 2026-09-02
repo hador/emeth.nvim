@@ -199,13 +199,7 @@ function ChatView:new(opts)
       local msg = view._line_to_msg[row]
       if msg and msg.role == "user" then
         api.nvim_buf_set_lines(view.input_buf, 0, -1, false, vim.split(msg:text(), "\n"))
-        for _, win in ipairs(api.nvim_list_wins()) do
-          if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == view.input_buf then
-            api.nvim_set_current_win(win)
-            vim.cmd("startinsert!")
-            return
-          end
-        end
+        view:focus_input()
       end
     end,
   })
@@ -361,6 +355,22 @@ end
 ---the option the cursor sits on) without knowing where that message was laid
 ---out. Returns nil when the cursor isn't in the result window or is on a row no
 ---message owns (blank separators between messages).
+---Move focus to the input box and start insert mode.
+---@param insert? boolean  enter insert mode (default true)
+---@return boolean focused  false when the input window isn't currently shown
+function ChatView:focus_input(insert)
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == self.input_buf then
+      vim.api.nvim_set_current_win(win)
+      if insert ~= false then
+        vim.cmd("startinsert!")
+      end
+      return true
+    end
+  end
+  return false
+end
+
 ---Claim keys for a transient prompt. `keys` maps a key to a handler; returning
 ---`false` declines the press so it falls through to the next owner or to the
 ---key's default. The keys must come from the set bound at construction
