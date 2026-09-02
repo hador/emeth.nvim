@@ -341,6 +341,30 @@ function Session:cancel()
   end
 end
 
+---Whether this session's agent accepts steering.
+---@return boolean
+function Session:supports_steering()
+  return self._state == "ready" and self.client:supports_steering()
+end
+
+---Steer the running turn: deliver `content_items` into it rather than queueing
+---them as a separate prompt.
+---
+---`outcome` is `"injected"` when it landed in the running turn, or
+---`"promptRequired"` when no turn was actually running — in which case the agent
+---kept its hands off the content and the caller should send it as a normal
+---prompt (whose own callback then owns the turn's completion).
+---@param content_items table[]
+---@param cb? fun(outcome: string|nil, err: acp.ACPError|nil)
+function Session:steer(content_items, cb)
+  cb = cb or function() end
+  if self._state ~= "ready" then
+    cb(nil, { code = -1, message = "Session not ready (state: " .. self._state .. ")" })
+    return
+  end
+  self.client:steer(self.session_id, content_items, cb)
+end
+
 ---Set a session config option (model/mode/effort/agent/fast). Ready-guarded
 ---like send_prompt. On success the agent also pushes a `config_option_update`
 ---session/update carrying the full refreshed set, so callers don't need to

@@ -391,16 +391,10 @@ function M.setup_integration(view, session)
 
   -- ── Submit ─────────────────────────────────────────────────────
 
-  view.on_submit = function(text)
-    -- Accept input when the transport is up and nothing of ours is in flight.
-    -- "cancelled" is idle-with-tail-suppression, so it accepts input too.
-    if not session:is_connected() or activity == "generating" or activity == "connecting" then
-      vim.notify("[emeth] Session not ready", vim.log.levels.WARN)
-      vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, vim.split(text, "\n"))
-      view:set_context_files(view._context_files)
-      return
-    end
-
+  ---Prompt content for `text`: the @-mentioned files, then the text itself.
+  ---@param text string
+  ---@return table[]
+  local function build_prompt(text)
     local prompt = {}
     for _, fpath in ipairs(selected_files) do
       prompt[#prompt + 1] = {
@@ -410,19 +404,22 @@ function M.setup_integration(view, session)
       }
     end
     prompt[#prompt + 1] = { type = "text", text = text }
+    return prompt
+  end
 
+  ---Render the user's turn in the transcript. The agent doesn't echo our own
+  ---input back (a steered message's replay is consumed agent-side), so this is
+  ---the only place a user message comes from.
+  ---@param text string
+  local function add_user_message(text)
     local exts = session.extensions or {}
-    local msg = Message:new("user", text, {
+    view:add_message(Message:new("user", text, {
       selected_files = vim.deepcopy(selected_files),
       provider = session.provider_name,
       model = exts.model_id,
       mode = exts.mode_id,
       badges = Winbar.get_badges(),
-    })
-    view:add_message(msg)
-    reset_state()
-    Winbar.clear_mode_tag()
-    local token = begin("generating")
+    }))
     if session.session_id then
       Sessions.touch(session.session_id)
       local entry = Sessions.get(session.session_id)
@@ -430,6 +427,14 @@ function M.setup_integration(view, session)
         Sessions.update_title(session.session_id, text:sub(1, 80):gsub("\n", " "))
       end
     end
+  end
+
+  ---Start a fresh turn and own its completion.
+  ---@param prompt table[]
+  local function start_turn(prompt)
+    reset_state()
+    Winbar.clear_mode_tag()
+    local token = begin("generating")
     session:send_prompt(prompt, function(_, err)
       vim.schedule(function()
         if epoch == token then
@@ -441,6 +446,53 @@ function M.setup_integration(view, session)
         view:invalidate()
       end)
     end)
+  end
+
+  ---Hand `text` back to the input buffer so a rejected submit isn't lost.
+  ---@param text string
+  local function restore_input(text)
+    vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, vim.split(text, "\n"))
+    view:set_context_files(view._context_files)
+  end
+
+  view.on_submit = function(text)
+    -- Steering: while a turn is running, deliver the message *into* it instead
+    -- of refusing the submit. Note this deliberately does NOT call begin() — the
+    -- in-flight session/prompt still owns settling the activity state, and
+    -- bumping the epoch would invalidate its callback, stranding the winbar in
+    -- "generating" forever.
+    if session:is_connected() and activity == "generating" and session:supports_steering() then
+      local prompt = build_prompt(text)
+      add_user_message(text)
+      view:invalidate()
+      session:steer(prompt, function(outcome, err)
+        vim.schedule(function()
+          if err then
+            view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
+            view:invalidate()
+            return
+          end
+          -- The turn finished between our check and the request landing. The
+          -- agent left the content untouched precisely so we can send it as a
+          -- normal prompt whose lifecycle we own.
+          if outcome == "promptRequired" then
+            start_turn(prompt)
+          end
+        end)
+      end)
+      return
+    end
+
+    -- Accept input when the transport is up and nothing of ours is in flight.
+    -- "cancelled" is idle-with-tail-suppression, so it accepts input too.
+    if not session:is_connected() or activity == "generating" or activity == "connecting" then
+      vim.notify("[emeth] Session not ready", vim.log.levels.WARN)
+      restore_input(text)
+      return
+    end
+
+    add_user_message(text)
+    start_turn(build_prompt(text))
   end
 
   -- ── Session events ─────────────────────────────────────────────
