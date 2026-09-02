@@ -376,6 +376,65 @@ h.describe("ACPClient _handle_elicitation", function()
   end)
 end)
 
+-- ── steering ───────────────────────────────────────────────────
+
+h.describe("ACPClient steering", function()
+  h.it("reports support from the InitializeResponse _meta, not agentCapabilities", function()
+    local c = make_client()
+    h.eq(false, c:supports_steering(), "no _meta captured yet")
+    -- claude-acp advertises steering on the top-level `_meta`; agentCapabilities
+    -- carries only its own `claudeCode` bag.
+    c.agent_capabilities = { _meta = { claudeCode = {} } }
+    h.eq(false, c:supports_steering())
+    c.agent_meta = { steering = { supported = true } }
+    h.is_true(c:supports_steering())
+  end)
+
+  h.it("treats a present-but-unsupported advertisement as unsupported", function()
+    local c = make_client()
+    c.agent_meta = { steering = { supported = false } }
+    h.eq(false, c:supports_steering())
+    c.agent_meta = { steering = {} }
+    h.eq(false, c:supports_steering())
+  end)
+
+  h.it("sends _session/steering opting in to promptRequired", function()
+    local c, sent = make_client()
+    c:steer("s1", { { type = "text", text = "actually use tabs" } }, function() end)
+    local decoded = vim.json.decode(sent[1])
+    h.eq("_session/steering", decoded.method)
+    h.eq("s1", decoded.params.sessionId)
+    h.eq("actually use tabs", decoded.params.prompt[1].text)
+    -- Without this opt-in an idle agent starts a turn we never get a result for,
+    -- which would strand our activity state.
+    h.eq("promptRequired", decoded.params._meta.steering.idleBehavior)
+  end)
+
+  h.it("reports the outcome back to the caller", function()
+    local c, sent = make_client()
+    local got, got_err = nil, nil
+    c:steer("s1", { { type = "text", text = "x" } }, function(outcome, err)
+      got, got_err = outcome, err
+    end)
+    local id = vim.json.decode(sent[1]).id
+    c:_handle_message({ jsonrpc = "2.0", id = id, result = { outcome = "injected" } })
+    h.eq("injected", got)
+    h.is_nil(got_err)
+  end)
+
+  h.it("surfaces an error instead of an outcome", function()
+    local c, sent = make_client()
+    local got, got_err = nil, nil
+    c:steer("s1", { { type = "text", text = "x" } }, function(outcome, err)
+      got, got_err = outcome, err
+    end)
+    local id = vim.json.decode(sent[1]).id
+    c:_handle_message({ jsonrpc = "2.0", id = id, error = { code = -32000, message = "nope" } })
+    h.is_nil(got)
+    h.eq("nope", got_err.message)
+  end)
+end)
+
 -- ── client capabilities ────────────────────────────────────────
 
 h.describe("ACPClient capabilities", function()
