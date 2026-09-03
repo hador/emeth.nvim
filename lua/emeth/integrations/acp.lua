@@ -16,6 +16,7 @@
 
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
+local PromptQueue = require("emeth.ui.prompt_queue")
 local Roots = require("emeth.integrations.roots")
 local Sessions = require("emeth.sessions")
 local Winbar = require("emeth.ui.winbar")
@@ -55,11 +56,6 @@ function M.setup_integration(view, session)
     return s
   end
   local selected_files = {} ---@type string[]
-  -- FIFO of pending permission requests. Only the head claims the a/A/r/R keys
-  -- at any time, so concurrent requests can't clobber each other's claims.
-  local permission_queue = {} ---@type { tool_call: table, options: table[], callback: fun(option_id: string|nil), prompt_uuid?: string }[]
-  -- FIFO of pending elicitations, same discipline as permissions: only the head
-  -- claims <CR>, so concurrent requests can't clobber each other.
   ---@class acp.PendingElicitation
   ---@field request acp.CreateElicitationRequest
   ---@field callback fun(response: acp.CreateElicitationResponse)
@@ -70,7 +66,7 @@ function M.setup_integration(view, session)
   ---@field rows table<integer, table>  message line offset -> action
   ---@field awaiting_input? string  answer key the input box is currently claimed for
   ---@field prompt_uuid? string
-  local elicitation_queue = {} ---@type acp.PendingElicitation[]
+
   local roots = Roots.attach(view)
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
 
@@ -87,8 +83,11 @@ function M.setup_integration(view, session)
   -- Forward-declared so handlers registered earlier can capture it.
   local render_mode ---@type fun(mode_id: string)
   local render_model ---@type fun()
-  -- Defined with the elicitation UI further down; do_cancel is declared above it.
-  local cancel_elicitations ---@type fun()
+  -- Constructed with the elicitation UI further down; do_cancel is declared
+  -- above it, and the domain helpers below it close over this same upvalue. Every
+  -- caller runs from a handler wired after setup finishes, so it is assigned by
+  -- then — do_cancel still guards, since it is reachable during a failed setup.
+  local elicitations ---@type emeth.PromptQueue
   -- Set while a prompt is waiting for free text from the input box; the next
   -- submission goes here instead of to the agent. Declared up here because
   -- `on_submit` is defined before the elicitation UI that arms it.
@@ -360,8 +359,8 @@ function M.setup_integration(view, session)
     -- (a question answered during the trailing update tail leaves activity
     -- idle). Answering `cancel` aborts the originating tool call cleanly instead
     -- of leaving a prompt nobody intends to answer. No-op when none are open.
-    if cancel_elicitations then
-      cancel_elicitations()
+    if elicitations then
+      elicitations:drain({ action = "cancel" })
     end
 
     if activity == "connecting" then
@@ -898,12 +897,13 @@ function M.setup_integration(view, session)
   --- identity (truncated — kiro titles are the whole command), the count of
   --- other requests waiting, then one line per option.
   ---@param req { tool_call: table, options: table[] }
+  ---@param depth integer  queue depth, for the "N more pending" line
   ---@return string[] lines, string[] keys  keys aligned to req.options order
-  local function permission_lines(req)
+  local function permission_lines(req, depth)
     local tool_name = oneline(req.tool_call.title or req.tool_call.kind or "tool", 60)
     local lines = { "Agent wants permission for: " .. tool_name }
-    if #permission_queue > 1 then
-      lines[#lines + 1] = ("  (%d more pending)"):format(#permission_queue - 1)
+    if depth > 1 then
+      lines[#lines + 1] = ("  (%d more pending)"):format(depth - 1)
     end
     -- Keys must come from the set the view binds permanently, otherwise the
     -- claim would never fire and the option would be unanswerable. The four ACP
@@ -929,57 +929,28 @@ function M.setup_integration(view, session)
     return lines, keys
   end
 
-  -- Activate the request at the head of the queue: render its prompt and claim
-  -- the a/A/r/R keys for it. Only ever one active at a time, so the fixed keys
-  -- can't collide across concurrent requests. Forward-declared for recursion.
-  local activate_permission
-  activate_permission = function()
-    local req = permission_queue[1]
-    if not req then
-      return
-    end
-
-    local lines, keys = permission_lines(req)
-    local prompt_msg = Message:new("system", table.concat(lines, "\n"))
-    view:add_message(prompt_msg)
-    req.prompt_uuid = prompt_msg.uuid
-
-    local function resolve(option_id)
-      view:clear_prompt_keys("permission")
-      view:update_message(prompt_msg.uuid, function(m)
-        m.visible = false
-      end)
-      req.callback(option_id)
-      -- Pop the head and activate the next queued request, if any.
-      table.remove(permission_queue, 1)
-      if permission_queue[1] then
-        activate_permission()
+  -- Answering hides the prompt rather than summarising it: the tool_call card
+  -- rendered directly above already shows what happened to the call.
+  local permissions = PromptQueue.new(view, {
+    owner = "permission",
+    render = function(req, q)
+      local lines, keys = permission_lines(req, q:depth())
+      req.keys = keys
+      return lines
+    end,
+    claims = function(req, q)
+      local claims = {}
+      for i, opt in ipairs(req.options or {}) do
+        local key = req.keys[i]
+        if key then
+          claims[key] = function()
+            q:close(opt.optionId)
+          end
+        end
       end
-    end
-
-    -- Claim rather than bind: these keys are owned permanently by the view, so
-    -- releasing the claim can't delete a binding something else relies on.
-    local claims = {}
-    for i, opt in ipairs(req.options or {}) do
-      claims[keys[i]] = function()
-        resolve(opt.optionId)
-      end
-    end
-    view:set_prompt_keys("permission", claims)
-  end
-
-  -- Re-render the head prompt's pending count when the queue depth changes
-  -- (so the first/active prompt reflects requests that arrived behind it).
-  local function refresh_head_pending()
-    local head = permission_queue[1]
-    if not head or not head.prompt_uuid then
-      return
-    end
-    local lines = permission_lines(head)
-    view:update_message(head.prompt_uuid, function(m)
-      m.content = { { type = "text", text = table.concat(lines, "\n") } }
-    end)
-  end
+      return claims
+    end,
+  })
 
   session:on("permission", function(tool_call, options, callback)
     vim.schedule(function()
@@ -996,16 +967,10 @@ function M.setup_integration(view, session)
         return
       end
 
-      -- Enqueue; only the head request binds keys. This serializes the UI for
-      -- concurrent requests so their fixed a/r keymaps don't overwrite each
-      -- other (which previously left earlier requests unanswerable → hang).
-      permission_queue[#permission_queue + 1] = { tool_call = tool_call, options = options, callback = callback }
-      if #permission_queue == 1 then
-        activate_permission()
-      else
-        -- Something queued behind the active prompt; bump its pending count.
-        refresh_head_pending()
-      end
+      -- Only the head claims keys. That serializes the UI for concurrent
+      -- requests so their fixed a/r claims can't overwrite each other (which
+      -- previously left earlier requests unanswerable → hang).
+      permissions:push({ tool_call = tool_call, options = options, callback = callback })
     end)
   end)
 
@@ -1019,8 +984,9 @@ function M.setup_integration(view, session)
   ---Row keys are 1-based offsets within the rendered message, which line up
   ---1:1 with this array because system messages render one row per text line.
   ---@param req acp.PendingElicitation
+  ---@param depth integer  queue depth, for the "N more waiting" line
   ---@return string[] lines, table<integer, table> rows
-  local function elicitation_lines(req)
+  local function elicitation_lines(req, depth)
     local field = req.fields[req.index]
     local lines = {}
     local rows = {}
@@ -1033,8 +999,8 @@ function M.setup_integration(view, session)
       header = ("%s  (%d/%d)"):format(header, req.index, #req.fields)
     end
     lines[#lines + 1] = "❓ " .. header
-    if #elicitation_queue > 1 then
-      lines[#lines + 1] = ("  (%d more waiting)"):format(#elicitation_queue - 1)
+    if depth > 1 then
+      lines[#lines + 1] = ("  (%d more waiting)"):format(depth - 1)
     end
 
     -- A field's own title/description only add value when they aren't already
@@ -1098,29 +1064,6 @@ function M.setup_integration(view, session)
     return lines, rows
   end
 
-  local activate_elicitation
-  local function elicitation_badge()
-    if #elicitation_queue > 0 then
-      Winbar.set_badge("ask", "❓ input needed")
-    else
-      Winbar.clear_badge("ask")
-    end
-  end
-
-  ---Re-render the head prompt in place (selection changed, expanded, or the
-  ---queue depth moved).
-  local function refresh_elicitation()
-    local req = elicitation_queue[1]
-    if not req or not req.prompt_uuid then
-      return
-    end
-    local lines, rows = elicitation_lines(req)
-    req.rows = rows
-    view:update_message(req.prompt_uuid, function(m)
-      m.content = { { type = "text", text = table.concat(lines, "\n") } }
-    end)
-  end
-
   ---Collapse an answered prompt into a one-line-per-answer record. Leaving the
   ---live prompt in place would keep offering "skip" and "press <CR>" on a
   ---question that is already closed.
@@ -1155,43 +1098,15 @@ function M.setup_integration(view, session)
     return table.concat(lines, "\n")
   end
 
-  ---Finish the head request and start the next one.
-  ---@param response acp.CreateElicitationResponse
-  local function finish_elicitation(response)
-    local req = table.remove(elicitation_queue, 1)
-    if not req then
-      return
-    end
-    view:clear_prompt_keys("elicitation")
-    -- Never leave the input box hijacked: an armed capture would swallow the
-    -- user's next real prompt.
-    if req.awaiting_input then
-      req.awaiting_input = nil
-      input_capture = nil
-    end
-    if req.prompt_uuid then
-      local summary = elicitation_summary(req, response)
-      view:update_message(req.prompt_uuid, function(m)
-        m.metadata.on_expand = nil
-        m.content = { { type = "text", text = summary } }
-      end)
-    end
-    pcall(req.callback, response)
-    elicitation_badge()
-    if elicitation_queue[1] then
-      activate_elicitation()
-    end
-  end
-
   ---Accept if we have everything required, otherwise decline — an accept
   ---carrying blanks would look like a real answer to the agent.
   local function submit_elicitation(req)
     local Elicit = require("emeth.acp.elicitation")
     if not Elicit.is_complete(req.fields, req.answers) then
-      finish_elicitation({ action = "decline" })
+      elicitations:close({ action = "decline" })
       return
     end
-    finish_elicitation({ action = "accept", content = Elicit.to_content(req.fields, req.answers) })
+    elicitations:close({ action = "accept", content = Elicit.to_content(req.fields, req.answers) })
   end
 
   ---Move to the next unanswered field, or submit when the form is done.
@@ -1207,12 +1122,12 @@ function M.setup_integration(view, session)
       return
     end
     req.expanded = false
-    refresh_elicitation()
+    elicitations:refresh()
   end
 
   ---Act on the row under the cursor.
   local function on_elicitation_cr()
-    local req = elicitation_queue[1]
+    local req = elicitations:head()
     if not req then
       return
     end
@@ -1236,7 +1151,7 @@ function M.setup_integration(view, session)
     if action.kind == "skip" then
       -- Skipping any field abandons the whole form: the agent reads `decline`
       -- as "the user chose not to answer", which is exactly what happened.
-      finish_elicitation({ action = "decline" })
+      elicitations:close({ action = "decline" })
     elseif action.kind == "submit" then
       advance_elicitation(req)
     elseif action.kind == "bool" then
@@ -1258,7 +1173,7 @@ function M.setup_integration(view, session)
           list[#list + 1] = action.value
         end
         req.answers[field.key] = list
-        refresh_elicitation()
+        elicitations:refresh()
       else
         req.answers[field.key] = action.value
         advance_elicitation(req)
@@ -1275,66 +1190,46 @@ function M.setup_integration(view, session)
           req.answers[key] = text
           advance_elicitation(req)
         else
-          refresh_elicitation()
+          elicitations:refresh()
         end
       end
-      refresh_elicitation()
+      elicitations:refresh()
       view:focus_input()
     end
   end
 
-  activate_elicitation = function()
-    local req = elicitation_queue[1]
-    if not req then
-      return
-    end
-    local lines, rows = elicitation_lines(req)
-    req.rows = rows
-    local prompt = Message:new("system", table.concat(lines, "\n"), {
-      -- Picked up by the result buffer's K handler.
-      on_expand = function()
-        req.expanded = not req.expanded
-        local l, r = elicitation_lines(req)
-        req.rows = r
-        local m = view:get_message(req.prompt_uuid)
-        if m then
-          m.content = { { type = "text", text = table.concat(l, "\n") } }
-        end
-      end,
-    })
-    view:add_message(prompt)
-    req.prompt_uuid = prompt.uuid
-
-    -- Claim <CR> rather than binding it: the view owns it permanently, so
-    -- releasing the claim restores its default instead of deleting the mapping.
-    view:set_prompt_keys("elicitation", { ["<CR>"] = on_elicitation_cr })
-    elicitation_badge()
-  end
-
-  -- Drain every pending question, answering `cancel` (the turn is going away,
-  -- so the originating tool call should abort rather than proceed answerless).
-  -- Drains directly rather than looping finish_elicitation, which would render
-  -- each queued prompt on its way to killing it.
-  cancel_elicitations = function()
-    if not elicitation_queue[1] then
-      return
-    end
-    local queued = elicitation_queue
-    elicitation_queue = {}
-    view:clear_prompt_keys("elicitation")
-    input_capture = nil
-    for _, req in ipairs(queued) do
-      if req.prompt_uuid then
-        local summary = elicitation_summary(req, { action = "cancel" })
-        view:update_message(req.prompt_uuid, function(m)
-          m.metadata.on_expand = nil
-          m.content = { { type = "text", text = summary } }
-        end)
+  elicitations = PromptQueue.new(view, {
+    owner = "elicitation",
+    render = function(req, q)
+      local lines, rows = elicitation_lines(req, q:depth())
+      req.rows = rows
+      return lines
+    end,
+    claims = function()
+      return { ["<CR>"] = on_elicitation_cr }
+    end,
+    close = elicitation_summary,
+    on_expand = function(req, q)
+      req.expanded = not req.expanded
+      -- Inline: the view repaints the message itself right after this returns.
+      q:refresh(true)
+    end,
+    on_detach = function(req)
+      -- Never leave the input box hijacked: an armed capture would swallow the
+      -- user's next real prompt.
+      if req.awaiting_input then
+        req.awaiting_input = nil
+        input_capture = nil
       end
-      pcall(req.callback, { action = "cancel" })
-    end
-    elicitation_badge()
-  end
+    end,
+    on_change = function(q)
+      if q:depth() > 0 then
+        Winbar.set_badge("ask", "❓ input needed")
+      else
+        Winbar.clear_badge("ask")
+      end
+    end,
+  })
 
   session:on("elicitation", function(request, callback)
     vim.schedule(function()
@@ -1372,12 +1267,7 @@ function M.setup_integration(view, session)
         req.index = req.index + 1
       end
 
-      elicitation_queue[#elicitation_queue + 1] = req
-      if #elicitation_queue == 1 then
-        activate_elicitation()
-      else
-        refresh_elicitation()
-      end
+      elicitations:push(req)
       -- The transcript prompt and the winbar badge are both invisible when the
       -- sidebar is closed, and the agent stays blocked until it's answered — so
       -- that case needs an out-of-band nudge.
