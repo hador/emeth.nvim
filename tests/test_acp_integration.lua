@@ -553,6 +553,36 @@ h.describe("acp integration: session_info_update", function()
   end)
 end)
 
+h.describe("acp integration: current_mode_update", function()
+  -- The handler reaches `render_mode` through a wrapper, because the real one is
+  -- assigned further down setup_integration than the dispatch table is built.
+  -- Nothing else covers that indirection: pass the function directly (nil at
+  -- build time) and the mode would silently stop rendering.
+  h.it("renders the new mode and records it on the session", function()
+    local session, view = make_setup()
+    local badges = {}
+    local restore = Winbar.set_badge
+    Winbar.set_badge = function(key, text)
+      badges[key] = text
+    end
+
+    session:_emit("update", { sessionUpdate = "current_mode_update", currentModeId = "plan" })
+    flush()
+    Winbar.set_badge = restore
+
+    h.eq("plan", (session.extensions or {}).mode_id)
+    h.eq("plan", badges.mode, "render_mode should have pushed the mode badge")
+    h.eq(0, #view.messages, "a mode change is winbar-only, not a transcript entry")
+  end)
+
+  h.it("ignores an update with no currentModeId", function()
+    local session = make_setup()
+    session:_emit("update", { sessionUpdate = "current_mode_update" })
+    flush()
+    h.is_nil((session.extensions or {}).mode_id)
+  end)
+end)
+
 h.describe("acp integration: error event", function()
   h.it("appends an error system message", function()
     local session, view = make_setup()
