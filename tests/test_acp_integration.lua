@@ -893,6 +893,21 @@ h.describe("acp integration: permission queue", function()
     h.is_true(head:text():find("1 more pending") ~= nil, "head prompt should report 1 pending")
   end)
 
+  -- Regression: the claims have to go when the queue empties, not just get
+  -- replaced by the next request's. A lingering claim leaves the key hijacked by
+  -- an already-answered prompt, so `r` would never fall through to retry again.
+  h.it("releases its key claims once the last request is answered", function()
+    local _, view, resolved, request = perm_setup()
+    request({ toolCallId = "t1", title = "Read a.lua" }, OPTS)
+    flush()
+    h.is_true(press_on(view, "a"), "allow key claimed while pending")
+    h.eq(1, #resolved)
+
+    h.eq(false, press_on(view, "a"), "claim should be released after answering")
+    h.eq(false, press_on(view, "r"), "no reject claim should linger either")
+    h.eq(1, #resolved, "a released key must not resolve anything a second time")
+  end)
+
   h.it("preserves FIFO order across three requests", function()
     local _, view, resolved, request = perm_setup()
     request({ toolCallId = "t1" }, OPTS)
@@ -1155,6 +1170,21 @@ h.describe("acp integration: elicitation", function()
     h.eq(1, #replies)
     h.eq("accept", replies[1].action)
     h.eq({ choice = "b" }, replies[1].content)
+  end)
+
+  -- Regression: <CR> is the confirm key the view owns permanently. A claim left
+  -- behind by an answered question would swallow it, costing <CR> its normal
+  -- line-down motion in the transcript.
+  h.it("releases the <CR> claim once the question is answered", function()
+    local _, view, replies, ask = elicit_setup()
+    ask(TWO_OPTIONS)
+    flush()
+    view._cursor_offset = ROW_B
+    h.is_true(press_on(view, "<CR>"), "<CR> claimed while the question is open")
+    h.eq(1, #replies)
+
+    h.eq(false, press_on(view, "<CR>"), "claim should be released after answering")
+    h.eq(1, #replies, "a released <CR> must not answer a second time")
   end)
 
   h.it("declines when the skip line is chosen", function()
