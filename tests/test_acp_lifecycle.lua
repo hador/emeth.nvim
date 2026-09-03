@@ -625,4 +625,63 @@ h.describe("acp integration: session id at every boundary", function()
   end)
 end)
 
+-- Every lifecycle path builds its request options from the same `lifecycle_opts`
+-- (roots + session meta), so a path that forgets to forward them silently resumes
+-- without the additional directories the user added. `load_session` did exactly
+-- that: `session:load` takes `(id, opts, cb)`, and it was calling `(id, cb)`.
+h.describe("acp integration: lifecycle options reach every load path", function()
+  ---`roots:add` rejects anything that isn't a real directory, so the fixture has
+  ---to exist on disk, and is compared back in the normalised form `add` stores.
+  ---@return string
+  local function real_dir()
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    return (vim.fn.fnamemodify(dir, ":p"):gsub("/$", ""))
+  end
+
+  ---Capture the opts a load path forwards to the session.
+  ---@return table|nil opts, boolean called
+  local function capture_load(dir, fn)
+    local session, _, integration = make_setup()
+    local seen, called = nil, false
+    session.load = function(_, _session_id, opts, cb)
+      called = true
+      -- Mirror Session:load's own arg normalisation, so a path passing (id, cb)
+      -- is recorded as forwarding no opts rather than erroring here.
+      if type(opts) == "function" then
+        opts, cb = nil, opts
+      end
+      seen = opts
+      if cb then
+        cb(nil)
+      end
+    end
+    session.connect_and_load = session.load
+    integration.add_root(dir)
+    fn(integration)
+    flush()
+    return seen, called
+  end
+
+  h.it("forwards added roots when resuming by id", function()
+    local dir = real_dir()
+    local opts, called = capture_load(dir, function(integration)
+      integration.load_session("sess-resume")
+    end)
+    h.is_true(called, "session:load was never reached")
+    h.is_true(opts ~= nil, "resume dropped its lifecycle options entirely")
+    h.eq({ dir }, opts.additional_directories)
+  end)
+
+  h.it("forwards added roots when connecting and loading", function()
+    local dir = real_dir()
+    local opts, called = capture_load(dir, function(integration)
+      integration.connect_and_load("sess-resume")
+    end)
+    h.is_true(called)
+    h.is_true(opts ~= nil, "connect_and_load dropped its lifecycle options")
+    h.eq({ dir }, opts.additional_directories)
+  end)
+end)
+
 restore()
