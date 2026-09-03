@@ -212,6 +212,436 @@ h.describe("Render", function()
   end)
 end)
 
+-- The sidebar wraps, so an unclamped header is not "one line" -- Bash sends the
+-- entire command as its title, and an inline heredoc script was costing over a
+-- hundred screen rows for a row that reads as collapsed.
+h.describe("render: oversized tool headers", function()
+  local SCRIPT = 'python3 -c "\nimport sys\nprint(sys.path)\nfor i in range(10):\n    print(i)\n"'
+
+  local function bash_msg(command, extra)
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = "Bash",
+      id = "b1",
+      input = { command = command },
+      status = "completed",
+    }, { tool_call = { toolCallId = "b1", status = "completed", title = command } })
+    for k, v in pairs(extra or {}) do
+      msg.metadata[k] = v
+    end
+    return msg
+  end
+
+  h.it("keeps a collapsed row to a single line", function()
+    local lines = Render.render_message(bash_msg(SCRIPT), {})
+    local content = vim.tbl_filter(function(l)
+      return tostring(l) ~= ""
+    end, lines)
+    h.eq(1, #content, "collapsed tool row must be one line, got: " .. vim.inspect(vim.tbl_map(tostring, lines)))
+  end)
+
+  h.it("shows the first physical line, not the flattened whole", function()
+    local text = tostring(Render.render_message(bash_msg(SCRIPT), {})[1])
+    h.is_true(text:find('python3 -c "', 1, true) ~= nil, "lost the invocation: " .. text)
+    h.is_true(text:find("import sys", 1, true) == nil, "later lines must not be inlined: " .. text)
+  end)
+
+  h.it("reports how many lines it withheld", function()
+    local text = tostring(Render.render_message(bash_msg(SCRIPT), {})[1])
+    -- SCRIPT has 5 newlines and no trailing one, so 5 lines are out of sight.
+    h.is_true(text:find("+5 lines", 1, true) ~= nil, "expected a withheld count: " .. text)
+  end)
+
+  h.it("says nothing about withheld lines for an ordinary one-line command", function()
+    local text = tostring(Render.render_message(bash_msg("ls -la"), {})[1])
+    h.is_true(text:find("line", 1, true) == nil, "clean row picked up a marker: " .. text)
+  end)
+
+  h.it("singularizes a single withheld line", function()
+    local text = tostring(Render.render_message(bash_msg("echo a\necho b"), {})[1])
+    h.is_true(text:find("+1 line", 1, true) ~= nil, text)
+    h.is_true(text:find("+1 lines", 1, true) == nil, "no plural for one")
+  end)
+
+  h.it("does not count a trailing newline as a withheld line", function()
+    local text = tostring(Render.render_message(bash_msg("ls -la\n"), {})[1])
+    h.is_true(text:find("line", 1, true) == nil, "trailing newline hides nothing: " .. text)
+  end)
+
+  h.it("clamps a long single-line command to the configured budget", function()
+    local long = "grep -rn " .. string.rep("x", 400)
+    local text = tostring(Render.render_message(bash_msg(long), {})[1])
+    h.is_true(text:find("…", 1, true) ~= nil, "expected an ellipsis: " .. text)
+    -- Budget (100) plus the box, icon and ellipsis -- nowhere near the 409 raw.
+    h.is_true(vim.fn.strchars(text) < 120, "header still oversized: " .. vim.fn.strchars(text))
+  end)
+
+  h.it("clamps on characters, not bytes, so multibyte text is not split", function()
+    local long = string.rep("é", 400)
+    local text = tostring(Render.render_message(bash_msg(long), {})[1])
+    h.eq(text, vim.fn.strcharpart(text, 0), "header must stay valid utf-8")
+    h.is_true(vim.fn.strchars(text) < 120, "header still oversized")
+  end)
+
+  h.it("prints a command that doubles as the title only once", function()
+    local text = tostring(Render.render_message(bash_msg("ls -la /tmp"), {})[1])
+    local _, count = text:gsub("ls %-la /tmp", "")
+    h.eq(1, count, "command printed twice: " .. text)
+  end)
+
+  h.it("still shows a param that is not already in the title", function()
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = "Read",
+      id = "r1",
+      input = { path = "/tmp/a.lua" },
+      status = "completed",
+    }, { tool_call = { toolCallId = "r1", status = "completed", title = "Read a file" } })
+    local text = tostring(Render.render_message(msg, {})[1])
+    h.is_true(text:find("Read a file", 1, true) ~= nil, text)
+    h.is_true(text:find("/tmp/a.lua", 1, true) ~= nil, "param was dropped: " .. text)
+  end)
+
+  -- Clamping the header removed the only place a long command ever appeared: a
+  -- tool's body is its output, not its invocation. Expanding has to bring it back
+  -- or the command is unreachable at every expand state.
+  h.describe("expanding reaches the command the header cut", function()
+    local function expanded(msg)
+      msg.metadata._expanded = true
+      return table.concat(vim.tbl_map(tostring, Render.render_message(msg, {})), "\n")
+    end
+
+    h.it("shows every line of a multi-line command", function()
+      local out = expanded(bash_msg(SCRIPT))
+      h.is_true(out:find("import sys", 1, true) ~= nil, "lost the script body: " .. out)
+      h.is_true(out:find("print(sys.path)", 1, true) ~= nil, out)
+      h.is_true(out:find("for i in range(10):", 1, true) ~= nil, out)
+    end)
+
+    h.it("shows a long single-line command in full, unelided", function()
+      local long = "grep -rn " .. string.rep("x", 400)
+      local out = expanded(bash_msg(long))
+      h.is_true(out:find(long, 1, true) ~= nil, "command was not restored in full")
+    end)
+
+    h.it("does not repeat a command that already fit in the header", function()
+      local out = expanded(bash_msg("ls -la"))
+      local _, count = out:gsub("ls %-la", "")
+      h.eq(1, count, "short command echoed twice: " .. out)
+    end)
+
+    h.it("keeps the command above the output", function()
+      local msg = bash_msg(SCRIPT)
+      msg.metadata.tool_call.content =
+        { { type = "content", content = { type = "text", text = "OUTPUT_MARKER" } } }
+      local out = expanded(msg)
+      local cmd_at = out:find("import sys", 1, true)
+      local out_at = out:find("OUTPUT_MARKER", 1, true)
+      h.is_true(cmd_at ~= nil and out_at ~= nil, "expected both: " .. out)
+      h.is_true(cmd_at < out_at, "command must come before its output")
+    end)
+
+    -- The fence line already names the file, so restoring a clamped path above
+    -- the diff would print it twice and give back the height the clamp saved.
+    h.it("does not repeat a long path the diff fence already shows", function()
+      local long = "/tmp/" .. string.rep("deep/", 30) .. "x.lua"
+      local msg = Message:new("assistant", {
+        type = "tool_use",
+        name = "Edit",
+        id = "p1",
+        input = { path = long, old_str = "a\nb\nc", new_str = "a\nX\nc" },
+        status = "completed",
+      }, { tool_call = { toolCallId = "p1", status = "completed", title = long } })
+      msg.metadata._expanded = true
+      local out = table.concat(vim.tbl_map(tostring, Render.render_message(msg, {})), "\n")
+      local _, count = out:gsub(vim.pesc(long), "")
+      h.eq(1, count, "path printed " .. count .. " times: " .. out)
+    end)
+
+    -- The fence label usually comes from a content diff's own `path`, not from
+    -- `rawInput.path` (frequently absent). Looking only at rawInput misses it, and
+    -- the header's absolute path then gets restored above a fence already naming it.
+    h.it("dedupes against a path carried on the content diff", function()
+      local long = "/Volumes/ws/" .. string.rep("deep/", 30) .. "Executor.kt"
+      local msg = Message:new("assistant", {
+        type = "tool_use",
+        name = "Edit",
+        id = "p2",
+        input = { file_path = long },
+        status = "completed",
+      }, {
+        tool_call = {
+          toolCallId = "p2",
+          status = "completed",
+          title = "Edit Executor.kt",
+          content = { { type = "diff", path = long, oldText = "a\nb\nc", newText = "a\nX\nc" } },
+        },
+      })
+      msg.metadata._expanded = true
+      local out = table.concat(vim.tbl_map(tostring, Render.render_message(msg, {})), "\n")
+      local _, count = out:gsub(vim.pesc(long), "")
+      h.eq(1, count, "path printed " .. count .. " times: " .. out)
+    end)
+
+    h.it("keeps the path out of the header when the fence already names it", function()
+      local path = "/Volumes/ws/src/Executor.kt"
+      local msg = Message:new("assistant", {
+        type = "tool_use",
+        name = "Edit",
+        id = "p3",
+        input = { path = path },
+        status = "completed",
+      }, {
+        tool_call = {
+          toolCallId = "p3",
+          status = "completed",
+          title = "Edit Executor.kt",
+          content = { { type = "diff", path = path, oldText = "a\nb\nc", newText = "a\nX\nc" } },
+        },
+      })
+      local header = tostring(Render.render_message(msg, {})[1])
+      h.is_true(header:find(path, 1, true) == nil, "path duplicated into the header: " .. header)
+      h.is_true(header:find("Edit Executor.kt", 1, true) ~= nil, "lost the title: " .. header)
+    end)
+
+    -- Deliberately not the path: `diff_to_lines` puts the path on the fence line,
+    -- so a path-based title would pass whether or not the box restores it.
+    h.it("restores a cut title on a diff too", function()
+      local title = "Rewrite the config\nsecond line of the title"
+      local msg = Message:new("assistant", {
+        type = "tool_use",
+        name = "Write",
+        id = "w9",
+        input = { path = "/tmp/x.lua", old_str = "a\nb\nc", new_str = "a\nX\nc" },
+        status = "completed",
+      }, { tool_call = { toolCallId = "w9", status = "completed", title = title } })
+      local out = expanded(msg)
+      h.is_true(out:find("second line of the title", 1, true) ~= nil, "cut title unreachable: " .. out)
+    end)
+  end)
+
+  h.it("honours tool_header_max_chars", function()
+    local emeth = package.loaded["emeth"]
+    local long = "grep -rn " .. string.rep("x", 400)
+    emeth.config.tool_header_max_chars = 20
+        local short = vim.fn.strchars(tostring(Render.render_message(bash_msg(long), {})[1]))
+    emeth.config.tool_header_max_chars = 200
+    local wide = vim.fn.strchars(tostring(Render.render_message(bash_msg(long), {})[1]))
+    emeth.config.tool_header_max_chars = nil
+    h.is_true(wide > short, ("config ignored: %d vs %d"):format(wide, short))
+  end)
+end)
+
+-- The model sends a one-line summary of what a call is for alongside the command
+-- (`rawInput.description`). It's short, it says intent, and it makes a far better
+-- header than any truncation of the command -- which then goes in the body in full.
+h.describe("render: model-supplied summary as the header", function()
+  local function exec_msg(opts)
+    local input = { command = opts.command }
+    if opts.desc then
+      input.description = opts.desc
+    end
+    return Message:new("assistant", {
+      type = "tool_use",
+      name = "execute",
+      id = "e1",
+      input = input,
+      status = "completed",
+    }, {
+      tool_call = {
+        toolCallId = "e1",
+        kind = opts.kind or "execute",
+        status = "completed",
+        title = opts.command,
+        content = opts.output and { { type = "content", content = { type = "text", text = opts.output } } } or nil,
+      },
+    })
+  end
+
+  local function render(msg)
+    return table.concat(vim.tbl_map(tostring, Render.render_message(msg, {})), "\n")
+  end
+
+  local function expand(msg)
+    msg.metadata._expanded = true
+    return render(msg)
+  end
+
+  h.it("labels the collapsed row with the summary, not the command", function()
+    local row = tostring(Render.render_message(
+      exec_msg({ command = "grep -rn foo src/ | head -50", desc = "Find the cache API" }),
+      {}
+    )[1])
+    h.is_true(row:find("Find the cache API", 1, true) ~= nil, "summary missing: " .. row)
+    h.is_true(row:find("grep -rn", 1, true) == nil, "command should not be in the header: " .. row)
+  end)
+
+  h.it("keeps that row to one line even for a huge command", function()
+    local msg = exec_msg({ command = "python3 -c \"\n" .. string.rep("print(1)\n", 200) .. '"', desc = "Run a script" })
+    local content = vim.tbl_filter(function(l)
+      return tostring(l) ~= ""
+    end, Render.render_message(msg, {}))
+    h.eq(1, #content)
+  end)
+
+  h.it("falls back to the command when no summary was sent", function()
+    local row = tostring(Render.render_message(exec_msg({ command = "ls -la /tmp" }), {})[1])
+    h.is_true(row:find("ls -la /tmp", 1, true) ~= nil, row)
+  end)
+
+  h.it("ignores a multi-line description, which would defeat the point", function()
+    local row = tostring(Render.render_message(
+      exec_msg({ command = "ls -la", desc = "line one\nline two" }),
+      {}
+    )[1])
+    h.is_true(row:find("line two", 1, true) == nil, "multi-line summary leaked into the header: " .. row)
+    h.is_true(row:find("ls -la", 1, true) ~= nil, "should have fallen back to the command: " .. row)
+  end)
+
+  h.it("shows the command in full in the body, since the header no longer has it", function()
+    local cmd = "grep -rn foo src/ | head -50"
+    local out = expand(exec_msg({ command = cmd, desc = "Find the cache API" }))
+    h.is_true(out:find(cmd, 1, true) ~= nil, "command unreachable: " .. out)
+  end)
+
+  -- Column 0 is the point: markdown treesitter only opens a fence after at most
+  -- three spaces of indent, so a decorated body could never be highlighted.
+  h.it("fences the command as shell at column zero for an execute tool", function()
+    local out = expand(exec_msg({ command = "ls -la", desc = "List files" }))
+    h.is_true(out:find("\n```bash\n", 1, true) ~= nil, "expected an unindented bash fence: " .. out)
+  end)
+
+  h.it("does not claim shell for a non-execute tool", function()
+    local out = expand(exec_msg({ command = "SELECT 1", desc = "Query", kind = "other" }))
+    h.is_true(out:find("```bash", 1, true) == nil, "bash fence on a non-execute tool: " .. out)
+  end)
+
+  h.it("escalates the fence when the command contains backticks", function()
+    local out = expand(exec_msg({ command = 'echo "```oops```"', desc = "Echo" }))
+    h.is_true(out:find("````bash", 1, true) ~= nil, "fence must outrun the content: " .. out)
+  end)
+
+  h.it("divides the command from the output", function()
+    local out = expand(exec_msg({ command = "ls", desc = "List", output = "a.txt" }))
+    h.is_true(out:find("├─ output", 1, true) ~= nil, "expected a divider: " .. out)
+    h.is_true(out:find("ls", 1, true) < out:find("├─ output", 1, true), "divider must follow the command")
+    h.is_true(out:find("├─ output", 1, true) < out:find("a.txt", 1, true), "divider must precede the output")
+  end)
+
+  h.it("skips the divider when there is no command block above it", function()
+    local msg = exec_msg({ command = "ls", output = "a.txt" })
+    -- No summary and a short command, so the header shows it and the body is
+    -- output only -- nothing to divide from.
+    local out = expand(msg)
+    h.is_true(out:find("├─ output", 1, true) == nil, "divider with nothing above it: " .. out)
+  end)
+
+  -- Agents send output pre-fenced 63% of the time; re-wrapping would nest fences
+  -- and highlight neither block.
+  h.it("passes pre-fenced output through without nesting a second fence", function()
+    local out = expand(exec_msg({ command = "ls", desc = "List", output = "```console\na.txt\n```" }))
+    local _, fences = out:gsub("```console", "")
+    h.eq(1, fences, "console fence duplicated: " .. out)
+    h.is_true(out:find("````console", 1, true) == nil, "output got re-wrapped: " .. out)
+  end)
+end)
+
+-- `Write` sends an empty oldText, so the whole file arrives as one hunk. Left
+-- unfolded that buries the conversation; `Edit`'s few-line hunks are the case
+-- worth keeping inline.
+h.describe("render: diff folding", function()
+  local function diff_msg(old, new)
+    return Message:new("assistant", {
+      type = "tool_use",
+      name = "Write",
+      id = "d1",
+      input = { path = "/tmp/big.lua", old_str = old, new_str = new },
+      status = "completed",
+    }, { tool_call = { toolCallId = "d1", status = "completed", title = "/tmp/big.lua" } })
+  end
+
+  local function big()
+    local body = {}
+    for i = 1, 200 do
+      body[i] = "line " .. i
+    end
+    return diff_msg("", table.concat(body, "\n"))
+  end
+
+  local function render(msg)
+    return table.concat(vim.tbl_map(tostring, Render.render_message(msg, {})), "\n")
+  end
+
+  h.it("folds a whole-file write by default", function()
+    local msg = big()
+    local out = render(msg)
+    h.is_true(out:find("┏━", 1, true) == nil, "big diff should not be expanded")
+    h.is_true(out:find("line 150", 1, true) == nil, "diff body leaked into a folded row")
+  end)
+
+  h.it("says how many diff lines it folded away", function()
+    h.is_true(render(big()):find("+20", 1, true) ~= nil, "expected a withheld count: " .. render(big()))
+  end)
+
+  h.it("keeps a small edit hunk inline", function()
+    local out = render(diff_msg("a\nb\nc", "a\nX\nc"))
+    h.is_true(out:find("┏━", 1, true) ~= nil, "small diff must stay expanded: " .. out)
+    h.is_true(out:find("+ a?X", 1, false) ~= nil or out:find("X", 1, true) ~= nil, out)
+  end)
+
+  h.it("expands a folded diff once asked", function()
+    local msg = big()
+    msg.metadata._expanded = true
+    local out = render(msg)
+    h.is_true(out:find("┏━", 1, true) ~= nil, "expected the heavy box back")
+    h.is_true(out:find("line 150", 1, true) ~= nil, "expected the full body")
+  end)
+
+  h.it("folds a small diff once asked", function()
+    local msg = diff_msg("a\nb\nc", "a\nX\nc")
+    msg.metadata._expanded = false
+    local out = render(msg)
+    h.is_true(out:find("┏━", 1, true) == nil, "explicit collapse ignored: " .. out)
+  end)
+
+  h.it("honours diff_collapse_lines", function()
+    local emeth = package.loaded["emeth"]
+    local msg = diff_msg("a\nb\nc", "a\nX\nc")
+    emeth.config.diff_collapse_lines = 1
+    local folded = render(msg)
+    emeth.config.diff_collapse_lines = nil
+    h.is_true(folded:find("┏━", 1, true) == nil, "config ignored: " .. folded)
+  end)
+
+  -- `K` flips `_expanded`, which starts nil. A small diff is already on screen
+  -- at that point, so the keymap has to ask what's rendered rather than assume
+  -- the field means "collapsed".
+  h.describe("is_expanded reports the effective state", function()
+    h.it("true for a small diff that has never been toggled", function()
+      h.eq(true, Render.is_expanded(diff_msg("a\nb\nc", "a\nX\nc")))
+    end)
+
+    h.it("false for a big diff that has never been toggled", function()
+      h.eq(false, Render.is_expanded(big()))
+    end)
+
+    h.it("false for a non-diff tool call", function()
+      local msg = Message:new(
+        "assistant",
+        { type = "tool_use", name = "Bash", id = "x1", input = { command = "ls" }, status = "completed" },
+        { tool_call = { toolCallId = "x1", status = "completed" } }
+      )
+      h.eq(false, Render.is_expanded(msg))
+    end)
+
+    h.it("defers to an explicit toggle", function()
+      local msg = big()
+      msg.metadata._expanded = true
+      h.eq(true, Render.is_expanded(msg))
+    end)
+  end)
+end)
+
 h.describe("render: subagent nesting", function()
   local function tool_msg(opts)
     return Message:new("assistant", {
