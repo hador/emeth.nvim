@@ -90,6 +90,13 @@ local function make_view()
     return true
   end
 
+  -- Real impl scans windows for the result buffer. Tests flip `_visible` to say
+  -- whether the sidebar is on screen; the default matches the common case.
+  view._visible = true
+  function view:is_visible()
+    return self._visible
+  end
+
   -- Transient-prompt key claims. The real view binds these keys once and
   -- dispatches to registered owners; the mock just records the claims so
   -- `press` can walk them. Dispatch semantics (first owner wins, fallback to
@@ -1200,6 +1207,42 @@ h.describe("acp integration: elicitation", function()
     h.eq(1, #replies)
     h.eq("accept", replies[1].action)
     h.eq({ choice = "b" }, replies[1].content)
+  end)
+
+  -- The prompt and the winbar badge are both off-screen with the sidebar closed,
+  -- and the agent stays blocked until the question is answered — so that case is
+  -- the one place an elicitation has to reach outside the transcript.
+  h.it("nudges out of band when the sidebar is closed", function()
+    local _, view, _, ask = elicit_setup()
+    local notes = {}
+    local restore = vim.notify
+    vim.notify = function(msg)
+      notes[#notes + 1] = msg
+    end
+
+    view._visible = false
+    ask(TWO_OPTIONS)
+    flush()
+    vim.notify = restore
+
+    h.eq(1, #notes, "a blocked question behind a closed sidebar should notify")
+    h.is_true(notes[1]:find(":Emeth") ~= nil, "the nudge should say how to get to it")
+  end)
+
+  h.it("stays quiet when the sidebar is already showing", function()
+    local _, view, _, ask = elicit_setup()
+    local notes = {}
+    local restore = vim.notify
+    vim.notify = function(msg)
+      notes[#notes + 1] = msg
+    end
+
+    view._visible = true
+    ask(TWO_OPTIONS)
+    flush()
+    vim.notify = restore
+
+    h.eq(0, #notes, "the inline prompt is visible; no nudge needed")
   end)
 
   -- Regression: <CR> is the confirm key the view owns permanently. A claim left
