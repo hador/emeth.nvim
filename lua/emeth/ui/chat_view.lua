@@ -186,7 +186,10 @@ function ChatView:new(opts)
       if msg.content then
         for _, item in ipairs(msg.content) do
           if item.type == "tool_use" then
-            msg.metadata._expanded = not msg.metadata._expanded
+            -- Toggle away from what's on screen, not from `_expanded` itself:
+            -- a small diff renders expanded while still nil, so flipping the
+            -- raw field would leave it expanded and make K look broken.
+            msg.metadata._expanded = not Render.is_expanded(msg)
             invalidate_msg(msg)
             return
           end

@@ -18,6 +18,8 @@
 ---@field paste_fold_min_chars number
 ---@field show_title? boolean
 ---@field slow_connect_ms number
+---@field tool_header_max_chars number
+---@field diff_collapse_lines number
 ---@field claude_code? chat_ui.ClaudeCodeConfig
 
 ---@class chat_ui.Module
@@ -63,6 +65,16 @@ local defaults = {
   -- After this many ms still connecting, post a nudge that the connect is slow
   -- and can be aborted with <C-c>. Set to 0 to disable the nudge.
   slow_connect_ms = 10000,
+  -- A collapsed tool row should read as one line, but the sidebar wraps and some
+  -- agents send the whole command as the tool's title -- an inline script then
+  -- costs a hundred-plus screen rows for a row that looks collapsed. Clamp the
+  -- header to its first line at this many characters; `K` reveals the rest.
+  -- Raise it for a wide sidebar, lower it for a narrow one.
+  tool_header_max_chars = 100,
+  -- Diffs render inline until they exceed this many lines, then fold behind `K`.
+  -- Keeps small edit hunks visible (the useful case) while a whole-file write
+  -- (empty oldText, so the entire file is one hunk) stays out of the way.
+  diff_collapse_lines = 30,
   default_provider = nil,
   auto_add_current_file = true,
   claude_code = {
