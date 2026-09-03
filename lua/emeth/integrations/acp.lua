@@ -14,6 +14,7 @@
 --- This file knows nothing about claude-code, kiro-cli, etc. — it only knows
 --- the shape of these hooks.
 
+local AcpUpdates = require("emeth.integrations.acp_updates")
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
 local PromptQueue = require("emeth.ui.prompt_queue")
@@ -529,306 +530,6 @@ function M.setup_integration(view, session)
 
   -- ── Session events ─────────────────────────────────────────────
 
-  -- ── Update dispatch table ──────────────────────────────────────
-  -- One handler per `sessionUpdate` type. Each closes over the integration
-  -- state it needs (the `state` table, schedule_reload, render_mode, session,
-  -- view).
-
-  ---Each handler receives the update plus the streaming state for the session
-  ---that update belongs to. Handlers that keep no streaming state ignore it.
-  ---@type table<string, fun(update: table, stream: acp.StreamState)>
-  local update_handlers = {}
-
-  -- `sessionUpdate` types that are pure metadata and shouldn't flip the
-  -- winbar to "generating" state.
-  local non_streaming_updates = {
-    available_commands_update = true,
-    session_info_update = true,
-    usage_update = true,
-    current_mode_update = true,
-    config_option_update = true,
-  }
-
-  function update_handlers.user_message_chunk(update)
-    if update.content and update.content.type == "text" then
-      view:add_message(Message:new("user", update.content.text))
-    end
-  end
-
-  function update_handlers.agent_message_chunk(update, stream)
-    if not (update.content and update.content.type == "text") then
-      return
-    end
-    if stream.assistant_uuid then
-      view:update_message(stream.assistant_uuid, function(msg)
-        msg:append_text(update.content.text)
-      end)
-    else
-      local msg = Message:new("assistant", update.content.text)
-      stream.assistant_uuid = msg.uuid
-      stream.thinking_uuid = nil
-      view:add_message(msg)
-    end
-  end
-
-  function update_handlers.agent_thought_chunk(update, stream)
-    if not (update.content and update.content.type == "text" and update.content.text ~= "") then
-      return
-    end
-    if stream.thinking_uuid then
-      view:update_message(stream.thinking_uuid, function(msg)
-        for _, item in ipairs(msg.content) do
-          if item.type == "thinking" then
-            item.thinking = (item.thinking or "") .. update.content.text
-            return
-          end
-        end
-      end)
-    else
-      local msg = Message:new("assistant", {
-        type = "thinking",
-        thinking = update.content.text,
-      })
-      stream.thinking_uuid = msg.uuid
-      stream.assistant_uuid = nil
-      view:add_message(msg)
-    end
-  end
-
-  ---Give a subagent's spawning tool an expand hook that shows/hides the calls
-  ---nested under it. Installed on demand (the first child to arrive) and
-  ---idempotent, since the parent tool_call is created before we know it has any.
-  ---
-  ---Takes over from the renderer's default `_expanded` toggle because the two
-  ---have to move together: the parent's own body is empty for a subagent tool,
-  ---and what the user wants to see is its children.
-  ---@param parent chat_ui.Message
-  local function attach_subagent_expand(parent)
-    if parent.metadata.on_expand then
-      return
-    end
-    parent.metadata.on_expand = function(msg)
-      local expanded = msg.metadata._expanded ~= true
-      msg.metadata._expanded = expanded
-      for _, m in ipairs(view:get_messages()) do
-        if m.metadata and m.metadata.parent_tool_call_id == msg.content[1].id then
-          m.visible = expanded
-        end
-      end
-    end
-  end
-
-  function update_handlers.tool_call(update, stream)
-    stream.assistant_uuid = nil
-    stream.thinking_uuid = nil
-    local existing_uuid = stream.tool_map[update.toolCallId]
-    if existing_uuid then
-      view:update_message(existing_uuid, function(msg)
-        for _, item in ipairs(msg.content) do
-          if item.type == "tool_use" and item.id == update.toolCallId then
-            if update.status then
-              item.status = update.status
-            end
-            if update.kind or update.title then
-              item.name = update.kind or update.title
-            end
-            if update.rawInput then
-              item.input = update.rawInput
-            end
-          end
-        end
-        if msg.metadata.tool_call then
-          for k, v in pairs(update) do
-            msg.metadata.tool_call[k] = v
-          end
-        end
-      end)
-    else
-      local metadata = { tool_call = update }
-      -- A tool run by a subagent is folded into the tool that spawned it: one
-      -- subagent easily runs dozens of calls, and left at top level they bury
-      -- the main conversation. `parent_tool_call_id` is set by a provider
-      -- transform, so this stays namespace-agnostic.
-      local parent_uuid = update.parent_tool_call_id and stream.tool_map[update.parent_tool_call_id]
-      local parent = parent_uuid and view:get_message(parent_uuid) or nil
-      if parent then
-        metadata.parent_tool_call_id = update.parent_tool_call_id
-      end
-      local msg = Message:new("assistant", {
-        type = "tool_use",
-        name = update.kind or update.title or "tool",
-        id = update.toolCallId,
-        input = update.rawInput or {},
-        status = update.status or "pending",
-      }, metadata)
-      if parent then
-        -- Hidden while the parent is collapsed; a child arriving after the user
-        -- expanded it shows up straight away.
-        msg.visible = parent.metadata._expanded == true
-        -- Repaint just the parent, whose child count changed. The child's own
-        -- add_message below only dirties from the child down, so the parent row
-        -- would otherwise keep a stale count.
-        view:update_message(parent_uuid, function(m)
-          m.metadata.subagent_children = (m.metadata.subagent_children or 0) + 1
-          attach_subagent_expand(m)
-        end)
-      end
-      stream.tool_map[update.toolCallId] = msg.uuid
-      view:add_message(msg)
-    end
-  end
-
-  function update_handlers.tool_call_update(update, stream)
-    local uuid = stream.tool_map[update.toolCallId]
-    if uuid then
-      -- A content/rawOutput-only chunk (the common case while a tool streams)
-      -- is throttled: apply it now, paint on the timer. Anything that changes
-      -- what the card *shows structurally* -- status, title, locations, input
-      -- -- renders promptly so the header/box/icon never lags the model.
-      local structural = update.status ~= nil
-        or update.title ~= nil
-        or update.rawInput ~= nil
-        or update.locations ~= nil
-      view:update_message(uuid, function(msg)
-        for _, item in ipairs(msg.content) do
-          if item.type == "tool_use" and item.id == update.toolCallId then
-            if update.status then
-              item.status = update.status
-            end
-            if update.title then
-              item.name = update.title
-            end
-            if update.rawInput then
-              item.input = update.rawInput
-            end
-          end
-        end
-        if msg.metadata.tool_call then
-          if update.content and next(update.content) ~= nil then
-            msg.metadata.tool_call.content = update.content
-          end
-          if update.status then
-            msg.metadata.tool_call.status = update.status
-          end
-          if update.title then
-            msg.metadata.tool_call.title = update.title
-          end
-          if update.rawOutput then
-            msg.metadata.tool_call.rawOutput = update.rawOutput
-          end
-          if update.locations then
-            msg.metadata.tool_call.locations = update.locations
-          end
-        end
-      end, { defer_render = not structural })
-      -- Structural updates rendered synchronously via update_message above (any
-      -- content deferred earlier rides along in that same paint). Content-only
-      -- chunks arm the throttle timer to paint shortly.
-      if not structural then
-        schedule_tool_render()
-      end
-    end
-
-    -- Debounced buffer reload for completed tool calls that wrote files
-    if update.status == "completed" and uuid then
-      local tc = (view:get_message(uuid) or {}).metadata
-      tc = tc and tc.tool_call
-      if tc and tc.content then
-        local first_line = tc.locations and tc.locations[1] and tc.locations[1].line
-        for _, c in ipairs(tc.content) do
-          if c.type == "diff" and c.path then
-            schedule_reload(c.path, first_line)
-          end
-        end
-      end
-    end
-  end
-
-  function update_handlers.plan(update, stream)
-    -- Each `plan` update carries the FULL current plan and supersedes the
-    -- previous one — it's a self-updating block, not an append. Render it once
-    -- per turn and rewrite in place as entries progress. `stream.plan_uuid` is
-    -- cleared only by reset_state (next prompt), so the plan keeps updating even
-    -- as assistant text / tool calls interleave around it.
-    local parts = { "**Plan:**" }
-    for _, entry in ipairs(update.entries or {}) do
-      local icon = entry.status == "completed" and "✓" or entry.status == "in_progress" and "→" or "○"
-      parts[#parts + 1] = icon .. " " .. entry.content
-    end
-    local text = table.concat(parts, "\n")
-    -- Update in place only while the plan is still the last block. Once other
-    -- content (tool calls, assistant text) has streamed in below it, the plan
-    -- has scrolled out of view — so re-display a fresh copy at the bottom
-    -- instead of silently mutating the off-screen one.
-    local messages = view:get_messages()
-    local last = messages[#messages]
-    if stream.plan_uuid and last and last.uuid == stream.plan_uuid then
-      view:update_message(stream.plan_uuid, function(msg)
-        msg.content = { { type = "text", text = text } }
-      end)
-    else
-      local msg = Message:new("system", text)
-      stream.plan_uuid = msg.uuid
-      view:add_message(msg)
-    end
-  end
-
-  function update_handlers.available_commands_update(update)
-    Commands.clear_acp()
-    for _, cmd in ipairs(update.availableCommands or {}) do
-      local name = cmd.name:gsub("^/", "")
-      local input = cmd.input
-      local hint = type(input) == "table" and input.hint or nil
-      if hint == vim.NIL or hint == "" then
-        hint = nil
-      end
-      Commands.register(name, {
-        desc = cmd.description or name,
-        source = "acp",
-        hint = hint,
-        execute = function(args, ctx)
-          if ctx.view.on_submit then
-            ctx.view.on_submit("/" .. name .. (args ~= "" and (" " .. args) or ""))
-          end
-        end,
-      })
-    end
-  end
-
-  function update_handlers.session_info_update(update)
-    if update.title then
-      view._session_title = update.title
-      if session.session_id then
-        Sessions.update_title(session.session_id, update.title)
-      end
-    end
-  end
-
-  function update_handlers.usage_update(update)
-    -- Standard ACP context-window update: { used, size, cost? }
-    vim.schedule(function()
-      if update.used and update.size and update.size > 0 then
-        local pct = (update.used / update.size) * 100
-        Winbar.set_context(pct)
-      end
-      if update.cost and type(update.cost.amount) == "number" then
-        local sym = update.cost.currency == "USD" and "$" or ((update.cost.currency or "") .. " ")
-        Winbar.set_badge("cost", string.format("%s%.2f", sym, update.cost.amount))
-      end
-    end)
-  end
-
-  function update_handlers.current_mode_update(update)
-    -- Standard ACP permission/mode update.
-    if update.currentModeId then
-      vim.schedule(function()
-        session.extensions = session.extensions or {}
-        session.extensions.mode_id = update.currentModeId
-        render_mode(update.currentModeId)
-      end)
-    end
-  end
-
   -- Reconcile a fresh `configOptions` snapshot into session state: re-store the
   -- options (via _extract_session_info, so the provider's badge/model_id refresh
   -- runs) and re-register the slash commands so newly available options (e.g.
@@ -849,11 +550,22 @@ function M.setup_integration(view, session)
     register_config_option_commands()
   end
 
-  function update_handlers.config_option_update(update)
-    vim.schedule(function()
-      reconcile_config_options(update.configOptions)
-    end)
-  end
+  local update_handlers = AcpUpdates.handlers({
+    view = view,
+    session = session,
+    schedule_tool_render = schedule_tool_render,
+    schedule_reload = schedule_reload,
+    reconcile_config_options = reconcile_config_options,
+    -- Wrapped, not passed: `render_mode` is only assigned further down this
+    -- function, so a direct reference would capture nil here. Handing over a
+    -- closure defers the lookup to when an update actually arrives. Collapsing
+    -- this to `render_mode = render_mode` breaks the mode badge silently — the
+    -- resulting nil call happens inside vim.schedule, which swallows it. The
+    -- current_mode_update tests exist to catch exactly that.
+    render_mode = function(mode_id)
+      render_mode(mode_id)
+    end,
+  })
 
   session:on("update", function(update, update_session_id)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
@@ -865,7 +577,7 @@ function M.setup_integration(view, session)
 
     -- Update-driven activity transition: streaming content → generating.
     -- connecting/cancelled absorb updates (stay put); only idle transitions.
-    if not non_streaming_updates[update.sessionUpdate] and activity == "idle" then
+    if not AcpUpdates.NON_STREAMING[update.sessionUpdate] and activity == "idle" then
       set_activity("generating")
     end
 
