@@ -354,12 +354,6 @@ function ChatView:get_message(uuid)
   end
 end
 
----The message under the cursor plus the cursor's 1-based line offset within it.
----
----Lets a caller act on a specific *line* of a multi-line message (e.g. picking
----the option the cursor sits on) without knowing where that message was laid
----out. Returns nil when the cursor isn't in the result window or is on a row no
----message owns (blank separators between messages).
 ---Whether the transcript is currently on screen. A prompt that blocks the agent
 ---is invisible when it isn't, so callers use this to nudge out of band.
 ---@return boolean
@@ -419,6 +413,13 @@ function ChatView:clear_prompt_keys(owner)
   end
 end
 
+---The message under the cursor plus the cursor's 1-based line offset within it.
+---
+---Lets a caller act on a specific *line* of a multi-line message (e.g. picking
+---the option the cursor sits on) without knowing where that message was laid
+---out. Returns nil when the cursor isn't in the result window or is on a row no
+---message owns (blank separators between messages).
+---
 ---Only meaningful while the result buffer is the current one — it reads the
 ---cursor from the current window, matching the buffer-local keymaps that call it.
 ---@return chat_ui.Message|nil msg, integer|nil offset
