@@ -1285,7 +1285,7 @@ function M.setup_integration(view, session)
       -- Hydrate roots from the persisted session entry before re-loading
       roots:hydrate_from(Sessions.get(session_id))
       lifecycle({ clear = true, touch = true }, function(opts, done)
-        session:load(session_id, function(err)
+        session:load(session_id, opts, function(err)
           if not err then
             announce_session("Session loaded.")
           end
