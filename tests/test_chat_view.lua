@@ -657,3 +657,72 @@ h.describe("ChatView:is_visible", function()
     h.eq(false, view:is_visible())
   end)
 end)
+
+-- `K` flips `metadata._expanded`, which starts nil. A small diff renders
+-- expanded while still nil, so flipping the raw field would leave it expanded
+-- and make the key look broken -- it has to toggle away from what's on screen.
+h.describe("ChatView K on a diff tool call", function()
+  local Message = require("emeth.message")
+  local Render = require("emeth.ui.render")
+
+  ---@param old string
+  ---@param new string
+  local function diff_msg(old, new)
+    return Message:new("assistant", {
+      type = "tool_use",
+      name = "Write",
+      id = "k1",
+      input = { path = "/tmp/x.lua", old_str = old, new_str = new },
+      status = "completed",
+    }, { tool_call = { toolCallId = "k1", status = "completed", title = "/tmp/x.lua" } })
+  end
+
+  ---Render, park the cursor on the tool row, and press K as a user would so the
+  ---real buffer-local mapping runs.
+  ---@param msg chat_ui.Message
+  local function press_k_on(msg)
+    local view = make_view()
+    view:add_message(msg)
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    for row, m in pairs(view._line_to_msg) do
+      if m.uuid == msg.uuid then
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        break
+      end
+    end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("K", true, false, true), "x", false)
+    return view
+  end
+
+  local function big()
+    local body = {}
+    for i = 1, 200 do
+      body[i] = "line " .. i
+    end
+    return diff_msg("", table.concat(body, "\n"))
+  end
+
+  h.it("collapses a small diff that was expanded by default", function()
+    local msg = diff_msg("a\nb\nc", "a\nX\nc")
+    h.eq(true, Render.is_expanded(msg), "precondition: starts expanded")
+    press_k_on(msg)
+    h.eq(false, Render.is_expanded(msg), "K did not collapse it")
+  end)
+
+  h.it("expands a big diff that was folded by default", function()
+    local msg = big()
+    h.eq(false, Render.is_expanded(msg), "precondition: starts folded")
+    press_k_on(msg)
+    h.eq(true, Render.is_expanded(msg), "K did not expand it")
+  end)
+
+  h.it("takes the diff body out of the buffer when it collapses", function()
+    local msg = big()
+    msg.metadata._expanded = true
+    local view = press_k_on(msg)
+    view:_render()
+    local text = table.concat(vim.api.nvim_buf_get_lines(view.result_buf, 0, -1, false), "\n")
+    h.is_true(text:find("line 150", 1, true) == nil, "diff body survived the collapse")
+  end)
+end)
