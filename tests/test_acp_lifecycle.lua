@@ -684,4 +684,102 @@ h.describe("acp integration: lifecycle options reach every load path", function(
   end)
 end)
 
+-- Connecting is what `:Emeth` does on open, so recording a session there entered
+-- one for every sidebar opened and closed in silence -- 45 of 352 entries in a
+-- real index, with no conversation to resume into. A session earns its entry by
+-- being prompted.
+h.describe("acp integration: a session is recorded on first prompt", function()
+  local Sessions = require("emeth.sessions")
+
+  ---Point the index at a temp dir and hand back a reader plus a cleanup.
+  local function with_index(fn)
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    local orig = vim.fn.stdpath
+    ---@diagnostic disable-next-line: duplicate-set-field
+    vim.fn.stdpath = function(what)
+      return what == "state" and dir or orig(what)
+    end
+    local ok, err = pcall(fn)
+    vim.fn.stdpath = orig
+    vim.fn.delete(dir, "rf")
+    if not ok then
+      error(err)
+    end
+  end
+
+  ---A ready session whose prompts go nowhere, so on_submit is the only actor.
+  local function prompt_setup()
+    local session, view, integration = make_setup()
+    session.client = session.client or {}
+    session.client.send_prompt = function() end
+    session.send_prompt = function() end
+    return session, view, integration
+  end
+
+  h.it("records nothing merely by connecting", function()
+    with_index(function()
+      local session = Session:new("test")
+      local view = make_view()
+      session.connect = function(_, _opts, cb)
+        session._state = "ready"
+        session.session_id = "sess-connect"
+        if cb then
+          cb(nil)
+        end
+      end
+      local integration = Acp.setup_integration(view, session)
+      integration.connect()
+      flush()
+      h.is_nil(Sessions.get("sess-connect"), "connecting must not enter a session")
+    end)
+  end)
+
+  h.it("records the session once a prompt is sent", function()
+    with_index(function()
+      local _, view = prompt_setup()
+      view.on_submit("look at the parser")
+      flush()
+      local entry = Sessions.get("sess-1")
+      h.is_true(entry ~= nil, "the first prompt must enter the session")
+      h.eq("test", entry.provider)
+      h.eq(vim.fn.getcwd(), entry.cwd)
+    end)
+  end)
+
+  h.it("titles it from the first prompt until the agent names it", function()
+    with_index(function()
+      local _, view = prompt_setup()
+      view.on_submit("look at the parser")
+      flush()
+      h.eq("look at the parser", Sessions.get("sess-1").title)
+    end)
+  end)
+
+  h.it("lets the agent's own title win over the prompt fallback", function()
+    with_index(function()
+      local session, view = prompt_setup()
+      view.on_submit("look at the parser")
+      flush()
+      session:_emit("update", {
+        sessionUpdate = "session_info_update",
+        title = "Parser investigation",
+      })
+      flush()
+      h.eq("Parser investigation", Sessions.get("sess-1").title)
+    end)
+  end)
+
+  h.it("does not re-title on later prompts", function()
+    with_index(function()
+      local _, view = prompt_setup()
+      view.on_submit("first thing")
+      flush()
+      view.on_submit("second thing")
+      flush()
+      h.eq("first thing", Sessions.get("sess-1").title)
+    end)
+  end)
+end)
+
 restore()
