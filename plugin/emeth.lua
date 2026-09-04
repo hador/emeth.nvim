@@ -19,3 +19,9 @@ end, { desc = "Toggle Emeth sidebar" })
 vim.api.nvim_create_user_command("EmethZoom", function()
   require("emeth").zoom()
 end, { desc = "Toggle zoom (fill screen) for the Emeth sidebar" })
+
+-- Global rather than session-scoped: it lists sessions from every directory and
+-- cds into the chosen one, so it has to work before any session exists.
+vim.api.nvim_create_user_command("EmethHistory", function()
+  require("emeth").history()
+end, { desc = "Resume a session from any directory (cd's into it)" })
