@@ -234,14 +234,6 @@ function M.setup_integration(view, session)
         if err then
           view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
         else
-          if opts.save and session.session_id then
-            Sessions.save({
-              session_id = session.session_id,
-              provider = session.provider_name,
-              cwd = vim.fn.getcwd(),
-              additional_directories = roots:save_field(),
-            })
-          end
           if opts.touch and session.session_id then
             Sessions.touch(session.session_id)
           end
@@ -421,6 +413,36 @@ function M.setup_integration(view, session)
     return prompt
   end
 
+  ---Enter this session in the local index, keyed on its first prompt.
+  ---
+  ---Deliberately not at connect time: connecting is what `:Emeth` does on open,
+  ---so recording there entered a session for every sidebar the user opened and
+  ---closed without saying anything. Those have no conversation to resume into and
+  ---the agent never persists them, yet they filled the session list -- 45 of 352
+  ---entries, none of them useful. A session earns an entry by being used.
+  ---
+  ---Safe to call per prompt: `Sessions.save` upserts on `session_id` and bumps
+  ---`updated_at`, which is what the old `touch` call here did anyway. It leaves
+  ---`cwd` at its insert-time value, so the recorded directory stays the one the
+  ---session actually ran in.
+  ---@param first_text string  fallback title, until the agent sends a real one
+  local function record_session(first_text)
+    local id = session.session_id
+    if not id then
+      return
+    end
+    Sessions.save({
+      session_id = id,
+      provider = session.provider_name,
+      cwd = vim.fn.getcwd(),
+      additional_directories = roots:save_field(),
+    })
+    local entry = Sessions.get(id)
+    if entry and not entry.title then
+      Sessions.update_title(id, first_text:sub(1, 80):gsub("\n", " "))
+    end
+  end
+
   ---Render the user's turn in the transcript. The agent doesn't echo our own
   ---input back (a steered message's replay is consumed agent-side), so this is
   ---the only place a user message comes from.
@@ -436,13 +458,7 @@ function M.setup_integration(view, session)
       badges = Winbar.get_badges(),
     })
     view:add_message(msg)
-    if session.session_id then
-      Sessions.touch(session.session_id)
-      local entry = Sessions.get(session.session_id)
-      if entry and not entry.title then
-        Sessions.update_title(session.session_id, text:sub(1, 80):gsub("\n", " "))
-      end
-    end
+    record_session(text)
     return msg
   end
 
@@ -1271,7 +1287,7 @@ function M.setup_integration(view, session)
 
   local integration = {
     connect = function(cb)
-      lifecycle({ save = true }, function(opts, done)
+      lifecycle({}, function(opts, done)
         session:connect(opts, function(err)
           if not err then
             announce_session("Connected to " .. session.provider_name .. ".")
@@ -1367,7 +1383,7 @@ function M.setup_integration(view, session)
       selected_files = {}
       refresh_file_display()
       -- Keep roots as-is so a new session inherits the user's roots.
-      lifecycle({ save = true }, function(opts, done)
+      lifecycle({}, function(opts, done)
         session:new_session(opts, function(err)
           if not err then
             announce_session("New session started.")

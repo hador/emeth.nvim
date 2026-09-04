@@ -15,7 +15,19 @@ local function read_index()
   local ok, data = pcall(function()
     return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
   end)
-  return ok and data or {}
+  if not ok or type(data) ~= "table" then
+    return {}
+  end
+  -- Drop entries with no id. One such record (timestamps only) was found in a
+  -- real index; `list` hid it because it also had no `cwd` to match, but anything
+  -- that reads across directories would reach it and index a nil id.
+  local entries = {}
+  for _, e in ipairs(data) do
+    if type(e) == "table" and type(e.session_id) == "string" and e.session_id ~= "" then
+      entries[#entries + 1] = e
+    end
+  end
+  return entries
 end
 
 ---@param entries table[]

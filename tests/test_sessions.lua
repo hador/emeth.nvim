@@ -163,6 +163,37 @@ h.describe("Sessions", function()
   end)
 end)
 
+-- A real index contained a record with timestamps and nothing else. `list` hid it
+-- (no `cwd` to match), so anything reading across directories was the first thing
+-- that would reach it and index a nil id.
+h.describe("Sessions: malformed entries", function()
+  local function write_raw(json)
+    vim.fn.writefile({ json }, tmp_dir .. "/emeth/sessions.json")
+  end
+
+  -- The record found in the wild had no `cwd` either, so `list` filtered it out
+  -- regardless -- give it a matching cwd so the query actually reaches it, which
+  -- is the case any cross-directory read would hit.
+  h.it("skips a record with no session_id", function()
+    write_raw('[{"cwd":"/tmp","provider":"test","created_at":"2026-03-11T10:45:11Z"},'
+      .. '{"session_id":"keep","provider":"test","cwd":"/tmp"}]')
+    local got = Sessions.list("/tmp", "test")
+    h.eq(1, #got)
+    h.eq("keep", got[1].session_id)
+  end)
+
+  h.it("skips an empty-string session_id", function()
+    write_raw('[{"session_id":"","cwd":"/tmp","provider":"test"}]')
+    h.eq(0, #Sessions.list("/tmp", "test"))
+  end)
+
+  h.it("survives a corrupt index without erroring", function()
+    write_raw("not json at all")
+    h.eq(0, #Sessions.list("/tmp", "test"))
+    h.is_nil(Sessions.get("keep"))
+  end)
+end)
+
 -- Restore
 vim.fn.stdpath = orig_stdpath
 vim.fn.delete(tmp_dir, "rf")
