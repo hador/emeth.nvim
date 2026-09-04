@@ -115,6 +115,24 @@ function M.remove(session_id)
   end
 end
 
+--- Every recorded session, most recent first, regardless of directory. Backs the
+--- cross-directory picker: the agent's own `session/list` is scoped to one cwd,
+--- so this index is the only place that knows the whole set.
+---@param provider? string
+---@return table[]
+function M.list_all(provider)
+  local entries = {}
+  for _, e in ipairs(read_index()) do
+    if not provider or e.provider == provider then
+      entries[#entries + 1] = e
+    end
+  end
+  table.sort(entries, function(a, b)
+    return (a.updated_at or a.created_at or "") > (b.updated_at or b.created_at or "")
+  end)
+  return entries
+end
+
 --- List sessions for a given cwd and provider, most recent first.
 ---@param cwd string
 ---@param provider? string
