@@ -1322,61 +1322,6 @@ function M.setup_integration(view, session)
       end, cb)
     end,
 
-    pick_session = function()
-      local function load_choice(item)
-        lifecycle({ clear = true }, function(opts, done)
-          session:load(item.session_id, opts, function(err)
-            if err then
-              Sessions.remove(item.session_id)
-            end
-            done(err)
-          end)
-        end)
-      end
-
-      local function show_picker(items)
-        if #items == 0 then
-          vim.notify("[emeth] No previous sessions found", vim.log.levels.INFO)
-          return
-        end
-        vim.ui.select(items, {
-          prompt = "Resume session:",
-          format_item = function(item)
-            return item.label
-          end,
-        }, function(choice)
-          if choice and choice.session_id ~= session.session_id then
-            load_choice(choice)
-          end
-        end)
-      end
-
-      session:list_sessions(function(sessions, err)
-        vim.schedule(function()
-          if not err and sessions and #sessions > 0 then
-            local items = {}
-            for _, s in ipairs(sessions) do
-              items[#items + 1] = {
-                label = (s.title or s.sessionId) .. (s.updatedAt and ("  " .. s.updatedAt) or ""),
-                session_id = s.sessionId,
-              }
-            end
-            show_picker(items)
-          else
-            local local_sessions = Sessions.list(vim.fn.getcwd(), session.provider_name)
-            local items = {}
-            for _, s in ipairs(local_sessions) do
-              items[#items + 1] = {
-                label = (s.title or s.session_id:sub(1, 12)) .. "  " .. (s.updated_at or ""),
-                session_id = s.session_id,
-              }
-            end
-            show_picker(items)
-          end
-        end)
-      end)
-    end,
-
     new_session = function()
       view:clear()
       reset_state()

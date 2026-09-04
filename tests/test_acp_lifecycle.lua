@@ -782,4 +782,50 @@ h.describe("acp integration: a session is recorded on first prompt", function()
   end)
 end)
 
+-- Resuming used to prune a bad entry inside the picker's own load helper. That
+-- helper is gone, so the prune now rides on the callback `load_session` and
+-- `connect_and_load` hand back -- which only works if they actually forward the
+-- error to it.
+h.describe("acp integration: a failed load reports its error to the caller", function()
+  h.it("passes the error to load_session's callback", function()
+    local session, _, integration = make_setup()
+    session.load = function(_, _id, _opts, cb)
+      cb({ code = -32602, message = "session not found" })
+    end
+    local seen = "not called"
+    integration.load_session("gone", function(err)
+      seen = err
+    end)
+    flush()
+    h.is_true(type(seen) == "table", "callback got: " .. vim.inspect(seen))
+    h.eq("session not found", seen.message)
+  end)
+
+  h.it("passes the error to connect_and_load's callback", function()
+    local session, _, integration = make_setup()
+    session.connect_and_load = function(_, _id, _opts, cb)
+      cb({ code = -32602, message = "session not found" })
+    end
+    local seen = "not called"
+    integration.connect_and_load("gone", function(err)
+      seen = err
+    end)
+    flush()
+    h.is_true(type(seen) == "table", "callback got: " .. vim.inspect(seen))
+  end)
+
+  h.it("does not report an error on a successful load", function()
+    local session, _, integration = make_setup()
+    session.load = function(_, _id, _opts, cb)
+      cb(nil)
+    end
+    local seen = "not called"
+    integration.load_session("fine", function(err)
+      seen = err
+    end)
+    flush()
+    h.is_nil(seen, "a good load must not look like a failure")
+  end)
+end)
+
 restore()

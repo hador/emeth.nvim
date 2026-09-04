@@ -103,12 +103,6 @@ M._provider = nil
 -- an integration comes up, removed when it goes away, so they don't clutter
 -- command completion (and can't be invoked) while there's nothing to act on.
 local SESSION_COMMANDS = {
-  EmethHistory = {
-    fn = function()
-      M.history()
-    end,
-    opts = { desc = "Pick a previous chat session to resume" },
-  },
   EmethResume = {
     fn = function(args)
       local session_id = args.args ~= "" and args.args or nil
@@ -296,11 +290,16 @@ function M.zoom()
   end
 end
 
-function M.history()
-  if M._integration and M._integration.pick_session then
-    M._integration.pick_session()
-  else
-    vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
+---Forget a session the agent could not load. Its id is in our index but not in
+---the agent's store (created and abandoned before we recorded on first prompt, or
+---aged out of the agent's own retention), and it will fail identically forever.
+---@param session_id string
+---@return fun(err: any)
+local function forget_unloadable(session_id)
+  return function(err)
+    if err then
+      require("emeth.sessions").remove(session_id)
+    end
   end
 end
 
@@ -313,7 +312,7 @@ function M.resume(session_id, provider)
   if M._integration then
     if M._integration.load_session then
       ensure_sidebar_open()
-      M._integration.load_session(session_id)
+      M._integration.load_session(session_id, forget_unloadable(session_id))
     end
     return
   end
@@ -327,7 +326,38 @@ function M.resume(session_id, provider)
   local session = require("emeth.acp").create_session(resolved)
   local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
   M._set_integration(integration, resolved)
-  integration.connect_and_load(session_id)
+  integration.connect_and_load(session_id, forget_unloadable(session_id))
+end
+
+---Pick a session from any directory and resume it there.
+---
+---Changes the working directory to the session's own before resuming. The agent
+---is handed `getcwd()` on `session/load`, and emeth's @-mention completion globs
+---it too, so both are only correct once nvim has moved -- and the session is
+---meaningless outside the tree it ran in.
+---
+---Deliberately not gated on an active integration: the case this exists for is
+---opening nvim somewhere and wanting a conversation that lived elsewhere.
+function M.history()
+  require("emeth.ui.session_picker").open(function(entry)
+    if vim.fn.isdirectory(entry.cwd or "") ~= 1 then
+      vim.notify("[emeth] Directory no longer exists: " .. (entry.cwd or "?"), vim.log.levels.WARN)
+      return
+    end
+    local ok, err = pcall(vim.cmd.cd, vim.fn.fnameescape(entry.cwd))
+    if not ok then
+      vim.notify("[emeth] Could not enter " .. entry.cwd .. ": " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+    -- A session belongs to the provider that created it, which need not be the
+    -- one currently connected; drop a mismatched integration so `resume` builds
+    -- the right one rather than loading the id into the wrong agent.
+    if M._integration and entry.provider and entry.provider ~= M._provider then
+      M._integration.disconnect()
+      M._set_integration(nil, nil)
+    end
+    M.resume(entry.session_id, entry.provider)
+  end)
 end
 
 function M.cancel()
