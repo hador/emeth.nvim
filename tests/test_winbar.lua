@@ -172,3 +172,40 @@ h.describe("Winbar badges", function()
     Winbar.detach()
   end)
 end)
+
+-- Toggling the sidebar shut mid-turn used to call Winbar.detach(), which resets
+-- module-level lifecycle state. The session kept running, but the winbar was left
+-- reading "ready" for the rest of it: it is only written on transitions, and the
+-- integration's `activity` never changed again.
+--
+-- `M.toggle` itself is not covered here -- its sidebar is file-local with no
+-- injection point, and the fix there is the absence of a call. What is covered is
+-- the repair path, which makes the drift recoverable no matter who resets it.
+h.describe("Winbar state resync", function()
+  h.it("detach resets lifecycle state, which is what stranded the winbar", function()
+    Winbar.set_state("generating")
+    h.eq("generating", Winbar.get_state())
+    Winbar.detach()
+    h.eq("ready", Winbar.get_state(), "detach resets to ready -- the bug's source")
+  end)
+
+  h.it("resync restores a live state onto a freshly attached window", function()
+    Winbar.set_state("generating")
+    Winbar.detach()
+    -- What integration.resync_winbar does: re-push provider and activity.
+    Winbar.set_left(Winbar.fmt.plain("test-provider"))
+    Winbar.set_state("generating")
+    h.eq("generating", Winbar.get_state())
+    h.eq("test-provider", Winbar.get_left())
+    Winbar.detach()
+  end)
+
+  -- set_state early-returns when the value is unchanged, so a resync that lands on
+  -- an already-correct value must still be harmless rather than clearing anything.
+  h.it("resync is a no-op when the winbar is already correct", function()
+    Winbar.set_state("generating")
+    Winbar.set_state("generating")
+    h.eq("generating", Winbar.get_state())
+    Winbar.detach()
+  end)
+end)
