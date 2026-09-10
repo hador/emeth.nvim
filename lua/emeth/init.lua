@@ -184,6 +184,10 @@ local function ensure_sidebar_open()
     _sidebar:open(_view)
     if _sidebar.result_win then
       require("emeth.ui.winbar").attach(_sidebar.result_win, _sidebar.input_win)
+      -- A window opened mid-turn has to be told where things stand.
+      if M._integration and M._integration.resync_winbar then
+        M._integration.resync_winbar()
+      end
       local lc = vim.api.nvim_buf_line_count(_view.result_buf)
       pcall(vim.api.nvim_win_set_cursor, _sidebar.result_win, { lc, 0 })
     end
@@ -274,7 +278,7 @@ end
 
 function M.toggle(provider)
   if _sidebar and _sidebar:is_open() then
-    require("emeth.ui.winbar").detach()
+    -- No Winbar.detach(): it resets state a still-running session owns.
     _sidebar:close()
   else
     M.open(provider)
