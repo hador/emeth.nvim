@@ -1369,6 +1369,13 @@ function M.setup_integration(view, session)
       end
     end,
 
+    ---Re-assert what the winbar caches. It is only written on transitions, so one
+    ---that missed a change would otherwise stay wrong for the rest of the turn.
+    resync_winbar = function()
+      Winbar.set_left(Winbar.fmt.plain(session.provider_name))
+      set_activity(activity)
+    end,
+
     add_root = function(dir)
       roots:add(dir)
     end,

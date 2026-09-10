@@ -403,6 +403,11 @@ function M.set_context(pct)
   M.set_badge("ctx", string.format("ctx %.0f%%", pct))
 end
 
+---@return EmethWinbarState
+function M.get_state()
+  return state
+end
+
 ---@return number|nil
 function M.get_context()
   return context_pct

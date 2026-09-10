@@ -828,4 +828,53 @@ h.describe("acp integration: a failed load reports its error to the caller", fun
   end)
 end)
 
+-- Hiding the sidebar mid-turn left the winbar reading "ready" for the rest of the
+-- turn: it caches lifecycle state at module level, is only written on transitions,
+-- and `activity` never changed again. A window opened mid-turn must be re-told.
+h.describe("acp integration: resync_winbar", function()
+  ---Record what the integration pushes to the winbar.
+  local function spy_state()
+    local calls = {}
+    local orig = Winbar.set_state
+    Winbar.set_state = function(s)
+      calls[#calls + 1] = s
+    end
+    return calls, function()
+      Winbar.set_state = orig
+    end
+  end
+
+  h.it("re-pushes generating while a turn is running", function()
+    local session, view, integration = make_setup()
+    session.client = session.client or {}
+    session.send_prompt = function() end
+    view.on_submit("do a thing")
+    flush()
+    local calls, undo = spy_state()
+    integration.resync_winbar()
+    undo()
+    h.eq({ "generating" }, calls, "a live turn must be re-asserted onto a new window")
+  end)
+
+  h.it("re-pushes ready when nothing is running", function()
+    local _, _, integration = make_setup()
+    local calls, undo = spy_state()
+    integration.resync_winbar()
+    undo()
+    h.eq({ "ready" }, calls)
+  end)
+
+  h.it("restores the provider name too, which detach also cleared", function()
+    local _, _, integration = make_setup()
+    local seen
+    local orig = Winbar.set_left
+    Winbar.set_left = function(_, plain)
+      seen = plain
+    end
+    integration.resync_winbar()
+    Winbar.set_left = orig
+    h.eq("test", seen)
+  end)
+end)
+
 restore()
