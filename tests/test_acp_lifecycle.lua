@@ -562,6 +562,81 @@ h.describe("acp integration: steering", function()
     h.eq(1, #prompts)
   end)
 
+  -- Regression: the steered prompt is appended to the tail, but the turn was
+  -- already streaming into an assistant block ABOVE it. If that block stays
+  -- open, everything the agent says in reply lands before the prompt and the
+  -- transcript tail looks like an unanswered steer.
+  h.it("streams the reply to a steer below the steered prompt", function()
+    local session, view = steer_setup(true)
+    local chunk = function(text)
+      session:_emit(
+        "update",
+        { sessionUpdate = "agent_message_chunk", content = { type = "text", text = text } },
+        session.session_id
+      )
+    end
+    view.on_submit("first")
+    chunk("thinking about spaces")
+    view.on_submit("actually use tabs")
+    chunk("switching to tabs")
+
+    local roles, texts = {}, {}
+    for _, m in ipairs(view.messages) do
+      roles[#roles + 1] = m.role
+      texts[#texts + 1] = m:text()
+    end
+    h.eq({ "user", "assistant", "user", "assistant" }, roles)
+    h.eq({ "first", "thinking about spaces", "actually use tabs", "switching to tabs" }, texts)
+  end)
+
+  -- Thoughts anchor separately from text, and would reorder the same way.
+  h.it("starts a fresh thought block after a steer", function()
+    local session, view = steer_setup(true)
+    local thought = function(text)
+      session:_emit(
+        "update",
+        { sessionUpdate = "agent_thought_chunk", content = { type = "text", text = text } },
+        session.session_id
+      )
+    end
+    view.on_submit("first")
+    thought("weighing options")
+    view.on_submit("actually use tabs")
+    thought("re-weighing")
+    h.eq(4, #view.messages)
+    h.eq("re-weighing", view.messages[4].content[1].thinking)
+  end)
+
+  -- A tool call in flight when the steer lands must still resolve to its own
+  -- row: clearing the whole stream would orphan it and duplicate the card.
+  h.it("keeps in-flight tool calls mapped across a steer", function()
+    local session, view = steer_setup(true)
+    view.on_submit("first")
+    session:_emit("update", {
+      sessionUpdate = "tool_call",
+      toolCallId = "t1",
+      title = "Read file.lua",
+      kind = "read",
+      status = "pending",
+    }, session.session_id)
+    view.on_submit("actually use tabs")
+    session:_emit(
+      "update",
+      { sessionUpdate = "tool_call_update", toolCallId = "t1", status = "completed" },
+      session.session_id
+    )
+    flush()
+
+    local tool
+    for _, m in ipairs(view.messages) do
+      if m.content[1].type == "tool_use" then
+        h.is_nil(tool, "the update must not create a second tool row")
+        tool = m
+      end
+    end
+    h.eq("completed", tool.content[1].status)
+  end)
+
   h.it("marks the message as steered once the agent confirms the injection", function()
     local _, view, _, calls = steer_setup(true)
     view.on_submit("first")
