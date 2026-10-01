@@ -12,6 +12,35 @@ local ACPClient = require("emeth.acp.client")
 local Session = {}
 Session.__index = Session
 
+---Decide how to auto-answer a permission request, or nil to ask the user.
+---
+---This is the SINGLE source of truth for the auto-approve policy: the session
+---layer answers the agent's callback, and the UI layer keys off whether a
+---callback reaches it (see `on_request_permission`). Returns nil when
+---auto-approve is off, when the request is a `switch_mode` (plan-mode exit is a
+---review gate, never auto-approved -- auto-approving it defeats plan mode and
+---risks picking the context-clearing variant), or when no option is offered.
+---@param tool_call table
+---@param options table[]|nil
+---@return string|nil option_id
+local function auto_approve_choice(tool_call, options)
+  if not require("emeth.acp").config.auto_approve_tools then
+    return nil
+  end
+  if tool_call.kind == "switch_mode" then
+    return nil
+  end
+  local fallback
+  for _, opt in ipairs(options or {}) do
+    if opt.kind == "allow_always" then
+      return opt.optionId
+    elseif opt.kind == "allow_once" and not fallback then
+      fallback = opt.optionId
+    end
+  end
+  return fallback or (options and options[1] and options[1].optionId) or nil
+end
+
 -- ── Event emitter ──────────────────────────────────────────────
 
 ---@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"state_change"|"permission"|"elicitation"
@@ -116,19 +145,15 @@ function Session:new(provider_name)
       on_notification = function(method, params, message_id)
         session:_emit("notification", method, params, message_id)
       end,
-      on_request_permission = function(tool_call, options, callback)
-        session:_emit("permission", tool_call, options, callback)
-        if require("emeth.acp").config.auto_approve_tools then
-          local fallback
-          for _, opt in ipairs(options or {}) do
-            if opt.kind == "allow_always" then
-              callback(opt.optionId)
-              return
-            elseif opt.kind == "allow_once" and not fallback then
-              fallback = opt.optionId
-            end
-          end
-          callback(fallback or (options and #options > 0 and options[1].optionId) or nil)
+      on_request_permission = function(tool_call, options, callback, permission_session_id)
+        local choice = auto_approve_choice(tool_call, options)
+        if choice then
+          -- Auto-answered: emit with a nil callback so the UI renders the
+          -- tool-call card but doesn't prompt (the request is already resolved).
+          callback(choice)
+          session:_emit("permission", tool_call, options, nil, permission_session_id)
+        else
+          session:_emit("permission", tool_call, options, callback, permission_session_id)
         end
       end,
       on_elicitation = function(request, callback)

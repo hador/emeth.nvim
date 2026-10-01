@@ -218,6 +218,64 @@ h.describe("Session permission event", function()
     s.client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, cb)
     h.is_nil(chosen)
   end)
+
+  h.it("auto_approve prefers allow_always over allow_once", function()
+    require("emeth.acp").config.auto_approve_tools = true
+    local s = Session:new("test")
+    local chosen = nil
+    local opts = {
+      { kind = "allow_once", optionId = "once", name = "Allow once" },
+      { kind = "allow_always", optionId = "always", name = "Allow always" },
+    }
+    s.client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, function(id)
+      chosen = id
+    end)
+    h.eq("always", chosen)
+    require("emeth.acp").config.auto_approve_tools = false
+  end)
+
+  h.it("auto-approved request emits permission with a nil callback (render-only)", function()
+    require("emeth.acp").config.auto_approve_tools = true
+    local s = Session:new("test")
+    local received = { seen = false }
+    s:on("permission", function(_tool_call, _options, callback)
+      received.seen = true
+      received.callback = callback
+    end)
+    local opts = { { kind = "allow_once", optionId = "a1", name = "Allow" } }
+    s.client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, function() end)
+    h.is_true(received.seen)
+    h.is_nil(received.callback)
+    require("emeth.acp").config.auto_approve_tools = false
+  end)
+
+  h.it("switch_mode (plan exit) is never auto-approved, even with auto_approve_tools", function()
+    -- The plan-mode exit gate exists to let the user review; auto-approving it
+    -- defeats plan mode and risks the context-clearing variant. It must reach
+    -- the UI with a live callback regardless of auto_approve_tools.
+    require("emeth.acp").config.auto_approve_tools = true
+    local s = Session:new("test")
+    local chosen = nil
+    local received = {}
+    s:on("permission", function(_tool_call, _options, callback)
+      received.callback = callback
+    end)
+    local opts = {
+      { kind = "allow_once", optionId = "exit-plan-default", name = "Manually approve" },
+      { kind = "allow_always", optionId = "exit-plan-clear-auto", name = "Clear + auto" },
+      { kind = "reject_once", optionId = "reject", name = "Keep planning" },
+    }
+    s.client.config.handlers.on_request_permission(
+      { toolCallId = "t1", kind = "switch_mode", name = "ExitPlanMode" },
+      opts,
+      function(id)
+        chosen = id
+      end
+    )
+    h.is_nil(chosen)
+    h.is_true(received.callback ~= nil)
+    require("emeth.acp").config.auto_approve_tools = false
+  end)
 end)
 
 h.describe("Session elicitation event", function()
