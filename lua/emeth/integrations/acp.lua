@@ -690,8 +690,9 @@ function M.setup_integration(view, session)
         session:_emit("update", update, session.session_id)
       end
 
-      -- If auto-approve is on, session layer already called the callback
-      if require("emeth.acp").config.auto_approve_tools then
+      -- A nil callback means the session layer already answered this request
+      -- (auto-approve): render the tool-call card above, but don't prompt.
+      if not callback then
         return
       end
 
