@@ -507,6 +507,17 @@ function M.setup_integration(view, session)
     if session:is_connected() and activity == "generating" and session:supports_steering() then
       local prompt = build_prompt(text)
       local msg = add_user_message(text)
+      -- Close the text/thought blocks the turn was streaming into. They sit
+      -- ABOVE the message we just appended, so leaving them open sends the
+      -- agent's reply to the steer into a block that renders before the prompt
+      -- that caused it -- the transcript then reads as if the steer were never
+      -- answered, which is exactly what a glance at the tail is checking for.
+      -- Only the anchors: `tool_map` stays, since tool calls already in flight
+      -- must keep resolving to their own rows, and `plan_uuid` re-displays
+      -- itself once it is no longer the last block.
+      local stream = stream_for(session.session_id)
+      stream.assistant_uuid = nil
+      stream.thinking_uuid = nil
       session:steer(prompt, function(outcome, err)
         vim.schedule(function()
           if err then
