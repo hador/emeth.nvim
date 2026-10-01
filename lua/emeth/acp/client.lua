@@ -441,9 +441,16 @@ function ACPClient:_handle_request_permission(message_id, params)
   end
   if self.config.handlers and self.config.handlers.on_request_permission then
     vim.schedule(function()
+      -- `sessionId` is forwarded as the trailing argument (rather than folded
+      -- into the toolCall) so existing 3-arg handlers keep working. ACP requires
+      -- it on the request and we were validating it above only to discard it —
+      -- it identifies which session is asking, which is what any future
+      -- multi-session work needs to attribute a prompt correctly.
+      -- (Elicitations need no equivalent: their `params` already carries
+      -- `sessionId` for session-scoped requests, and the handler gets `params`.)
       self.config.handlers.on_request_permission(params.toolCall, params.options, function(option_id)
         self:_send_result(message_id, { outcome = { outcome = "selected", optionId = option_id } })
-      end)
+      end, params.sessionId)
     end)
   end
 end
