@@ -143,6 +143,48 @@ function Sidebar:open(view)
 
   self:_setup_keymaps()
 
+  -- Auto-eject: anything that displays a file in a chat window — a telescope /
+  -- snacks picker (grep+open, find-files), an LSP jump, quickfix, `gf`, a stray
+  -- `:e`, a third-party plugin — is bounced to the source window, moving focus
+  -- there. BufWinEnter fires for every buffer-into-window event, so this one
+  -- hook covers all openers without enumerating their keybinds. The chat buffer
+  -- is restored in place. `_relocating` guards the re-entrancy from our own
+  -- restore/placement, so a burst can't spawn duplicate relocations.
+  self._relocating = false
+  api.nvim_create_autocmd("BufWinEnter", {
+    group = self._augroup,
+    callback = function()
+      if self._relocating or not self:is_open() then
+        return
+      end
+      local chat_wins = {
+        { self.result_win, self.view and self.view.result_buf },
+        { self.input_win, self.view and self.view.input_buf },
+      }
+      for _, spec in ipairs(chat_wins) do
+        local win, chat_buf = spec[1], spec[2]
+        if win and api.nvim_win_is_valid(win) and chat_buf then
+          local shown = api.nvim_win_get_buf(win)
+          if not api.nvim_buf_get_name(shown):match("^emeth://") then
+            local intruder = shown
+            local cursor = api.nvim_win_get_cursor(win)
+            self._relocating = true
+            vim.schedule(function()
+              pcall(function()
+                if api.nvim_win_is_valid(win) and api.nvim_buf_is_valid(chat_buf) then
+                  api.nvim_win_set_buf(win, chat_buf)
+                end
+                require("emeth.target").send_buf(intruder, { line = cursor[1], focus = true })
+              end)
+              self._relocating = false
+            end)
+            return
+          end
+        end
+      end
+    end,
+  })
+
   api.nvim_create_autocmd("WinClosed", {
     group = self._augroup,
     callback = function(ev)
@@ -330,6 +372,31 @@ function Sidebar:_setup_keymaps()
           end,
         })
       end
+    end
+  end
+
+  -- gf/gd on a path in the chat output opens it in the source window and moves
+  -- focus there (a navigation gesture), rather than clobbering the chat. Only
+  -- bound on the result buffer — the input buffer is for typing.
+  local open_keys = config.mappings.open_file and config.mappings.open_file.normal
+  if type(open_keys) == "string" then
+    open_keys = { open_keys }
+  end
+  for _, key in ipairs(open_keys or {}) do
+    if api.nvim_buf_is_valid(view.result_buf) then
+      api.nvim_buf_set_keymap(view.result_buf, "n", key, "", {
+        noremap = true,
+        silent = true,
+        callback = function()
+          local Target = require("emeth.target")
+          local abs, line = Target.ref_under_cursor()
+          if not abs then
+            vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
+            return
+          end
+          Target.open({ path = abs, line = line, focus = true })
+        end,
+      })
     end
   end
 
