@@ -37,6 +37,9 @@ local defaults = {
     submit = { insert = "<C-s>", normal = "<CR>" },
     close = { normal = { "q", "<Esc>" } },
     switch_window = { normal = "<Tab>" },
+    -- Open the file path under the cursor in the source window (not the chat),
+    -- moving focus there. Honors a trailing :LINE(:COL) suffix.
+    open_file = { normal = { "gf", "gd" } },
     -- tmux-style zoom: grow the sidebar to fill the screen and back.
     zoom = { normal = "<leader>ez" },
     -- Expand a folded paste under the cursor in the input buffer. `za`/`zo`

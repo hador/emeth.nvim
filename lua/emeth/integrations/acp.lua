@@ -70,6 +70,10 @@ function M.setup_integration(view, session)
 
   local roots = Roots.attach(view)
   local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
+  -- Abs path emeth last navigated the source window to on a file write. Lets
+  -- `flush_reloads` tell "the pane is still on the file I put there" from "the
+  -- user has taken the wheel to read something else" and stop yanking it away.
+  local last_followed_abs = nil ---@type string|nil
 
   -- Coalesces the flood of tool_call_update content chunks into at most one
   -- render per interval. A streaming tool body arrives chunk-by-chunk, and each
@@ -126,22 +130,30 @@ function M.setup_integration(view, session)
       end
     end
     if first_path and target_win then
-      vim.api.nvim_win_call(target_win, function()
-        vim.cmd("edit " .. vim.fn.fnameescape(first_path.abs))
-      end)
-      if first_path.line then
-        -- Position and center the target window on the changed line without
-        -- stealing focus: if the user is reading emeth output, their cursor
-        -- stays put while the source window shows the edit next door.
-        vim.schedule(function()
-          if not vim.api.nvim_win_is_valid(target_win) then
-            return
-          end
-          pcall(vim.api.nvim_win_set_cursor, target_win, { first_path.line, 0 })
-          vim.api.nvim_win_call(target_win, function()
-            vim.cmd("normal! zz")
-          end)
-        end)
+      -- Hands-off: only follow the write if the source window is still showing
+      -- the file emeth last steered it to. Once the user opens something else
+      -- there to read it, we stop re-pointing the pane (buffers above still
+      -- reload in place); following resumes when they return to that file. The
+      -- first write (last_followed_abs == nil) always follows, to show where
+      -- work began.
+      local cur = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(target_win)), ":p")
+      local user_moved_away = last_followed_abs ~= nil and cur ~= last_followed_abs
+      if not user_moved_away then
+        -- Route through the shared opener with focus = false: hands-off follow
+        -- (position + center the changed line without stealing the cursor from
+        -- the chat). The write-follow *policy* — the user_moved_away gate above
+        -- — stays here; target.open owns only the window mechanics.
+        require("emeth.target").open({
+          path = first_path.abs,
+          line = first_path.line,
+          win = target_win,
+          focus = false,
+        })
+        -- Record the name the buffer actually ended up with (nvim canonicalizes
+        -- it -- e.g. resolves the /tmp -> /private/tmp symlink on macOS), so the
+        -- next flush's `cur` comparison is apples-to-apples and we don't mistake
+        -- our own navigation for the user moving away.
+        last_followed_abs = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(target_win)), ":p")
       end
     end
     pending_reloads = {}

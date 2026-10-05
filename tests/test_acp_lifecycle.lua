@@ -40,7 +40,7 @@ h.describe("acp integration: abort stuck connect", function()
   end)
 
   h.it("Ctrl+C does nothing when idle and connected", function()
-    local session, view = make_setup() -- _state = "ready", activity = "idle"
+    local _, view = make_setup() -- _state = "ready", activity = "idle"
     local before = #view.messages
     press("<C-c>")
     h.eq(before, #view.messages)
@@ -237,6 +237,63 @@ h.describe("acp integration: buffer reload focus", function()
     pcall(vim.api.nvim_buf_delete, emeth_buf, { force = true })
     vim.fn.delete(tmp)
   end)
+
+  h.it("stops following once the user opens a different file in the source window", function()
+    local session = Session:new("test")
+    session._state = "ready"
+    session.session_id = "sess-1"
+    local view = make_view()
+    Acp.setup_integration(view, session)
+
+    local function mkfile()
+      local p = vim.fn.tempname() .. ".txt"
+      local lines = {}
+      for i = 1, 20 do
+        lines[i] = "line " .. i
+      end
+      vim.fn.writefile(lines, p)
+      return p, (vim.uv.fs_realpath(p) or vim.fn.fnamemodify(p, ":p"))
+    end
+    local file_a, abs_a = mkfile()
+    local file_b, abs_b = mkfile()
+
+    vim.cmd("only")
+    local source_win = vim.api.nvim_get_current_win()
+    vim.cmd("vsplit")
+    local emeth_win = vim.api.nvim_get_current_win()
+    local emeth_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(emeth_buf, "emeth://test-chat")
+    vim.api.nvim_win_set_buf(emeth_win, emeth_buf)
+
+    -- 1. Agent writes A; the source window follows it (establishes tracking).
+    session:_emit("file_written", file_a, 3)
+    local followed = vim.wait(5000, function()
+      return vim.api.nvim_win_is_valid(source_win)
+        and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)) == abs_a
+    end, 20)
+    h.is_true(followed, "source window should first follow file A")
+
+    -- 2. User takes the wheel: opens B in the source window.
+    vim.api.nvim_win_call(source_win, function()
+      vim.cmd("edit " .. vim.fn.fnameescape(file_b))
+    end)
+    h.eq(abs_b, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)))
+
+    -- 3. Agent writes A again. The pane must NOT be yanked back to A. Poll for
+    -- the bad outcome; expect the wait to time out with the pane still on B.
+    session:_emit("file_written", file_a, 7)
+    local yanked = vim.wait(3000, function()
+      return vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)) == abs_a
+    end, 20)
+    h.is_true(not yanked, "source window must not be yanked away from the file the user opened")
+    h.eq(abs_b, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)))
+
+    -- Cleanup
+    vim.cmd("only")
+    pcall(vim.api.nvim_buf_delete, emeth_buf, { force = true })
+    vim.fn.delete(file_a)
+    vim.fn.delete(file_b)
+  end)
 end)
 
 h.describe("acp integration: session config options (/model etc.)", function()
@@ -351,7 +408,7 @@ h.describe("acp integration: session config options (/model etc.)", function()
 
   h.it("a forwarded ACP /model does not override the config-sourced one", function()
     Commands.clear_config()
-    local session, view = make_setup()
+    local session = make_setup()
     session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
     flush()
     -- Agent later forwards its own /model slash command.
