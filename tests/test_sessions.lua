@@ -46,6 +46,16 @@ h.describe("Sessions", function()
     h.eq("new title", Sessions.get("s1").title)
   end)
 
+  h.it("persists forked_from and never clears it on a later save", function()
+    reset()
+    Sessions.save({ session_id = "b", provider = "test", cwd = "/tmp", forked_from = "a" })
+    h.eq("a", Sessions.get("b").forked_from)
+    -- a lazy first-prompt save carries no lineage; it must not wipe the parent
+    Sessions.save({ session_id = "b", provider = "test", cwd = "/tmp", title = "t" })
+    h.eq("a", Sessions.get("b").forked_from)
+    h.eq("t", Sessions.get("b").title)
+  end)
+
   h.it("remove", function()
     reset()
     Sessions.save({ session_id = "s1", provider = "test", cwd = "/tmp" })
@@ -175,8 +185,10 @@ h.describe("Sessions: malformed entries", function()
   -- regardless -- give it a matching cwd so the query actually reaches it, which
   -- is the case any cross-directory read would hit.
   h.it("skips a record with no session_id", function()
-    write_raw('[{"cwd":"/tmp","provider":"test","created_at":"2026-03-11T10:45:11Z"},'
-      .. '{"session_id":"keep","provider":"test","cwd":"/tmp"}]')
+    write_raw(
+      '[{"cwd":"/tmp","provider":"test","created_at":"2026-03-11T10:45:11Z"},'
+        .. '{"session_id":"keep","provider":"test","cwd":"/tmp"}]'
+    )
     local got = Sessions.list("/tmp", "test")
     h.eq(1, #got)
     h.eq("keep", got[1].session_id)

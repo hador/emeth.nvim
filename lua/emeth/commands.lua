@@ -110,6 +110,17 @@ function M.register_builtins()
     end,
   })
 
+  M.register("fork", {
+    desc = "Fork the current session into a new branch",
+    source = "builtin",
+    immediate = true,
+    execute = function(_, ctx)
+      if ctx.integration and ctx.integration.fork then
+        ctx.integration.fork()
+      end
+    end,
+  })
+
   M.register("help", {
     desc = "List available commands",
     source = "builtin",

@@ -1381,6 +1381,12 @@ function M.setup_integration(view, session)
     end,
 
     load_session = function(session_id, cb)
+      -- Release the session we're leaving before loading another over the same
+      -- live client (best-effort; keeps its history). connect_and_load starts a
+      -- fresh process, so it has nothing to close.
+      if session.session_id and session.session_id ~= session_id then
+        session:close(session.session_id)
+      end
       -- Hydrate roots from the persisted session entry before re-loading
       roots:hydrate_from(Sessions.get(session_id))
       lifecycle({ clear = true, touch = true, kind = "load" }, function(opts, done)
@@ -1406,6 +1412,10 @@ function M.setup_integration(view, session)
     end,
 
     new_session = function()
+      -- Release the session we're leaving (live client is reused). Best-effort.
+      if session.session_id then
+        session:close(session.session_id)
+      end
       view:clear()
       reset_state()
       selected_files = {}
@@ -1419,6 +1429,36 @@ function M.setup_integration(view, session)
           done(err)
         end)
       end)
+    end,
+
+    ---Fork the current session into a new branch and adopt it. A whole-session
+    ---clone, so the on-screen transcript is the shared history and is kept, not
+    ---cleared. Uses `kind = "load"` so a configured default mode doesn't override
+    ---the forked state. An agent that doesn't support fork surfaces the error in
+    ---the transcript.
+    fork = function(cb)
+      local parent = session.session_id
+      lifecycle({ kind = "load" }, function(opts, done)
+        session:fork(opts, function(err)
+          if not err then
+            -- Record the fork eagerly (unlike the lazy first-prompt record): it
+            -- is a deliberate branch, and capturing `forked_from` now is the only
+            -- moment the parent id is known. Chains nest naturally — each fork
+            -- points at its direct parent.
+            if session.session_id then
+              Sessions.save({
+                session_id = session.session_id,
+                provider = session.provider_name,
+                cwd = vim.fn.getcwd(),
+                additional_directories = roots:save_field(),
+                forked_from = parent,
+              })
+            end
+            announce_session("Forked session.")
+          end
+          done(err)
+        end)
+      end, cb)
     end,
 
     disconnect = function()

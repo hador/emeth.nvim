@@ -53,17 +53,11 @@ h.describe("session_picker.short_dir", function()
   -- A Brazil workspace is `<workspace>/src/<Package>`, so the component above the
   -- package is a bare `src` that identifies nothing. The workspace name does.
   h.it("skips a bare src component when shortening", function()
-    h.eq(
-      "FOS/FireTvLauncher",
-      P.short_dir("/Volumes/workplace/FTV/FOS/src/FireTvLauncher")
-    )
+    h.eq("FOS/FireTvLauncher", P.short_dir("/Volumes/workplace/FTV/FOS/src/FireTvLauncher"))
   end)
 
   h.it("keeps the parent for other long paths", function()
-    h.eq(
-      "deep/leaf",
-      P.short_dir("/Volumes/workplace/some/very/long/path/deep/leaf")
-    )
+    h.eq("deep/leaf", P.short_dir("/Volumes/workplace/some/very/long/path/deep/leaf"))
   end)
 
   h.it("survives a nil or empty dir", function()
@@ -113,6 +107,25 @@ h.describe("session_picker.items", function()
     h.is_true(vim.fn.strchars(items[1].label) < 120, "label was " .. vim.fn.strchars(items[1].label))
     h.is_true(items[1].label:find("…", 1, true) ~= nil, "expected an ellipsis")
     h.is_true(items[1].label:find("3h", 1, true) ~= nil, "age must survive the clamp")
+    vim.fn.delete(dir, "rf")
+  end)
+
+  h.it("names the parent on a forked session", function()
+    vim.fn.mkdir(dir, "p")
+    local parent = entry({ session_id = "parent-id", title = "Original work" })
+    local child = entry({ session_id = "child-id", title = "Branch", forked_from = "parent-id" })
+    local items = P.items({ parent, child }, NOW)
+    local child_label = items[2].label
+    h.is_true(child_label:find("⑂ Original work", 1, true) ~= nil, child_label)
+    -- the parent row carries no fork marker
+    h.is_nil(items[1].label:find("⑂", 1, true))
+    vim.fn.delete(dir, "rf")
+  end)
+
+  h.it("flags a fork whose parent is not in the index", function()
+    vim.fn.mkdir(dir, "p")
+    local items = P.items({ entry({ session_id = "orphan", forked_from = "gone" }) }, NOW)
+    h.is_true(items[1].label:find("⑂ fork", 1, true) ~= nil, items[1].label)
     vim.fn.delete(dir, "rf")
   end)
 
