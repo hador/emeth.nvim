@@ -13,6 +13,7 @@ local _uuid_counter = 0
 ---@field content? string|table
 ---@field is_error? boolean
 ---@field status? "pending"|"in_progress"|"completed"|"failed"|"cancelled"
+---@field failure_reason? "cancelled"|"denied"|"error"
 
 ---@class chat_ui.MessageMetadata
 ---@field provider? string

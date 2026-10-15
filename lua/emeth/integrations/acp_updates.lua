@@ -162,6 +162,7 @@ function M.handlers(ctx)
         id = update.toolCallId,
         input = update.rawInput or {},
         status = update.status or "pending",
+        failure_reason = update.failure_reason,
       }, metadata)
       if parent then
         -- Hidden while the parent is collapsed; a child arriving after the user
@@ -203,6 +204,11 @@ function M.handlers(ctx)
             if update.rawInput then
               item.input = update.rawInput
             end
+            -- CLI v3 failed-tool classification (cancelled | denied | error),
+            -- normalised onto the generic field by the provider transform.
+            if update.failure_reason then
+              item.failure_reason = update.failure_reason
+            end
           end
         end
         if msg.metadata.tool_call then
@@ -231,8 +237,10 @@ function M.handlers(ctx)
       end
     end
 
-    -- Debounced buffer reload for completed tool calls that wrote files
-    if update.status == "completed" and uuid then
+    -- Debounced buffer reload for completed tool calls that wrote files.
+    -- Skipped during session/load replay: those writes already happened on disk,
+    -- so there is nothing to reload and no window to follow.
+    if update.status == "completed" and uuid and not update.replay then
       local tc = (view:get_message(uuid) or {}).metadata
       tc = tc and tc.tool_call
       if tc and tc.content then

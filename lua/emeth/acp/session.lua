@@ -9,6 +9,7 @@ local ACPClient = require("emeth.acp.client")
 ---@field extensions table|nil
 ---@field _state "disconnected"|"connecting"|"ready"|"error"
 ---@field _listeners table<string, fun(...)[]>
+---@field _request_handlers table<string, fun(params: table, respond: fun(result: table|nil), respond_error: fun(message: string, code?: number))>
 local Session = {}
 Session.__index = Session
 
@@ -135,6 +136,7 @@ function Session:new(provider_name)
     args = provider.args,
     env = env,
     auth_method = provider.auth_method,
+    capabilities_meta = provider.capabilities_meta,
     handlers = {
       on_session_update = function(update, update_session_id)
         session:_emit("update", update, update_session_id)
@@ -144,6 +146,12 @@ function Session:new(provider_name)
       end,
       on_notification = function(method, params, message_id)
         session:_emit("notification", method, params, message_id)
+      end,
+      -- Agent→client request nobody built-in handles. Dispatch to a provider
+      -- extension's registered request handler; return truthy to claim it (the
+      -- client answers -32601 for anything unclaimed, so the agent never hangs).
+      on_request = function(method, params, respond, respond_error)
+        return session:_handle_request(method, params, respond, respond_error)
       end,
       on_request_permission = function(tool_call, options, callback, permission_session_id)
         local choice = auto_approve_choice(tool_call, options)
@@ -222,9 +230,58 @@ function Session:new(provider_name)
     provider_name = provider_name,
     _state = "disconnected",
     _listeners = {},
+    _request_handlers = {},
   }, { __index = self })
 
   return session
+end
+
+-- ── Agent→client requests ──────────────────────────────────────
+
+---Register a handler for an agent→client request method (e.g. kiro's
+---`_kiro/openExternalUrl`). The handler is `fun(params, respond, respond_error)`;
+---calling `respond`/`respond_error` answers the agent. One handler per method.
+---@param method string
+---@param fn fun(params: table, respond: fun(result: table|nil), respond_error: fun(message: string, code?: number))
+function Session:on_request(method, fn)
+  self._request_handlers[method] = fn
+end
+
+---Remove a request handler. No-op if `fn` isn't the current one.
+---@param method string
+---@param fn fun(...)
+function Session:off_request(method, fn)
+  if self._request_handlers[method] == fn then
+    self._request_handlers[method] = nil
+  end
+end
+
+---Route an inbound request to its registered handler. Returns true when claimed.
+---@private
+function Session:_handle_request(method, params, respond, respond_error)
+  local fn = self._request_handlers[method]
+  if not fn then
+    return false
+  end
+  vim.schedule(function()
+    fn(params, respond, respond_error)
+  end)
+  return true
+end
+
+---Send a provider-specific control request to the agent. Ready-guarded like
+---send_prompt. Generic transport for methods the core doesn't model (steering,
+---MCP reset, …) so their namespace knowledge stays in provider extensions.
+---@param method string
+---@param params table|nil
+---@param cb? fun(result: table|nil, err: acp.ACPError|nil)
+function Session:request(method, params, cb)
+  cb = cb or function() end
+  if self._state ~= "ready" then
+    cb(nil, { code = -1, message = "Session not ready (state: " .. self._state .. ")" })
+    return
+  end
+  self.client:request(method, params, cb)
 end
 
 -- ── Session info extraction ────────────────────────────────────
@@ -364,30 +421,6 @@ function Session:cancel()
   if self.session_id then
     self.client:cancel_session(self.session_id)
   end
-end
-
----Whether this session's agent accepts steering.
----@return boolean
-function Session:supports_steering()
-  return self._state == "ready" and self.client:supports_steering()
-end
-
----Steer the running turn: deliver `content_items` into it rather than queueing
----them as a separate prompt.
----
----`outcome` is `"injected"` when it landed in the running turn, or
----`"promptRequired"` when no turn was actually running — in which case the agent
----kept its hands off the content and the caller should send it as a normal
----prompt (whose own callback then owns the turn's completion).
----@param content_items table[]
----@param cb? fun(outcome: string|nil, err: acp.ACPError|nil)
-function Session:steer(content_items, cb)
-  cb = cb or function() end
-  if self._state ~= "ready" then
-    cb(nil, { code = -1, message = "Session not ready (state: " .. self._state .. ")" })
-    return
-  end
-  self.client:steer(self.session_id, content_items, cb)
 end
 
 ---Set a session config option (model/mode/effort/agent/fast). Ready-guarded

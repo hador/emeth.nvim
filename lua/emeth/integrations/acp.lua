@@ -112,6 +112,30 @@ function M.setup_integration(view, session)
   -- `integration.set_transform_elicitation(fn)`.
   ---@type fun(fields: acp.ElicitationField[], request: table): acp.ElicitationField[]|nil
   local transform_elicitation_fn = nil
+  -- Steering strategy, registered by a provider extension via
+  -- `integration.set_steering({ supported, steer })`. `supported` is a boolean
+  -- or a predicate; `steer(prompt, text, cb)` delivers a message into the running
+  -- turn and reports back through `cb(outcome, err, info)`:
+  --   * "injected"       landed in the live turn (claude) — mark it steered now
+  --   * "promptRequired"  no turn was running (claude) — send as a normal prompt
+  --   * "queued"          accepted into the agent's queue (kiro) — the provider
+  --                       flips it to steered via its own lifecycle updates,
+  --                       keyed by `info.message_id`
+  ---@class acp.SteeringStrategy
+  ---@field supported boolean|fun():boolean
+  ---@field steer fun(prompt: table[], text: string, cb: fun(outcome: string|nil, err: any, info: table|nil))
+  ---@type acp.SteeringStrategy|nil
+  local steering = nil
+  local function steering_supported()
+    if not steering then
+      return false
+    end
+    local s = steering.supported
+    if type(s) == "function" then
+      return s() == true
+    end
+    return s == true
+  end
 
   local function flush_reloads()
     local target_win = util.find_source_win()
@@ -200,8 +224,14 @@ function M.setup_integration(view, session)
 
   -- ── Lifecycle wrapper ──────────────────────────────────────────
 
+  ---@class acp.LifecycleOpts
+  ---@field clear? boolean
+  ---@field save? boolean
+  ---@field touch? boolean
+  ---@field kind? "new"|"load"
+
   ---Run a session lifecycle action with standard boilerplate.
-  ---@param opts { clear?: boolean, save?: boolean, touch?: boolean }
+  ---@param opts acp.LifecycleOpts
   ---@param action fun(done: fun(err: any))
   ---@param cb? fun(err: any)
   local function with_lifecycle(opts, action, cb)
@@ -516,7 +546,8 @@ function M.setup_integration(view, session)
     -- in-flight session/prompt still owns settling the activity state, and
     -- bumping the epoch would invalidate its callback, stranding the winbar in
     -- "generating" forever.
-    if session:is_connected() and activity == "generating" and session:supports_steering() then
+    if session:is_connected() and activity == "generating" and steering_supported() and steering then
+      local strat = steering
       local prompt = build_prompt(text)
       local msg = add_user_message(text)
       -- Close the text/thought blocks the turn was streaming into. They sit
@@ -530,7 +561,7 @@ function M.setup_integration(view, session)
       local stream = stream_for(session.session_id)
       stream.assistant_uuid = nil
       stream.thinking_uuid = nil
-      session:steer(prompt, function(outcome, err)
+      strat.steer(prompt, text, function(outcome, err, info)
         vim.schedule(function()
           if err then
             view:add_message(Message:new("system", "Error: " .. util.fmt_err(err)))
@@ -538,17 +569,29 @@ function M.setup_integration(view, session)
           end
           -- The turn finished between our check and the request landing. The
           -- agent left the content untouched precisely so we can send it as a
-          -- normal prompt whose lifecycle we own.
+          -- normal prompt whose lifecycle we own. (claude only — kiro never
+          -- reports this; it queues instead, see below.)
           if outcome == "promptRequired" then
             start_turn(prompt)
             return
           end
-          -- Mark it only now that the agent confirmed the injection. Marking at
-          -- submit time would claim a steer for the `promptRequired` race, which
-          -- is an ordinary turn. Reading back, "did this cut into a running turn
-          -- or start one?" is otherwise unrecoverable.
+          -- Queued (kiro): accepted into the agent's queue but not yet injected.
+          -- It will be injected at the next inference boundary — within this turn
+          -- if one is still running, otherwise not until the next prompt. The
+          -- provider's own steering lifecycle flips it to "steered" (keyed by the
+          -- message id) or "not delivered" if the turn ends without injecting it.
+          if outcome == "queued" then
+            view:update_message(msg.uuid, function(m)
+              m.metadata.steer_state = "queued"
+              m.metadata.steer_message_id = info and info.message_id or nil
+            end)
+            return
+          end
+          -- Injected (claude): confirmed into the running turn. Mark it only now
+          -- that the agent confirmed — marking at submit time would claim a steer
+          -- for the `promptRequired` race, which is an ordinary turn.
           view:update_message(msg.uuid, function(m)
-            m.metadata.steered = true
+            m.metadata.steer_state = "steered"
           end)
         end)
       end)
@@ -611,12 +654,20 @@ function M.setup_integration(view, session)
     -- tool_call's title) before we consume it. Keep this lightweight —
     -- transforms run on every event.
     if transform_update_fn then
-      pcall(transform_update_fn, update)
+      -- A transform may also DROP an update by returning false (e.g. kiro's
+      -- empty replay boundary chunk, which would otherwise render as a blank
+      -- user message).
+      local ok, keep = pcall(transform_update_fn, update)
+      if ok and keep == false then
+        return
+      end
     end
 
     -- Update-driven activity transition: streaming content → generating.
     -- connecting/cancelled absorb updates (stay put); only idle transitions.
-    if not AcpUpdates.NON_STREAMING[update.sessionUpdate] and activity == "idle" then
+    -- Replayed history (session/load) must not flip us to generating — the
+    -- transform marks it `update.replay`.
+    if not AcpUpdates.NON_STREAMING[update.sessionUpdate] and activity == "idle" and not update.replay then
       set_activity("generating")
     end
 
@@ -1048,6 +1099,9 @@ function M.setup_integration(view, session)
     set_transform_elicitation = function(fn)
       transform_elicitation_fn = fn
     end,
+    set_steering = function(s)
+      steering = s
+    end,
   }
 
   -- Load provider-specific extensions (e.g. claude-code, kiro-cli).
@@ -1063,12 +1117,16 @@ function M.setup_integration(view, session)
   end
 
   ---Build the session/new (and session/load) `_meta` payload by asking the
-  ---provider extension what meta it wants to attach.
+  ---provider extension what meta it wants to attach. `kind` ("new"|"load") lets
+  ---the extension distinguish a fresh session from a resumed one — e.g. kiro
+  ---applies its default `modeId` only to new sessions, so resuming keeps the
+  ---mode the session already had.
+  ---@param kind "new"|"load"
   ---@return table|nil
-  local function build_session_meta()
+  local function build_session_meta(kind)
     if has_ext and type(ext.build_session_meta) == "function" then
       local emeth_config = require("emeth").config
-      local ok, meta = pcall(ext.build_session_meta, emeth_config)
+      local ok, meta = pcall(ext.build_session_meta, emeth_config, kind)
       if ok and type(meta) == "table" and next(meta) ~= nil then
         return meta
       end
@@ -1256,13 +1314,14 @@ function M.setup_integration(view, session)
   end
 
   ---Build options carrying the current workspace roots and provider meta, if any.
-  local function lifecycle_opts()
+  ---@param kind "new"|"load"
+  local function lifecycle_opts(kind)
     local opts = {}
     local snap = roots:snapshot()
     if #snap > 0 then
       opts.additional_directories = snap
     end
-    local meta = build_session_meta()
+    local meta = build_session_meta(kind)
     if meta then
       opts.meta = meta
     end
@@ -1272,12 +1331,12 @@ function M.setup_integration(view, session)
   ---Run a session lifecycle method through with_lifecycle, applying the
   ---shared post-ready fixups (render any reported mode) on success. `run`
   ---receives (opts, done) and calls the session method.
-  ---@param wl_opts table
+  ---@param wl_opts acp.LifecycleOpts
   ---@param run fun(opts: table|nil, done: fun(err: any))
   ---@param cb? fun(err: any)
   local function lifecycle(wl_opts, run, cb)
     with_lifecycle(wl_opts, function(done)
-      run(lifecycle_opts(), function(err)
+      run(lifecycle_opts(wl_opts.kind or "new"), function(err)
         if not err then
           local exts = session.extensions or {}
           vim.schedule(function()
@@ -1324,7 +1383,7 @@ function M.setup_integration(view, session)
     load_session = function(session_id, cb)
       -- Hydrate roots from the persisted session entry before re-loading
       roots:hydrate_from(Sessions.get(session_id))
-      lifecycle({ clear = true, touch = true }, function(opts, done)
+      lifecycle({ clear = true, touch = true, kind = "load" }, function(opts, done)
         session:load(session_id, opts, function(err)
           if not err then
             announce_session("Session loaded.")
@@ -1336,7 +1395,7 @@ function M.setup_integration(view, session)
 
     connect_and_load = function(session_id, cb)
       roots:hydrate_from(Sessions.get(session_id))
-      lifecycle({ touch = true }, function(opts, done)
+      lifecycle({ touch = true, kind = "load" }, function(opts, done)
         session:connect_and_load(session_id, opts, function(err)
           if not err then
             announce_session("Connected to " .. session.provider_name .. ".")

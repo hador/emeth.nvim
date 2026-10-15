@@ -239,6 +239,7 @@
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
 ---@field on_error? fun(error: table)
 ---@field on_notification? fun(method: string, params: table, message_id: number|nil)
+---@field on_request? fun(method: string, params: table, respond: fun(result: table|nil), respond_error: fun(message: string, code?: number)): boolean|nil
 
 ---@class acp.ClientConfig
 ---@field transport_type? "stdio" | "websocket" | "tcp"
@@ -249,6 +250,7 @@
 ---@field reconnect? boolean
 ---@field max_reconnect_attempts? number
 ---@field auth_method? string
+---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
 ---@field handlers? acp.Handlers
 ---@field on_state_change? fun(new_state: acp.ConnectionState, old_state: acp.ConnectionState)
 

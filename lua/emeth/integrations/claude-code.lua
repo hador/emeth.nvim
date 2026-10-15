@@ -354,6 +354,34 @@ function M.setup(session, view)
   session:on("notification", on_notification)
   local goal_cleanup = attach_goal(session, view)
 
+  -- Steering. claude-acp advertises support on the InitializeResponse `_meta`
+  -- (not agentCapabilities), and injects synchronously via `_session/steering`
+  -- returning an `outcome`. `idleBehavior = "promptRequired"` makes the agent
+  -- answer `promptRequired` (rather than detaching a turn whose result never
+  -- reaches our prompt callback) when no turn is actually running, so the caller
+  -- can resend as a normal prompt it owns.
+  if view.integration and view.integration.set_steering then
+    view.integration.set_steering({
+      supported = function()
+        local steering = session.client and session.client.agent_meta and session.client.agent_meta.steering
+        return type(steering) == "table" and steering.supported == true
+      end,
+      steer = function(prompt, _, cb)
+        session:request("_session/steering", {
+          sessionId = session.session_id,
+          prompt = prompt,
+          _meta = { steering = { idleBehavior = "promptRequired" } },
+        }, function(result, err)
+          if err then
+            cb(nil, err)
+          else
+            cb(type(result) == "table" and result.outcome or nil, nil)
+          end
+        end)
+      end,
+    })
+  end
+
   if view.integration and view.integration.set_transform_update then
     view.integration.set_transform_update(transform_update)
   end
@@ -367,6 +395,9 @@ function M.setup(session, view)
     Winbar.clear_badge("model")
     Winbar.clear_badge("mode")
     Winbar.clear_badge("cost")
+    if view.integration and view.integration.set_steering then
+      view.integration.set_steering(nil)
+    end
     if view.integration and view.integration.set_transform_update then
       view.integration.set_transform_update(nil)
     end

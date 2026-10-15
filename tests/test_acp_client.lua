@@ -421,68 +421,117 @@ h.describe("ACPClient connect when the agent cannot be started", function()
   end)
 end)
 
--- ── steering ───────────────────────────────────────────────────
+-- ── generic request / respond ──────────────────────────────────
+-- Steering is no longer a client concern: provider extensions drive their own
+-- control methods (claude `_session/steering`, kiro `_session/steer`) through the
+-- generic `request`/`respond`/`respond_error` + `on_request` plumbing below.
 
-h.describe("ACPClient steering", function()
-  h.it("reports support from the InitializeResponse _meta, not agentCapabilities", function()
-    local c = make_client()
-    h.eq(false, c:supports_steering(), "no _meta captured yet")
-    -- claude-acp advertises steering on the top-level `_meta`; agentCapabilities
-    -- carries only its own `claudeCode` bag.
-    c.agent_capabilities = { _meta = { claudeCode = {} } }
-    h.eq(false, c:supports_steering())
-    c.agent_meta = { steering = { supported = true } }
-    h.is_true(c:supports_steering())
-  end)
-
-  h.it("treats a present-but-unsupported advertisement as unsupported", function()
-    local c = make_client()
-    c.agent_meta = { steering = { supported = false } }
-    h.eq(false, c:supports_steering())
-    c.agent_meta = { steering = {} }
-    h.eq(false, c:supports_steering())
-  end)
-
-  h.it("sends _session/steering opting in to promptRequired", function()
-    local c, sent = make_client()
-    c:steer("s1", { { type = "text", text = "actually use tabs" } }, function() end)
-    local decoded = vim.json.decode(sent[1])
-    h.eq("_session/steering", decoded.method)
-    h.eq("s1", decoded.params.sessionId)
-    h.eq("actually use tabs", decoded.params.prompt[1].text)
-    -- Without this opt-in an idle agent starts a turn we never get a result for,
-    -- which would strand our activity state.
-    h.eq("promptRequired", decoded.params._meta.steering.idleBehavior)
-  end)
-
-  h.it("reports the outcome back to the caller", function()
+h.describe("ACPClient request/respond", function()
+  h.it("sends an arbitrary request and reports the result", function()
     local c, sent = make_client()
     local got, got_err = nil, nil
-    c:steer("s1", { { type = "text", text = "x" } }, function(outcome, err)
-      got, got_err = outcome, err
+    c:request("_session/steer", { sessionId = "s1", message = "hi" }, function(result, err)
+      got, got_err = result, err
     end)
-    local id = vim.json.decode(sent[1]).id
-    c:_handle_message({ jsonrpc = "2.0", id = id, result = { outcome = "injected" } })
-    h.eq("injected", got)
+    local decoded = vim.json.decode(sent[1])
+    h.eq("_session/steer", decoded.method)
+    h.eq("hi", decoded.params.message)
+    c:_handle_message({ jsonrpc = "2.0", id = decoded.id, result = { queued = true, messageId = "m1" } })
+    h.eq("m1", got.messageId)
     h.is_nil(got_err)
   end)
 
-  h.it("surfaces an error instead of an outcome", function()
+  h.it("surfaces a request error", function()
     local c, sent = make_client()
     local got, got_err = nil, nil
-    c:steer("s1", { { type = "text", text = "x" } }, function(outcome, err)
-      got, got_err = outcome, err
+    c:request("x", {}, function(result, err)
+      got, got_err = result, err
     end)
     local id = vim.json.decode(sent[1]).id
-    c:_handle_message({ jsonrpc = "2.0", id = id, error = { code = -32000, message = "nope" } })
+    c:_handle_message({ jsonrpc = "2.0", id = id, error = { code = -1, message = "nope" } })
     h.is_nil(got)
     h.eq("nope", got_err.message)
+  end)
+
+  h.it("respond and respond_error answer an inbound request by id", function()
+    local c, sent = make_client()
+    c:respond(7, { success = true })
+    local ok = vim.json.decode(sent[#sent])
+    h.eq(7, ok.id)
+    h.eq(true, ok.result.success)
+    c:respond_error(8, "bad", -32602)
+    local err = vim.json.decode(sent[#sent])
+    h.eq(8, err.id)
+    h.eq(-32602, err.error.code)
+  end)
+end)
+
+h.describe("ACPClient inbound requests", function()
+  h.it("routes an unknown agent->client request to on_request", function()
+    local claimed = nil
+    local c, sent = make_client({
+      on_request = function(method, params, respond, _re)
+        claimed = { method = method, params = params }
+        respond({ success = true })
+        return true
+      end,
+    })
+    c:_handle_message({ jsonrpc = "2.0", id = 3, method = "_kiro/openExternalUrl", params = { url = "https://x" } })
+    h.eq("_kiro/openExternalUrl", claimed.method)
+    h.eq("https://x", claimed.params.url)
+    local reply = vim.json.decode(sent[#sent])
+    h.eq(3, reply.id)
+    h.eq(true, reply.result.success)
+  end)
+
+  h.it("answers -32601 when nothing claims the request", function()
+    local c, sent = make_client() -- no on_request
+    c:_handle_message({ jsonrpc = "2.0", id = 4, method = "_kiro/unknown", params = {} })
+    local reply = vim.json.decode(sent[#sent])
+    h.eq(4, reply.id)
+    h.eq(c.ERROR_CODES.METHOD_NOT_FOUND, reply.error.code)
+  end)
+
+  h.it("answers -32601 when on_request declines", function()
+    local c, sent = make_client({
+      on_request = function()
+        return false
+      end,
+    })
+    c:_handle_message({ jsonrpc = "2.0", id = 5, method = "_kiro/x", params = {} })
+    local reply = vim.json.decode(sent[#sent])
+    h.eq(c.ERROR_CODES.METHOD_NOT_FOUND, reply.error.code)
+  end)
+
+  h.it("treats a method with no id as a notification, not a request", function()
+    local notified, requested = false, false
+    local c = make_client({
+      on_notification = function()
+        notified = true
+      end,
+      on_request = function()
+        requested = true
+        return true
+      end,
+    })
+    c:_handle_message({ jsonrpc = "2.0", method = "_kiro/mcp/status", params = {} })
+    vim.wait(10)
+    h.is_true(notified)
+    h.eq(false, requested)
   end)
 end)
 
 -- ── client capabilities ────────────────────────────────────────
 
 h.describe("ACPClient capabilities", function()
+  h.it("merges provider capabilities_meta into clientCapabilities._meta", function()
+    local real = ACPClient:new({ command = "true", capabilities_meta = { kiro = { openExternalUrl = true } } })
+    h.eq(true, real.capabilities._meta.kiro.openExternalUrl)
+    -- Absent by default so non-kiro providers send no `_meta`.
+    local plain = ACPClient:new({ command = "true" })
+    h.is_nil(plain.capabilities._meta)
+  end)
+
   h.it("advertises form elicitation as an empty object, not an array", function()
     local real = ACPClient:new({ command = "true" })
     -- A bare Lua `{}` would encode as `[]`; the spec requires an object here.

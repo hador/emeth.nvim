@@ -4,6 +4,9 @@
 ---@field show_raw_sdk_messages? boolean
 ---@field extra_args? table<string, string|boolean>
 
+---@class chat_ui.KiroCliConfig
+---@field mode? string  Default agent/mode for NEW kiro-cli sessions (sent as `_meta.kiro.modeId`)
+
 ---@class chat_ui.Config
 ---@field sidebar { position: string, width: number, input_height: number }
 ---@field mappings table
@@ -21,6 +24,7 @@
 ---@field tool_header_max_chars number
 ---@field diff_collapse_lines number
 ---@field claude_code? chat_ui.ClaudeCodeConfig
+---@field kiro_cli? chat_ui.KiroCliConfig
 
 ---@class chat_ui.Module
 ---@field config chat_ui.Config
@@ -88,6 +92,14 @@ local defaults = {
     --   extra_args = { agent = "my-agent", verbose = true }
     -- becomes `--agent my-agent --verbose` on the underlying claude invocation.
     extra_args = nil, ---@type table<string, string|boolean>|nil
+  },
+  kiro_cli = {
+    -- Default agent/mode for NEW kiro-cli sessions, sent as `_meta.kiro.modeId`
+    -- on session/new (v3). Must be a mode the v3 engine exposes (run `/mode` to
+    -- see the list; legacy-format agents need `kiro-cli agent upgrade` first).
+    -- Resumed sessions keep their own mode. Example:
+    --   kiro_cli = { mode = "my-agent" }
+    mode = nil, ---@type string|nil
   },
 }
 
@@ -316,12 +328,24 @@ end
 ---@param session_id string
 ---@param provider? string
 function M.resume(session_id, provider)
+  -- A session belongs to the provider that created it. Prefer the recorded
+  -- provider (over the caller's hint, over whatever is connected) so resuming by
+  -- id never loads it into the wrong agent — which would fail the load and evict
+  -- the entry via forget_unloadable. `:EmethResume <id>` relies on this, since it
+  -- passes no provider and runs only while some integration is already up.
+  local entry = require("emeth.sessions").get(session_id)
+  provider = (entry and entry.provider) or provider
+
   if M._integration then
-    if M._integration.load_session then
+    -- Wrong agent connected: tear it down so we rebuild the right one below.
+    if provider and provider ~= M._provider then
+      M._integration.disconnect()
+      M._set_integration(nil, nil)
+    elseif M._integration.load_session then
       ensure_sidebar_open()
       M._integration.load_session(session_id, forget_unloadable(session_id))
+      return
     end
-    return
   end
 
   local resolved = resolve_provider(provider)
@@ -356,13 +380,8 @@ function M.history()
       vim.notify("[emeth] Could not enter " .. entry.cwd .. ": " .. tostring(err), vim.log.levels.ERROR)
       return
     end
-    -- A session belongs to the provider that created it, which need not be the
-    -- one currently connected; drop a mismatched integration so `resume` builds
-    -- the right one rather than loading the id into the wrong agent.
-    if M._integration and entry.provider and entry.provider ~= M._provider then
-      M._integration.disconnect()
-      M._set_integration(nil, nil)
-    end
+    -- `resume` honours the session's recorded provider, rebuilding the right
+    -- agent when it differs from the one currently connected.
     M.resume(entry.session_id, entry.provider)
   end)
 end

@@ -393,7 +393,6 @@ h.describe("claude-code goal rendering", function()
   end)
 end)
 
-
 h.describe("claude-code subagent attribution transform", function()
   h.it("lifts parentToolUseId onto a generic field", function()
     local u = {
