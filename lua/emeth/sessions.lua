@@ -37,7 +37,7 @@ local function write_index(entries)
   vim.fn.writefile({ vim.json.encode(entries) }, path)
 end
 
----@param entry { session_id: string, provider: string, cwd: string, title?: string, additional_directories?: string[] }
+---@param entry { session_id: string, provider: string, cwd: string, title?: string, additional_directories?: string[], forked_from?: string }
 function M.save(entry)
   local entries = read_index()
   local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
@@ -50,6 +50,11 @@ function M.save(entry)
       if entry.additional_directories then
         e.additional_directories = entry.additional_directories
       end
+      -- Lineage is write-once: later lazy saves (first-prompt record) don't carry
+      -- it, so never clear it, and don't let a re-save overwrite a known parent.
+      if entry.forked_from and not e.forked_from then
+        e.forked_from = entry.forked_from
+      end
       e.updated_at = now
       write_index(entries)
       return
@@ -61,6 +66,7 @@ function M.save(entry)
     cwd = entry.cwd,
     title = entry.title,
     additional_directories = entry.additional_directories,
+    forked_from = entry.forked_from,
     created_at = now,
     updated_at = now,
   }

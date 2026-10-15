@@ -823,6 +823,67 @@ function ACPClient:cancel_session(session_id)
   self:_send_notification("session/cancel", { sessionId = session_id })
 end
 
+---Close a session server-side: cancel its active work and release runtime
+---resources, WITHOUT deleting its persisted history (that is `session/delete`).
+---Standard ACP, gated on `sessionCapabilities.close`. Best-effort cleanup when a
+---live client moves off a session — a missing capability isn't an error worth
+---surfacing, so it reports through the callback and callers can ignore it.
+---@param session_id string
+---@param callback? fun(result: table|nil, err: acp.ACPError|nil)
+function ACPClient:close_session(session_id, callback)
+  callback = callback or function() end
+  local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
+  if not (sc and sc.close) then
+    callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support closing sessions"))
+    return
+  end
+  self:_send_request("session/close", { sessionId = session_id }, callback)
+end
+
+---Fork a session into a new one. Standard ACP, gated on
+---`sessionCapabilities.fork`. The base behaviour clones the whole session; a
+---provider extension may target a point via `opts.meta` (kiro's
+---`_meta.kiro.messageId`). The response is session/new-shaped (`sessionId` plus
+---modes/configOptions), so this returns `(new_session_id, err, result)` exactly
+---like `create_session`.
+---@param session_id string
+---@param cwd string
+---@param mcp_servers table[]?
+---@param opts_or_cb table|fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
+---@param maybe_cb? fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
+function ACPClient:fork_session(session_id, cwd, mcp_servers, opts_or_cb, maybe_cb)
+  local opts, callback
+  if type(opts_or_cb) == "function" then
+    opts, callback = nil, opts_or_cb
+  else
+    opts, callback = opts_or_cb, maybe_cb
+  end
+  callback = callback or function() end
+  local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
+  if not (sc and sc.fork) then
+    callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support forking sessions"))
+    return
+  end
+  local params = { sessionId = session_id, cwd = cwd, mcpServers = mcp_servers or {} }
+  if opts and opts.additionalDirectories and #opts.additionalDirectories > 0 and sc.additionalDirectories then
+    params.additionalDirectories = opts.additionalDirectories
+  end
+  if opts and opts.meta and next(opts.meta) ~= nil then
+    params._meta = opts.meta
+  end
+  self:_send_request("session/fork", params, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    if not result or not result.sessionId then
+      callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Fork returned no sessionId"))
+      return
+    end
+    callback(result.sessionId, nil, result)
+  end)
+end
+
 ---Set a session configuration option (model, mode, effort, agent, fast, ...).
 ---Standard ACP `session/set_config_option`. The value is either a select
 ---option id (string) or a boolean for boolean-typed options — the wire schema

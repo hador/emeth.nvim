@@ -423,6 +423,41 @@ function Session:cancel()
   end
 end
 
+---Close a session server-side (release resources; keeps history). Best-effort:
+---no-ops without a session id or a live client, and swallows an unsupported-
+---capability error — it is cleanup, not a user action. Defaults to the current
+---session.
+---@param session_id? string
+---@param cb? fun(err: acp.ACPError|nil)
+function Session:close(session_id, cb)
+  cb = cb or function() end
+  session_id = session_id or self.session_id
+  if not session_id or self.client.state == "disconnected" then
+    cb(nil)
+    return
+  end
+  self.client:close_session(session_id, function(_, err)
+    cb(err)
+  end)
+end
+
+---Fork the current session into a new one and adopt it as this Session's active
+---session (whole-session clone unless `opts.meta` targets a point). Ready-guarded
+---like load; on success the forked id and its info replace the current ones.
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param cb? fun(err: acp.ACPError|nil)
+function Session:fork(opts, cb)
+  opts, cb = norm_args(opts, cb)
+  if not self.session_id then
+    cb({ code = -1, message = "No session to fork" })
+    return
+  end
+  self._state = "connecting"
+  self.client:fork_session(self.session_id, vim.fn.getcwd(), {}, req_opts(opts), function(new_id, err, result)
+    self:_finish(new_id, result, err, cb)
+  end)
+end
+
 ---Set a session config option (model/mode/effort/agent/fast). Ready-guarded
 ---like send_prompt. On success the agent also pushes a `config_option_update`
 ---session/update carrying the full refreshed set, so callers don't need to

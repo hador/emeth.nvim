@@ -521,6 +521,65 @@ h.describe("ACPClient inbound requests", function()
   end)
 end)
 
+-- ── session close / fork ───────────────────────────────────────
+
+h.describe("ACPClient close/fork", function()
+  h.it("close_session errors without the capability", function()
+    local c = make_client()
+    local err
+    c:close_session("s1", function(_, e)
+      err = e
+    end)
+    h.is_true(err ~= nil, "unsupported close must report an error, not send")
+  end)
+
+  h.it("close_session sends session/close when supported", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { sessionCapabilities = { close = {} } }
+    c:close_session("s1", function() end)
+    local d = vim.json.decode(sent[1])
+    h.eq("session/close", d.method)
+    h.eq("s1", d.params.sessionId)
+  end)
+
+  h.it("fork_session errors without the capability", function()
+    local c = make_client()
+    local err
+    c:fork_session("s1", "/cwd", {}, function(_, e)
+      err = e
+    end)
+    h.is_true(err ~= nil)
+  end)
+
+  h.it("fork_session sends session/fork with meta and returns the new id", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { sessionCapabilities = { fork = {} } }
+    local got_id
+    c:fork_session("s1", "/cwd", {}, { meta = { kiro = { messageId = "m9" } } }, function(id)
+      got_id = id
+    end)
+    local d = vim.json.decode(sent[1])
+    h.eq("session/fork", d.method)
+    h.eq("s1", d.params.sessionId)
+    h.eq("m9", d.params._meta.kiro.messageId)
+    c:_handle_message({ jsonrpc = "2.0", id = d.id, result = { sessionId = "s2" } })
+    h.eq("s2", got_id)
+  end)
+
+  h.it("fork_session errors when the response carries no sessionId", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { sessionCapabilities = { fork = {} } }
+    local got_id, got_err
+    c:fork_session("s1", "/cwd", {}, function(id, e)
+      got_id, got_err = id, e
+    end)
+    local d = vim.json.decode(sent[1])
+    c:_handle_message({ jsonrpc = "2.0", id = d.id, result = {} })
+    h.is_nil(got_id)
+    h.is_true(got_err ~= nil)
+  end)
+end)
+
 -- ── client capabilities ────────────────────────────────────────
 
 h.describe("ACPClient capabilities", function()

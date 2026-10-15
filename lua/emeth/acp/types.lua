@@ -18,7 +18,7 @@
 
 ---@class acp.AgentCapabilities
 ---@field loadSession boolean
----@field sessionCapabilities? { list?: table, additionalDirectories?: boolean|table }
+---@field sessionCapabilities? { list?: table, additionalDirectories?: boolean|table, close?: table, delete?: table, fork?: table, resume?: table }
 ---@field promptCapabilities acp.PromptCapabilities
 
 ---@class acp.PromptCapabilities

@@ -128,6 +128,12 @@ end
 ---@param now_iso? string  injectable for tests
 ---@return table[] items, integer dropped
 function M.items(entries, now_iso)
+  -- Resolve a fork's parent to a readable name for the lineage marker.
+  local title_by_id = {}
+  for _, e in ipairs(entries) do
+    title_by_id[e.session_id] = e.title
+  end
+
   local items, dropped = {}, 0
   for _, e in ipairs(entries) do
     if vim.fn.isdirectory(e.cwd or "") ~= 1 then
@@ -136,14 +142,18 @@ function M.items(entries, now_iso)
       -- Titles need clamping, not just wrapping: most are the first prompt
       -- (capped at 80 bytes), but an agent-sent one reached 201 characters in a
       -- real index, which buries the directory and age that follow it.
-      items[#items + 1] = {
-        entry = e,
-        label = ("%s  ·  %s  ·  %s"):format(
-          clamp(e.title or e.session_id:sub(1, 8), TITLE_MAX),
-          M.short_dir(e.cwd),
-          M.ago(e.updated_at or e.created_at, now_iso)
-        ),
-      }
+      local label = ("%s  ·  %s  ·  %s"):format(
+        clamp(e.title or e.session_id:sub(1, 8), TITLE_MAX),
+        M.short_dir(e.cwd),
+        M.ago(e.updated_at or e.created_at, now_iso)
+      )
+      -- A forked session reads as unrelated otherwise; name its parent (or just
+      -- flag it as a fork when the parent isn't in the index).
+      if e.forked_from then
+        local parent = title_by_id[e.forked_from]
+        label = label .. "  ·  ⑂ " .. (parent and clamp(parent, 30) or "fork")
+      end
+      items[#items + 1] = { entry = e, label = label }
     end
   end
   return items, dropped

@@ -58,9 +58,9 @@ local function transform_update(update)
     update.replay = true
   end
   -- CLI v3 classifies a failed tool call via `_meta.kiro.failureReason`
-  -- (cancelled | denied | error). The generic renderer reads `failure_reason`.
-  -- (Note: 2.31.1 does not yet emit this on denied/cancelled calls — kept for
-  -- forward compatibility; the text output is the only live signal today.)
+  -- (cancelled | denied | error); the generic renderer reads `failure_reason`.
+  -- 2.31.1 omits it on denied/cancelled calls, where the only signal is the
+  -- rejection text in the tool output.
   if type(k.failureReason) == "string" then
     update.failure_reason = k.failureReason
   end

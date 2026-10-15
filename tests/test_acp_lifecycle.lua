@@ -751,6 +751,70 @@ h.describe("acp integration: steering", function()
   end)
 end)
 
+h.describe("acp integration: close and fork", function()
+  h.it("closes the previous session when /new replaces it", function()
+    local session, _view, integration = make_setup()
+    local closed = {}
+    session.close = function(_, sid)
+      closed[#closed + 1] = sid
+    end
+    session.new_session = function(_, _opts, cb)
+      session.session_id, session._state = "new-sess", "ready"
+      cb(nil)
+    end
+    integration.new_session()
+    flush()
+    h.eq({ "sess-1" }, closed, "the old session is released over the reused client")
+  end)
+
+  h.it("closes the previous session when loading a different one", function()
+    local session, _view, integration = make_setup()
+    local closed = {}
+    session.close = function(_, sid)
+      closed[#closed + 1] = sid
+    end
+    session.load = function(_, sid, _opts, cb)
+      session.session_id, session._state = sid, "ready"
+      cb(nil)
+    end
+    integration.load_session("other-sess")
+    flush()
+    h.eq({ "sess-1" }, closed)
+  end)
+
+  h.it("fork adopts the new session without clearing the shared transcript", function()
+    local session, view, integration = make_setup()
+    local Message = require("emeth.message")
+    view:add_message(Message:new("user", "hello"))
+    session.fork = function(_, _opts, cb)
+      session.session_id, session._state = "fork-sess", "ready"
+      cb(nil)
+    end
+    integration.fork()
+    flush()
+    h.eq("fork-sess", session.session_id)
+    local kept = false
+    for _, m in ipairs(view.messages) do
+      if m:text() == "hello" then
+        kept = true
+      end
+    end
+    h.is_true(kept, "a whole-session fork shares history, so the transcript stays")
+  end)
+
+  h.it("records the fork with its parent for lineage", function()
+    local session, _view, integration = make_setup()
+    session.fork = function(_, _opts, cb)
+      session.session_id, session._state = "fork-sess", "ready"
+      cb(nil)
+    end
+    integration.fork()
+    flush()
+    local entry = require("emeth.sessions").get("fork-sess")
+    h.eq("sess-1", entry and entry.forked_from, "the fork points at the session it branched from")
+  end)
+end)
+
 h.describe("acp integration: session id at every boundary", function()
   -- /new and load used to replace the session id while saying nothing about it,
   -- leaving no way to tell which session the transcript in front of you was.
