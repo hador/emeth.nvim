@@ -6,6 +6,7 @@
 
 ---@class chat_ui.KiroCliConfig
 ---@field mode? string  Default agent/mode for NEW kiro-cli sessions (sent as `_meta.kiro.modeId`)
+---@field rewind_key? string|false  Result-buffer key for "rewind" on a user message; false disables
 
 ---@class chat_ui.Config
 ---@field sidebar { position: string, width: number, input_height: number }
@@ -100,6 +101,11 @@ local defaults = {
     -- Resumed sessions keep their own mode. Example:
     --   kiro_cli = { mode = "my-agent" }
     mode = nil, ---@type string|nil
+    -- Result-buffer key, on a user message, to rewind (fork at that message).
+    -- Default R pairs with the transcript's r (retry): just as r is reject_once
+    -- during a permission prompt and retry otherwise, R is reject_always during a
+    -- prompt and rewind otherwise. Set to false to disable.
+    rewind_key = "R", ---@type string|false
   },
 }
 

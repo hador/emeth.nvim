@@ -76,7 +76,11 @@ function M.handlers(ctx)
 
   function handlers.user_message_chunk(update)
     if update.content and update.content.type == "text" then
-      view:add_message(Message:new("user", update.content.text))
+      -- A provider transform may stamp the agent-side message id (kiro sets it
+      -- from `_meta.kiro.messageId` on replay) so transcript actions like rewind
+      -- can target this message. Only present on replayed history.
+      local meta = update.provider_message_id and { provider_message_id = update.provider_message_id } or nil
+      view:add_message(Message:new("user", update.content.text, meta))
     end
   end
 

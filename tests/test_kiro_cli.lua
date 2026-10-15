@@ -40,6 +40,16 @@ h.describe("kiro-cli transform_update", function()
     h.eq(true, u.replay)
   end)
 
+  h.it("lifts the agent message id onto a generic field (for rewind targeting)", function()
+    local u = {
+      sessionUpdate = "user_message_chunk",
+      content = { type = "text", text = "hi" },
+      _meta = { kiro = { replay = true, messageId = "msg-7" } },
+    }
+    transform(u)
+    h.eq("msg-7", u.provider_message_id)
+  end)
+
   h.it("marks an agent-subtask tool as a subagent parent", function()
     local u = {
       sessionUpdate = "tool_call",

@@ -276,6 +276,13 @@ function ChatView:new(opts)
           end
         end
       end
+      -- Provider-registered actions (e.g. kiro's rewind) contribute their hints
+      -- for the messages they apply to.
+      for _, a in pairs(view._actions or {}) do
+        if a.hint and (not a.when or a.when(msg)) then
+          hints[#hints + 1] = a.hint
+        end
+      end
       if #hints > 0 and anchor_row then
         api.nvim_buf_set_extmark(result_buf, help_ns, anchor_row - 1, 0, {
           virt_text = { { "  [" .. table.concat(hints, ", ") .. "]", "Comment" } },
@@ -425,6 +432,55 @@ end
 ---
 ---Only meaningful while the result buffer is the current one — it reads the
 ---cursor from the current window, matching the buffer-local keymaps that call it.
+---@class chat_ui.MessageAction
+---@field key string
+---@field hint? string
+---@field when? fun(msg: chat_ui.Message): boolean
+---@field run fun(msg: chat_ui.Message)
+
+---Register a per-message transcript action. Binds `opts.key` on the result
+---buffer to run `opts.run(msg)` for the message under the cursor when
+---`opts.when(msg)` holds, and surfaces `opts.hint` in the contextual help for
+---matching messages. Lets a provider extension add actions (e.g. kiro's rewind)
+---without this file knowing them.
+---@param opts chat_ui.MessageAction
+function ChatView:add_action(opts)
+  self._actions = self._actions or {}
+  self._actions[opts.key] = opts
+  if self.result_buf and vim.api.nvim_buf_is_valid(self.result_buf) then
+    vim.api.nvim_buf_set_keymap(self.result_buf, "n", opts.key, "", {
+      noremap = true,
+      silent = true,
+      callback = function()
+        -- A key shared with a transient prompt (e.g. R is also reject_always)
+        -- must answer an active prompt first; only otherwise run the action.
+        -- Mirrors how r is reject_once during a prompt and retry otherwise.
+        for _, entry in ipairs(self._prompt_key_owners or {}) do
+          local fn = entry.keys[opts.key]
+          if fn and fn() ~= false then
+            return
+          end
+        end
+        local msg = self:cursor_message_line()
+        if msg and (not opts.when or opts.when(msg)) then
+          opts.run(msg)
+        end
+      end,
+    })
+  end
+end
+
+---Remove an action registered with `add_action` (keymap + hint).
+---@param key string
+function ChatView:remove_action(key)
+  if self._actions then
+    self._actions[key] = nil
+  end
+  if self.result_buf and vim.api.nvim_buf_is_valid(self.result_buf) then
+    pcall(vim.api.nvim_buf_del_keymap, self.result_buf, "n", key)
+  end
+end
+
 ---@return chat_ui.Message|nil msg, integer|nil offset
 function ChatView:cursor_message_line()
   if vim.api.nvim_get_current_buf() ~= self.result_buf then

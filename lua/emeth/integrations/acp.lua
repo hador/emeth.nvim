@@ -1461,6 +1461,50 @@ function M.setup_integration(view, session)
       end, cb)
     end,
 
+    ---Rewind: fork the current session at a provider-targeted point (`meta` rides
+    ---on the fork request's `_meta`), then rebuild the transcript from the fork's
+    ---truncated replay. Generic — the meaning of `meta` is the provider's (kiro
+    ---passes `{ kiro = { messageId = … } }`).
+    ---@param meta table
+    ---@param cb? fun(err: any)
+    rewind = function(meta, cb)
+      local parent = session.session_id
+      lifecycle({ kind = "load" }, function(opts, done)
+        opts = opts or {}
+        opts.meta = vim.tbl_deep_extend("force", opts.meta or {}, meta or {})
+        session:fork(opts, function(err)
+          if err then
+            done(err)
+            return
+          end
+          local fork_id = session.session_id
+          if not fork_id then
+            done(nil)
+            return
+          end
+          Sessions.save({
+            session_id = fork_id,
+            provider = session.provider_name,
+            cwd = vim.fn.getcwd(),
+            additional_directories = roots:save_field(),
+            forked_from = parent,
+          })
+          -- Rebuild from the fork's truncated replay. Cleared only now, so the
+          -- old transcript stays up until the replay is ready (no empty gap).
+          vim.schedule(function()
+            view:clear()
+            reset_state()
+            session:load(fork_id, lifecycle_opts("load"), function(err2)
+              if not err2 then
+                announce_session("↩ Rewound (forked at the selected message).")
+              end
+              done(err2)
+            end)
+          end)
+        end)
+      end, cb)
+    end,
+
     disconnect = function()
       if session.session_id then
         Sessions.touch(session.session_id)
