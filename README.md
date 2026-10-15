@@ -93,7 +93,7 @@ Full example:
     },
     acp = {
       providers = {
-        ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent", "acp-skills" } },
+        ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent-engine=v3", "--auth-method=cli" } },
         ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
         ["claude-code"] = { command = "npx", args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" } },
       },
@@ -139,11 +139,15 @@ require("emeth").setup({
       ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
       ["goose"]       = { command = "goose", args = { "acp" } },
       ["codex"]       = { command = "npx", args = { "-y", "-g", "@zed-industries/codex-acp" } },
-      ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent", "acp-skills" } },
+      ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent-engine=v3", "--auth-method=cli" } },
     },
   },
 })
 ```
+
+> **kiro-cli** must run its **v3** (Kiro Agent Server) engine — these are the
+> default args emeth ships, so you only need them if you override the provider.
+> See [kiro-cli (v3)](#kiro-cli-v3) below for agent selection and gotchas.
 
 ## Usage
 
@@ -255,7 +259,7 @@ Type these in the input buffer:
 | `@files` | Review/remove attached context files |
 | `@diagnostics` | Attach LSP diagnostics from current buffer |
 
-Prompts are available via the `/prompts` slash command (type `/` to see all commands). For kiro-cli, this merges prompts from `~/.kiro/prompts/`, `prompt_dirs`, and MCP server prompts. When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
+Prompts are available via the `/prompts` slash command (type `/` to see all commands), sourced from `~/.kiro/prompts/` and any `prompt_dirs`. Agents may also advertise their own slash commands (kiro-cli surfaces skills and steering docs this way). When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
 
 ## Statusline
 
@@ -415,6 +419,49 @@ require("emeth").setup({
 Result on the wire: `session/new` ships `_meta.claudeCode.options.extraArgs = { agent = "my-agent" }`, claude-acp passes it through to claude-agent-sdk, and the spawned `claude` process receives `--agent my-agent`.
 
 Takes effect on next session start. Existing resumed sessions retain whatever flags they were created with.
+
+### kiro-cli (v3)
+
+emeth drives kiro-cli's **v3** engine (the Kiro Agent Server). The default args
+are `acp --agent-engine=v3 --auth-method=cli` — plain `acp` would start the
+legacy v2 engine, so if you override the provider keep these flags.
+
+**Auth** is handled by kiro-cli itself (`--auth-method=cli`), not an env var or
+API key. If sessions fail to start, run `kiro-cli login`.
+
+**Selecting an agent.** In v3 the agent is a session *mode*, not a launch flag
+(v3 rejects the old `--agent`). Pick one at runtime with the `/mode` slash
+command, or make it the default for new sessions:
+
+```lua
+require("emeth").setup({
+  kiro_cli = {
+    -- Sent as `_meta.kiro.modeId` on session/new. Must be a mode the v3 engine
+    -- lists (see the gotcha below). Resumed sessions keep their own mode.
+    mode = "my-agent",
+  },
+})
+```
+
+> **Gotcha — your agent isn't in `/mode`.** The v3 engine only loads agents in
+> the *universal* format. A legacy (v2) agent config — one still using
+> `allowedTools`/`toolsSettings` instead of a `permissions` block — is silently
+> skipped, even though `kiro-cli chat` (v2) still shows it. Upgrade it in place
+> (additive; keeps a `.bak`):
+>
+> ```sh
+> # <dir> is ~/.kiro/agents (global) or .kiro/agents (workspace); only top-level
+> # *.json are rewritten, and AIM-managed agents are left untouched.
+> kiro-cli agent upgrade <dir> --dry-run   # preview
+> kiro-cli agent upgrade <dir>
+> ```
+>
+> To touch only one agent, copy its `.json` into an empty dir and upgrade that.
+> Then confirm it appears in `/mode`.
+
+**MCP auth.** When a configured MCP server needs OAuth, emeth posts a notice in
+the transcript; run `/mcp-auth <server>` to (re)authenticate and emeth opens the
+authorization URL.
 
 ### Winbar API
 
