@@ -813,6 +813,28 @@ h.describe("acp integration: close and fork", function()
     local entry = require("emeth.sessions").get("fork-sess")
     h.eq("sess-1", entry and entry.forked_from, "the fork points at the session it branched from")
   end)
+
+  h.it("rewind forks at a message id, reloads the fork, and records lineage", function()
+    local session, _view, integration = make_setup()
+    local fork_meta
+    session.fork = function(_, opts, cb)
+      fork_meta = opts and opts.meta
+      session.session_id, session._state = "rewind-fork", "ready"
+      cb(nil)
+    end
+    local loaded
+    session.load = function(_, sid, _opts, cb)
+      loaded = sid
+      cb(nil)
+    end
+    integration.rewind({ kiro = { messageId = "m3" } })
+    flush()
+    vim.wait(10)
+    h.eq("m3", fork_meta and fork_meta.kiro and fork_meta.kiro.messageId, "forks at the target message id")
+    h.eq("rewind-fork", loaded, "reloads the fork to rebuild the truncated transcript")
+    local entry = require("emeth.sessions").get("rewind-fork")
+    h.eq("sess-1", entry and entry.forked_from, "rewind records the branch's parent")
+  end)
 end)
 
 h.describe("acp integration: session id at every boundary", function()

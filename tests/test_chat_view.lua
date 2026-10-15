@@ -726,3 +726,59 @@ h.describe("ChatView K on a diff tool call", function()
     h.is_true(text:find("line 150", 1, true) == nil, "diff body survived the collapse")
   end)
 end)
+
+h.describe("ChatView:add_action", function()
+  h.it("runs on the message under the cursor and defers to an active prompt", function()
+    local view = make_view()
+    local Message = require("emeth.message")
+    local msg = Message:new("user", "hello")
+    view._line_to_msg = { [1] = msg }
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+    local ran = {}
+    view:add_action({
+      key = "R",
+      hint = "R: rewind",
+      run = function(m)
+        ran[#ran + 1] = m
+      end,
+    })
+
+    local cb
+    for _, km in ipairs(vim.api.nvim_buf_get_keymap(view.result_buf, "n")) do
+      if km.lhs == "R" and km.callback then
+        cb = km.callback
+      end
+    end
+    h.is_true(cb ~= nil, "R keymap was bound")
+
+    -- An active prompt claiming R answers it; the action must not fire.
+    local claimed = false
+    view._prompt_key_owners =
+      { { owner = "p", keys = {
+        R = function()
+          claimed = true
+          return true
+        end,
+      } } }
+    cb()
+    h.is_true(claimed)
+    h.eq(0, #ran, "deferred to the active prompt")
+
+    -- No prompt: the action runs on the message under the cursor.
+    view._prompt_key_owners = {}
+    cb()
+    h.eq(1, #ran)
+    h.eq(msg, ran[1])
+
+    view:remove_action("R")
+    local still
+    for _, km in ipairs(vim.api.nvim_buf_get_keymap(view.result_buf, "n")) do
+      if km.lhs == "R" then
+        still = true
+      end
+    end
+    h.is_nil(still, "remove_action unbinds the key")
+  end)
+end)

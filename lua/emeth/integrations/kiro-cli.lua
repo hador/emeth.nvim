@@ -57,6 +57,11 @@ local function transform_update(update)
   if k.replay == true then
     update.replay = true
   end
+  -- Agent-side message id (present on replayed user/agent chunks). Lifted onto a
+  -- generic field so a rendered user message can carry it for rewind targeting.
+  if type(k.messageId) == "string" then
+    update.provider_message_id = k.messageId
+  end
   -- CLI v3 classifies a failed tool call via `_meta.kiro.failureReason`
   -- (cancelled | denied | error); the generic renderer reads `failure_reason`.
   -- 2.31.1 omits it on denied/cancelled calls, where the only signal is the
@@ -357,6 +362,90 @@ function M.setup(session, view)
     end,
   })
 
+  -- ── Rewind (fork at a past message) ───────────────────────────
+  -- Fork ids live only in session/load replay; a live, never-loaded session's
+  -- user messages carry none. So: if the selected message already has an id
+  -- (session was resumed), fork there directly; otherwise reload the current
+  -- session in place to harvest ids, then fork at the same message by ordinal.
+  local function fork_supported()
+    local sc = session.client
+      and session.client.agent_capabilities
+      and session.client.agent_capabilities.sessionCapabilities
+    return sc ~= nil and sc.fork ~= nil
+  end
+
+  ---1-based position of `msg` among the transcript's user messages.
+  local function user_ordinal(msg)
+    local n = 0
+    for _, m in ipairs(view:get_messages()) do
+      if m.role == "user" then
+        n = n + 1
+        if m == msg then
+          return n
+        end
+      end
+    end
+  end
+
+  ---Agent message id of the n-th user message, or nil.
+  local function nth_user_id(n)
+    local seen = 0
+    for _, m in ipairs(view:get_messages()) do
+      if m.role == "user" then
+        seen = seen + 1
+        if seen == n then
+          return m.metadata and m.metadata.provider_message_id
+        end
+      end
+    end
+  end
+
+  local function do_rewind(msg)
+    local ordinal = user_ordinal(msg)
+    if not ordinal then
+      return
+    end
+    local function fork_at(id)
+      if not id then
+        vim.schedule(function()
+          view:add_message(Message:new("system", "Couldn't resolve a rewind point for that message."))
+        end)
+        return
+      end
+      view.integration.rewind({ kiro = { messageId = id } })
+    end
+    local known = msg.metadata and msg.metadata.provider_message_id
+    if known then
+      fork_at(known)
+      return
+    end
+    -- Harvest: reload the current session in place so its replay stamps ids,
+    -- then fork at the same ordinal's (now known) id.
+    view.integration.load_session(session.session_id, function(err)
+      if err then
+        return
+      end
+      vim.schedule(function()
+        fork_at(nth_user_id(ordinal))
+      end)
+    end)
+  end
+
+  local rewind_key = (require("emeth").config.kiro_cli or {}).rewind_key
+  if rewind_key == nil then
+    rewind_key = "R"
+  end
+  if view.add_action and rewind_key and rewind_key ~= "" then
+    view:add_action({
+      key = rewind_key,
+      hint = rewind_key .. ": rewind",
+      when = function(m)
+        return m.role == "user" and fork_supported()
+      end,
+      run = do_rewind,
+    })
+  end
+
   -- Transform runs on every update before the core consumes it.
   if view.integration and view.integration.set_transform_update then
     view.integration.set_transform_update(transform_update)
@@ -367,6 +456,9 @@ function M.setup(session, view)
     session:off("notification", on_notification)
     session:off_request("_kiro/openExternalUrl", open_external_url)
     Commands.unregister("mcp-auth")
+    if view.remove_action and rewind_key and rewind_key ~= "" then
+      view:remove_action(rewind_key)
+    end
     Winbar.clear_badge("cost")
     if view.integration and view.integration.set_steering then
       view.integration.set_steering(nil)
