@@ -16,6 +16,7 @@ local Session = require("emeth.acp.session")
 ---@field env? table<string, string>
 ---@field pass_env? string[]  Environment variable names to pass from the current process
 ---@field auth_method? string
+---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
 
 ---@class acp.Module
 ---@field config acp.Config
@@ -47,7 +48,14 @@ local defaults = {
     },
     ["kiro-cli"] = {
       command = "kiro-cli",
-      args = { "acp" },
+      -- v3 (Kiro Agent Server-backed) ACP. `acp` alone still defaults to the
+      -- legacy v2 engine; v3 is selected explicitly. `--auth-method=cli` keeps
+      -- token handling in the CLI relay (otherwise the client must implement
+      -- `_kiro/auth/getAccessToken`).
+      args = { "acp", "--agent-engine=v3", "--auth-method=cli" },
+      -- Advertised so the agent drives its MCP OAuth flow through our
+      -- `_kiro/openExternalUrl` request handler.
+      capabilities_meta = { kiro = { openExternalUrl = true } },
     },
   },
   on_update = nil,

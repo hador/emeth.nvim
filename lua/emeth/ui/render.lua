@@ -400,6 +400,14 @@ local function render_tool_use(item, msg, messages, tool_results)
   local tc = msg.metadata.tool_call
   local lines = {}
 
+  -- A failed tool with a known terminal reason reads better with a muted word
+  -- than the bare ✗: "cancelled" (user/turn stopped it) and "denied" (policy/
+  -- user refusal) aren't bugs. Plain "error" keeps the unadorned ✗.
+  local fail_label = nil
+  if (item.status == "failed") and (item.failure_reason == "cancelled" or item.failure_reason == "denied") then
+    fail_label = { "  " .. item.failure_reason, HL.MUTED }
+  end
+
   ---How much this row is withholding, as a muted trailing section. One counter
   ---for both causes: whatever the reason, the answer is the same keypress.
   ---@param header table[]
@@ -445,6 +453,9 @@ local function render_tool_use(item, msg, messages, tool_results)
       header_parts[#header_parts + 1] = { ": " }
       header_parts[#header_parts + 1] = { tool_param, HL.TOOL_PARAM }
     end
+    if fail_label then
+      header_parts[#header_parts + 1] = fail_label
+    end
     add_hidden(header_parts, hidden + (expanded and 0 or #diff_lines))
     lines[#lines + 1] = Line:new(header_parts)
 
@@ -466,6 +477,9 @@ local function render_tool_use(item, msg, messages, tool_results)
     if tool_param then
       header[#header + 1] = { ": " }
       header[#header + 1] = { tool_param, HL.TOOL_PARAM }
+    end
+    if fail_label then
+      header[#header + 1] = fail_label
     end
     -- A subagent's spawning tool stands in for everything it ran, so say how
     -- much is folded away under it — otherwise the row looks inert.
@@ -565,7 +579,14 @@ local function render_user_message(msg)
   -- A steered message cut into a turn that was already running, which is why it
   -- appears mid-stream between the agent's own output. Shown in the header rather
   -- than behind K: a marker explaining an oddity has to be visible unprompted.
-  if msg.metadata.steered then
+  -- `steer_state` is the richer tri-state for agents that queue (kiro): the steer
+  -- is "queued" until the agent confirms injection ("steered"), or ends up "not
+  -- delivered" if the turn finished without picking it up. `steered` (boolean)
+  -- stays supported for the synchronous case.
+  local STEER_LABEL = { queued = "⤳ queued", steered = "⤳ steered", not_delivered = "⤳ not delivered" }
+  if msg.metadata.steer_state and STEER_LABEL[msg.metadata.steer_state] then
+    parts[#parts + 1] = STEER_LABEL[msg.metadata.steer_state]
+  elseif msg.metadata.steered then
     parts[#parts + 1] = "⤳ steered"
   end
   local files = msg.metadata.selected_files or {}

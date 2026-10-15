@@ -73,6 +73,12 @@ function ACPClient:new(config)
     state = "disconnected",
     reconnect_count = 0,
   }, { __index = self })
+  -- Provider-supplied client capability extensions ride on `clientCapabilities._meta`
+  -- (e.g. kiro-cli needs `_meta.kiro.openExternalUrl = true` advertised at
+  -- initialize so the agent will drive its MCP OAuth flow through us).
+  if config and config.capabilities_meta and next(config.capabilities_meta) ~= nil then
+    client.capabilities._meta = config.capabilities_meta
+  end
   client:_setup_transport()
   return client
 end
@@ -414,6 +420,27 @@ function ACPClient:_handle_incoming(message_id, method, params)
     if message_id then
       self:_handle_write_text_file(message_id, params)
     end
+  elseif message_id then
+    -- An agent→client *request* (has an id) that none of the built-ins above
+    -- handle. It MUST be answered or the agent's turn hangs waiting. Offer it to
+    -- the provider's `on_request` hook, which returns truthy to claim it (it then
+    -- owns calling `respond`/`respond_error`, possibly async). Nothing claimed it
+    -- → reply METHOD_NOT_FOUND so the agent can move on. e.g. kiro-cli's
+    -- `_kiro/openExternalUrl` is claimed here; an unknown method falls through.
+    local claimed = false
+    if self.config.handlers and self.config.handlers.on_request then
+      local respond = function(result)
+        self:_send_result(message_id, result)
+      end
+      local respond_error = function(msg, code)
+        self:_send_error(message_id, msg, code)
+      end
+      local ok, res = pcall(self.config.handlers.on_request, method, params, respond, respond_error)
+      claimed = ok and res == true
+    end
+    if not claimed then
+      self:_send_error(message_id, "Method not found: " .. method, self.ERROR_CODES.METHOD_NOT_FOUND)
+    end
   else
     if self.config.handlers and self.config.handlers.on_notification then
       vim.schedule(function()
@@ -634,41 +661,31 @@ function ACPClient:initialize(callback)
   end)
 end
 
----Whether the agent accepts steering — injecting a message into the turn that is
----already running instead of queueing it behind that turn.
----
----Advertised on the InitializeResponse `_meta` rather than in `agentCapabilities`,
----so it is a `_meta` probe rather than a spec capability check.
----@return boolean
-function ACPClient:supports_steering()
-  local steering = self.agent_meta and self.agent_meta.steering
-  return type(steering) == "table" and steering.supported == true
+---Send an arbitrary JSON-RPC request to the agent. The generic escape hatch for
+---provider-specific control methods (claude's `_session/steering`, kiro's
+---`_session/steer`, `_kiro/mcp/resetServer`, …) so none of that namespace
+---knowledge lives in the core client.
+---@param method string
+---@param params table|nil
+---@param callback fun(result: table|nil, err: acp.ACPError|nil)
+function ACPClient:request(method, params, callback)
+  self:_send_request(method, params or {}, callback or function() end)
 end
 
----Inject `prompt` into the in-flight turn.
----
----`idleBehavior = "promptRequired"` is deliberate. Without it, an agent that
----finds no turn running starts one itself, detached — its result never reaches
----our `session/prompt` callback, so our activity state would never settle. With
----it, the agent instead answers `promptRequired` and leaves the content alone,
----so the caller can send it as a normal prompt whose lifecycle we own. That race
----is real: a turn can finish between deciding to steer and this request landing.
----@param session_id string
----@param prompt acp.Content[]
----@param callback fun(outcome: string|nil, err: acp.ACPError|nil)
-function ACPClient:steer(session_id, prompt, callback)
-  callback = callback or function() end
-  self:_send_request("_session/steering", {
-    sessionId = session_id,
-    prompt = prompt,
-    _meta = { steering = { idleBehavior = "promptRequired" } },
-  }, function(result, err)
-    if err then
-      callback(nil, err)
-      return
-    end
-    callback(type(result) == "table" and result.outcome or nil, nil)
-  end)
+---Answer an agent→client request with a result. Pairs with the `on_request`
+---hook, whose `respond`/`respond_error` closures call these.
+---@param id number
+---@param result table|string|nil
+function ACPClient:respond(id, result)
+  self:_send_result(id, result)
+end
+
+---Answer an agent→client request with an error.
+---@param id number
+---@param message string
+---@param code? number
+function ACPClient:respond_error(id, message, code)
+  self:_send_error(id, message, code)
 end
 
 ---@param method_id string

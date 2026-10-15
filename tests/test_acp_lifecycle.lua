@@ -502,15 +502,19 @@ h.describe("acp integration: session config options (/model etc.)", function()
 end)
 
 h.describe("acp integration: steering", function()
-  --- A session whose agent supports steering, with the wire call captured.
+  --- A session whose provider registered a steering strategy, with the hook
+  --- captured. Provider-agnostic: the test drives the outcome through `cb`, so
+  --- it exercises both claude (injected/promptRequired) and kiro (queued).
   local function steer_setup(supported)
     local session, view, integration = make_setup()
-    local calls = {} ---@type { prompt: table[], cb: fun(outcome: string|nil, err: table|nil) }[]
-    session.client.agent_meta = supported and { steering = { supported = true } } or nil
-    -- Stub at the client boundary: the wire format is covered by the client
-    -- tests, what matters here is which path the integration chooses.
-    session.client.steer = function(_, _sid, prompt, cb)
-      calls[#calls + 1] = { prompt = prompt, cb = cb }
+    local calls = {} ---@type { prompt: table[], text: string, cb: fun(outcome: string|nil, err: table|nil, info: table|nil) }[]
+    if supported then
+      integration.set_steering({
+        supported = true,
+        steer = function(prompt, text, cb)
+          calls[#calls + 1] = { prompt = prompt, text = text, cb = cb }
+        end,
+      })
     end
     local prompts = {} ---@type table[][]
     session.client.send_prompt = function(_, _sid, prompt, _cb)
@@ -699,10 +703,23 @@ h.describe("acp integration: steering", function()
     view.on_submit("first")
     view.on_submit("steered")
     local msg = view.messages[#view.messages]
-    h.is_nil(msg.metadata.steered, "not claimed before the outcome is known")
+    h.is_nil(msg.metadata.steer_state, "not claimed before the outcome is known")
     calls[1].cb("injected", nil)
     vim.wait(20)
-    h.eq(true, msg.metadata.steered)
+    h.eq("steered", msg.metadata.steer_state)
+  end)
+
+  -- kiro always queues: the message is marked "queued" and keeps its message id
+  -- so the provider's lifecycle updates can later flip it to steered.
+  h.it("marks a queued steer and records its message id", function()
+    local _, view, _, calls = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    local msg = view.messages[#view.messages]
+    calls[1].cb("queued", nil, { message_id = "steer-7" })
+    vim.wait(20)
+    h.eq("queued", msg.metadata.steer_state)
+    h.eq("steer-7", msg.metadata.steer_message_id)
   end)
 
   -- The marker must not lie: promptRequired means the turn had already ended and
@@ -714,7 +731,7 @@ h.describe("acp integration: steering", function()
     local msg = view.messages[#view.messages]
     calls[1].cb("promptRequired", nil)
     vim.wait(20)
-    h.is_nil(msg.metadata.steered)
+    h.is_nil(msg.metadata.steer_state)
   end)
 
   h.it("does not mark it when the steer failed", function()
@@ -724,13 +741,13 @@ h.describe("acp integration: steering", function()
     local msg = view.messages[#view.messages]
     calls[1].cb(nil, { code = -32000, message = "session ended" })
     vim.wait(20)
-    h.is_nil(msg.metadata.steered)
+    h.is_nil(msg.metadata.steer_state)
   end)
 
   h.it("leaves an ordinary prompt unmarked", function()
     local _, view = steer_setup(true)
     view.on_submit("only")
-    h.is_nil(view.messages[#view.messages].metadata.steered)
+    h.is_nil(view.messages[#view.messages].metadata.steer_state)
   end)
 end)
 

@@ -1,4 +1,19 @@
---- Kiro CLI ACP extensions (_kiro.dev/* notifications).
+--- Kiro CLI v3 ACP extension (`kiro-cli acp --agent-engine=v3`).
+---
+--- v3 is the Kiro Agent Server-backed ACP server. All the CLI v2 `_kiro.dev/*`
+--- methods are gone; model/mode/effort now ride the standard `configOptions` +
+--- `session/set_config_option` channel (handled generically by integrations/acp),
+--- so this module only carries what is genuinely kiro-shaped:
+---
+---   * steering via `_session/steer` (always queues; async lifecycle)
+---   * `session_info_update` kinds under `_meta.kiro.kind`
+---     (context_usage, turn_completion, steering_*, summarization_*, display_error)
+---   * `_kiro/*` notifications (rate limit, custom-agent errors, MCP status)
+---   * MCP OAuth: `/mcp-auth` + the `_kiro/openExternalUrl` request
+---   * a transform normalising `_meta.kiro` onto generic update fields
+---
+--- Verified live against kiro-cli 2.31.1; see the migration guide for the full
+--- CLI v2→v3 contract.
 
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
@@ -6,265 +21,358 @@ local Winbar = require("emeth.ui.winbar")
 
 local M = {}
 
----Build the merged prompt list from server prompts and local .md files.
----@param server_prompts { label: string, value: string, description?: string, serverName: string }[]
----@param local_files table<string, string>  name → file path
----@param make_on_select fun(fpath: string): fun(ctx: table)
----@return { label: string, value: string, description?: string, source: string, on_select?: fun(ctx: table) }[]
-function M.build_prompt_items(server_prompts, local_files, make_on_select)
-  local items = {}
-  local seen = {}
-
-  for _, p in ipairs(server_prompts) do
-    seen[p.value] = true
-    local fpath = local_files[p.value]
-    if fpath then
-      items[#items + 1] = {
-        label = p.value,
-        value = p.value,
-        description = p.description,
-        source = "local",
-        on_select = make_on_select(fpath),
-      }
-    else
-      items[#items + 1] = { label = p.label, value = p.value, description = p.description, source = p.serverName }
-    end
+---Return `_meta.kiro` off an update, or nil.
+---@param update table|nil
+---@return table|nil
+local function kiro_meta(update)
+  local meta = update and update._meta
+  if type(meta) ~= "table" then
+    return nil
   end
-
-  for pname, fpath in pairs(local_files) do
-    if not seen[pname] then
-      items[#items + 1] = {
-        label = pname,
-        value = pname,
-        source = "local",
-        on_select = make_on_select(fpath),
-      }
-    end
-  end
-
-  return items
+  return type(meta.kiro) == "table" and meta.kiro or nil
 end
 
----Hook kiro-cli-specific notifications into the ACP integration.
+---Stateless transform: lift kiro's `_meta.kiro` onto the generic fields the core
+---integration understands, and drop the empty replay boundary chunk. Returning
+---`false` tells the integration to drop the update entirely.
+---@param update table
+---@return boolean|nil  false to drop
+local function transform_update(update)
+  -- Replayed steers come back as `user_message_chunk` with a trailing empty
+  -- boundary chunk; the generic handler would render that as a blank user
+  -- message. Drop any content-less user_message_chunk (independent of `_meta`,
+  -- which the boundary marker may not carry).
+  if update.sessionUpdate == "user_message_chunk" then
+    local c = update.content
+    if not (type(c) == "table" and type(c.text) == "string" and c.text ~= "") then
+      return false
+    end
+  end
+
+  local k = kiro_meta(update)
+  if not k then
+    return
+  end
+
+  if k.replay == true then
+    update.replay = true
+  end
+  -- CLI v3 classifies a failed tool call via `_meta.kiro.failureReason`
+  -- (cancelled | denied | error). The generic renderer reads `failure_reason`.
+  -- (Note: 2.31.1 does not yet emit this on denied/cancelled calls — kept for
+  -- forward compatibility; the text output is the only live signal today.)
+  if type(k.failureReason) == "string" then
+    update.failure_reason = k.failureReason
+  end
+
+  -- Subagent nesting. The spawning subtask arrives as a tool_call whose own
+  -- toolCallId equals its agentSubtaskId and carries kind "agent-subtask"; each
+  -- call it makes carries that same agentSubtaskId. Mark the parent, and point
+  -- children at it so the core nests them (the same shape claude uses).
+  if k.kind == "agent-subtask" then
+    update.subagent_parent = true
+  elseif type(k.agentSubtaskId) == "string" and k.agentSubtaskId ~= "" and update.toolCallId ~= k.agentSubtaskId then
+    update.parent_tool_call_id = k.agentSubtaskId
+  end
+end
+
+-- Exposed for testing.
+M._transform_update = transform_update
+
+---Build the `session/new` `_meta` payload. When `config.kiro_cli.mode` is set,
+---start new sessions on that agent/mode via `_meta.kiro.modeId` (v3 session
+---input, verified live). Applied to NEW sessions only — a resumed session keeps
+---the mode it already had, so `kind == "load"` returns nothing.
+---@param emeth_config table
+---@param kind? "new"|"load"
+---@return table|nil
+function M.build_session_meta(emeth_config, kind)
+  if kind == "load" then
+    return nil
+  end
+  local mode = emeth_config and emeth_config.kiro_cli and emeth_config.kiro_cli.mode
+  if type(mode) == "string" and mode ~= "" then
+    return { kiro = { modeId = mode } }
+  end
+  return nil
+end
+
+---Hook kiro-cli v3 behaviour into the ACP integration.
 ---@param session acp.Session
 ---@param view chat_ui.ChatView
 ---@return fun() cleanup
 function M.setup(session, view)
-  -- Server-pushed data cached from _kiro.dev/commands/available
   session.extensions = session.extensions or {}
-  session.extensions.server_prompts = {}
-  session.extensions.server_agents = {}
-  session.extensions.server_models = {}
+  local credits_total = 0 -- summed turn_completion credit usage, for the badge
+  local seen_errors = {} ---@type table<string, boolean>  dedup display_error
+  local announced_auth = {} ---@type table<string, boolean>  dedup "needs auth"
 
-  ---Build selection options for a command from cached notification data.
-  ---@param name string command name without /
-  ---@return { label: string, value: string, description?: string, on_select?: fun(ctx: table) }[]|nil
-  local function get_selection_options(name)
-    local ext = session.extensions or {}
-    if name == "agent" then
-      return ext.server_agents
-    elseif name == "model" then
-      return ext.server_models
-    elseif name == "prompts" then
-      local config = require("emeth").config
-
-      -- Discover local .md prompt files
-      local local_files = {} ---@type table<string, string>  name → path
-      for _, dir in ipairs(vim.list_extend({ "~/.kiro/prompts" }, config.prompt_dirs or {})) do
-        for _, path in ipairs(vim.fn.glob(vim.fn.expand(dir) .. "/*.md", false, true)) do
-          local pname = vim.fn.fnamemodify(path, ":t:r")
-          local_files[pname] = local_files[pname] or path
-        end
-      end
-
-      return M.build_prompt_items(ext.server_prompts or {}, local_files, function(fpath)
-        return function(ctx)
-          local content = table.concat(vim.fn.readfile(fpath), "\n")
-          if config.prompt_edit_before_send then
-            local wins = vim.fn.win_findbuf(ctx.view.input_buf)
-            if wins[1] then
-              vim.api.nvim_set_current_win(wins[1])
-            end
-            vim.api.nvim_buf_set_lines(ctx.view.input_buf, 0, -1, false, vim.split(content, "\n"))
-            vim.cmd("startinsert!")
-          elseif ctx.view.on_submit then
-            ctx.view.on_submit(content)
+  -- ── Steering ──────────────────────────────────────────────────
+  -- `_session/steer` takes a plain string and ALWAYS queues, returning
+  -- `{queued, messageId}`. It is injected at the next inference boundary (within
+  -- the running turn, or — if the turn has ended — not until the next prompt).
+  -- There is no synchronous "injected"/"promptRequired" outcome and no advertised
+  -- capability to gate on, so support is simply constant.
+  if view.integration and view.integration.set_steering then
+    view.integration.set_steering({
+      supported = true,
+      steer = function(prompt, text, cb)
+        -- kiro steer is a string; fold any @-attached file paths into it.
+        local message = text or ""
+        local files = {}
+        for _, item in ipairs(prompt or {}) do
+          if item.type == "resource_link" and type(item.uri) == "string" then
+            files[#files + 1] = (item.uri:gsub("^file://", ""))
           end
         end
-      end)
-    end
+        if #files > 0 then
+          message = message .. "\n\nAttached files:\n" .. table.concat(files, "\n")
+        end
+        session:request("_session/steer", {
+          sessionId = session.session_id,
+          message = message,
+        }, function(result, err)
+          if err then
+            cb(nil, err)
+            return
+          end
+          cb("queued", nil, { message_id = type(result) == "table" and result.messageId or nil })
+        end)
+      end,
+    })
   end
 
-  ---Create the execute function for an ACP command. This runs *after* the
-  ---user has either typed args into the prefilled input or invoked the
-  ---selection picker. Selection-type commands handle their own UI; freeform
-  ---commands just dispatch the slash text to the agent.
-  ---@param cmd_name string without /
-  ---@param cmd_meta table|nil
-  ---@return fun(args: string, ctx: table)
-  local function make_execute(cmd_name, cmd_meta)
-    return function(args, ctx)
-      local input_type = cmd_meta and cmd_meta.inputType
-      if input_type == "selection" and (args == nil or args == "") then
-        local options = get_selection_options(cmd_name)
-        if options and #options > 0 then
-          vim.ui.select(options, {
-            prompt = "/" .. cmd_name,
-            format_item = function(item)
-              local s = item.label or item.value
-              if item.description then
-                s = s .. "  " .. item.description
-              end
-              if item.source then
-                s = s .. "  [" .. item.source .. "]"
-              end
-              return s
-            end,
-          }, function(choice)
-            if choice then
-              if choice.on_select then
-                choice.on_select(ctx)
-              elseif ctx.view.on_submit then
-                ctx.view.on_submit("/" .. cmd_name .. " " .. choice.value)
-              end
-            end
-          end)
+  ---Flip the steer-state marker on the user message that carries `message_id`.
+  ---@param message_id string
+  ---@param state string
+  ---@param only_if_queued? boolean  only downgrade ones never injected
+  local function set_steer_state(message_id, state, only_if_queued)
+    for _, m in ipairs(view:get_messages()) do
+      if m.metadata and m.metadata.steer_message_id == message_id then
+        if only_if_queued and m.metadata.steer_state ~= "queued" then
           return
         end
-      end
-
-      if ctx.view.on_submit then
-        ctx.view.on_submit("/" .. cmd_name .. (args ~= "" and (" " .. args) or ""))
+        view:update_message(m.uuid, function(mm)
+          mm.metadata.steer_state = state
+        end)
+        return
       end
     end
   end
 
+  -- ── session_info_update kinds (_meta.kiro.kind) ───────────────
+  local function on_update(update)
+    if update.sessionUpdate ~= "session_info_update" then
+      return
+    end
+    local k = kiro_meta(update)
+    if not k then
+      return
+    end
+    local kind = k.kind
+
+    if kind == "context_usage" then
+      local usage = type(k.contextUsage) == "table" and k.contextUsage.usagePercentage or k.usagePercentage
+      if type(usage) == "number" then
+        vim.schedule(function()
+          Winbar.set_context(usage)
+        end)
+      end
+    elseif kind == "turn_completion" then
+      -- Credit metering: sum each turn's usage across the session.
+      local sum = 0
+      for _, s in ipairs(k.promptTurnSummaries or {}) do
+        if type(s.usage) == "number" then
+          sum = sum + s.usage
+        end
+      end
+      if sum > 0 then
+        credits_total = credits_total + sum
+        vim.schedule(function()
+          Winbar.set_badge("cost", string.format("%.2f cr", credits_total))
+        end)
+      end
+    elseif kind == "steering_injected" then
+      if type(k.messageId) == "string" then
+        vim.schedule(function()
+          set_steer_state(k.messageId, "steered")
+        end)
+      end
+    elseif kind == "steering_cleared" then
+      -- A clear at turn end: anything still "queued" (never injected) was dropped.
+      vim.schedule(function()
+        for _, id in ipairs(k.messageIds or {}) do
+          set_steer_state(id, "not_delivered", true)
+        end
+      end)
+    elseif kind == "summarization_started" then
+      vim.schedule(function()
+        Winbar.set_state("compacting")
+      end)
+    elseif kind == "summarization_completed" then
+      vim.schedule(function()
+        Winbar.set_state("ready")
+        local summary = k.conversationSummary
+        if type(summary) == "string" and summary ~= "" then
+          view:add_message(Message:new("system", summary))
+        end
+      end)
+    elseif kind == "summarization_failed" then
+      vim.schedule(function()
+        Winbar.set_state("ready")
+        view:add_message(Message:new("system", "Compaction failed" .. (k.error and (": " .. tostring(k.error)) or "")))
+      end)
+    elseif kind == "display_error" then
+      local de = type(k.displayError) == "table" and k.displayError or k
+      local text = de.message
+      if type(text) == "string" and text ~= "" and not seen_errors[text] then
+        seen_errors[text] = true
+        vim.schedule(function()
+          view:add_message(Message:new("system", "⚠ " .. text))
+        end)
+      end
+    elseif kind == "turn_end" then
+      -- Refusal / abnormal stop detail, when present.
+      local details = type(k.turnEnd) == "table" and k.turnEnd.stopDetails or k.stopDetails
+      if type(details) == "table" and type(details.message) == "string" and details.message ~= "" then
+        vim.schedule(function()
+          view:add_message(Message:new("system", details.message))
+        end)
+      end
+    end
+  end
+  session:on("update", on_update)
+
+  -- ── `_kiro/*` notifications ────────────────────────────────────
   local function on_notification(method, params)
-    if method == "_kiro.dev/metadata" then
-      local pct = params and params.contextUsagePercentage
-      if pct then
-        vim.schedule(function()
-          Winbar.set_context(pct)
-        end)
-      end
-    elseif method == "_kiro.dev/subagent/list_update" then
+    if method == "_kiro/error/rate_limit" then
+      local msg = (params and params.message) or "Request limit reached"
       vim.schedule(function()
-        local ext = session.extensions or {}
-        ext.subagent_sessions = ext.subagent_sessions or {}
-        -- Rebuild the sessionId → name map from the latest list
-        local map = {}
-        local active = {}
-        for _, sa in ipairs(params.subagents or {}) do
-          if sa.sessionId then
-            map[sa.sessionId] = sa.sessionName or sa.agentName or sa.sessionId
-          end
-          if sa.status and sa.status.type == "working" then
-            active[#active + 1] = sa.sessionName or sa.agentName or "subagent"
-          end
-        end
-        ext.subagent_sessions = map
-        -- Winbar badge
-        if #active > 0 then
-          Winbar.set_badge("subagent", "⑂ " .. table.concat(active, ", "))
+        view:add_message(Message:new("system", "⚠ " .. msg))
+      end)
+    elseif method == "_kiro/customAgent/not_found" then
+      vim.schedule(function()
+        local req = (params and params.requestedAgent) or "?"
+        local skipped = params and params.skipped
+        if type(skipped) == "table" then
+          view:add_message(
+            Message:new(
+              "system",
+              ("Agent '%s' found but unusable (%s): %s"):format(
+                req,
+                skipped.reasonCode or "?",
+                skipped.error or skipped.path or ""
+              )
+            )
+          )
         else
-          Winbar.clear_badge("subagent")
+          view:add_message(
+            Message:new(
+              "system",
+              ("Agent '%s' not found; using '%s'"):format(req, (params and params.fallbackAgent) or "default")
+            )
+          )
         end
       end)
-    elseif method == "_kiro.dev/compaction/status" then
-      local status_type = params and params.status and params.status.type
+    elseif method == "_kiro/customAgent/config_error" then
       vim.schedule(function()
-        if status_type == "started" then
-          Winbar.set_state("compacting")
-        elseif status_type == "completed" or status_type == "failed" then
-          Winbar.set_state("ready")
-          if status_type == "completed" and params.summary and params.summary ~= "" then
-            view:add_message(Message:new("system", params.summary))
-          elseif status_type == "failed" and params.status.error then
-            view:add_message(Message:new("system", "Compaction failed: " .. tostring(params.status.error)))
-          end
+        local rc = (params and params.reasonCode) or "?"
+        if rc == "internal_error" then
+          -- Not a user configuration fault — don't present it as one.
+          view:add_message(Message:new("system", "Agent config internal error: " .. ((params and params.path) or "")))
+        else
+          view:add_message(
+            Message:new(
+              "system",
+              ("Invalid agent config (%s): %s%s"):format(
+                rc,
+                (params and params.path) or "?",
+                (params and params.error) and (" — " .. params.error) or ""
+              )
+            )
+          )
         end
       end)
-    elseif method == "_kiro.dev/agent/switched" then
-      if params.agentName and session.extensions then
-        vim.schedule(function()
-          session.extensions.mode_id = params.agentName
-        end)
-      end
-    elseif method == "_kiro.dev/commands/available" then
+    elseif method == "_kiro/mcp/status" then
+      -- Authoritative full snapshot. Announce a server needing auth once per
+      -- auth-required episode (reset when it leaves the failed state).
       vim.schedule(function()
-        local ext = session.extensions or {}
-
-        -- Cache prompts from notification
-        ext.server_prompts = {}
-        for _, p in ipairs(params.prompts or {}) do
-          ext.server_prompts[#ext.server_prompts + 1] = {
-            label = p.name,
-            value = p.name,
-            description = p.description ~= vim.NIL and p.description or nil,
-            serverName = p.serverName,
-            arguments = p.arguments,
-          }
-        end
-
-        -- Cache agents/models from session/new result (already in extensions)
-        -- These are populated by _extract_session_info; here we just build
-        -- the options list from the modes/models if present in the notification
-        -- (they aren't in commands/available, but we keep the cache from session/new)
-
-        -- Register commands
-        Commands.clear_acp()
-        for _, cmd in ipairs(params.commands or {}) do
-          if not (cmd.meta and cmd.meta["local"]) then
-            local name = cmd.name:gsub("^/", "")
-            local meta = cmd.meta
-            local hint = meta and meta.hint
-            if hint == vim.NIL then
-              hint = nil
+        for _, srv in ipairs((params and params.servers) or {}) do
+          local name = srv.name
+          if name then
+            if srv.failedAuthorization == true then
+              if not announced_auth[name] then
+                announced_auth[name] = true
+                view:add_message(
+                  Message:new(
+                    "system",
+                    ("MCP server '%s' needs authentication — run /mcp-auth %s"):format(name, name)
+                  )
+                )
+              end
+            elseif srv.status ~= "failed" then
+              announced_auth[name] = nil
             end
-            Commands.register(name, {
-              desc = cmd.description or name,
-              source = "acp",
-              hint = hint,
-              has_picker = meta and meta.inputType == "selection" or nil,
-              execute = make_execute(name, meta),
-            })
           end
         end
       end)
     end
   end
-
   session:on("notification", on_notification)
 
-  return function()
-    session:off("notification", on_notification)
-  end
-end
-
----Cache agents/models from session/new (or session/load) result into the
----per-session selection lists used by the `/agent` and `/model` pickers.
----Called by Session:_extract_session_info via the standard provider hook.
----@param result table
----@param extensions table
-function M.extract_session_info(result, extensions)
-  if result.modes and result.modes.availableModes then
-    extensions.server_agents = {}
-    for _, m in ipairs(result.modes.availableModes) do
-      extensions.server_agents[#extensions.server_agents + 1] = {
-        label = m.name or m.id,
-        value = m.id,
-        description = m.description,
-      }
+  -- ── MCP OAuth ──────────────────────────────────────────────────
+  -- The agent asks us to open the authorization URL via a request; answer it.
+  local function open_external_url(params, respond, respond_error)
+    local url = params and params.url
+    if type(url) == "string" and url ~= "" then
+      local ok = pcall(vim.ui.open, url)
+      respond({ success = ok == true })
+    else
+      respond_error("missing url", -32602)
     end
   end
-  if result.models and result.models.availableModels then
-    extensions.server_models = {}
-    for _, m in ipairs(result.models.availableModels) do
-      extensions.server_models[#extensions.server_models + 1] = {
-        label = m.name or m.modelId,
-        value = m.modelId,
-        description = m.description,
-      }
+  session:on_request("_kiro/openExternalUrl", open_external_url)
+
+  -- `/mcp-auth <server>` forces reauthentication (removes local OAuth creds and
+  -- starts a fresh flow). Registered as a builtin so the generic
+  -- available_commands_update refresh (which clears acp-source commands) can't
+  -- wipe it; removed on cleanup.
+  Commands.register("mcp-auth", {
+    desc = "Re-authenticate an MCP server (forced OAuth)",
+    source = "builtin",
+    hint = "<server>",
+    execute = function(args)
+      local server = vim.trim(args or "")
+      if server == "" then
+        vim.notify("[emeth] usage: /mcp-auth <server>", vim.log.levels.WARN)
+        return
+      end
+      session:request("_kiro/mcp/resetServer", { serverName = server, startOAuth = true }, function(_, err)
+        if err then
+          vim.schedule(function()
+            view:add_message(Message:new("system", "MCP auth failed: " .. tostring(err.message or err)))
+          end)
+        end
+      end)
+    end,
+  })
+
+  -- Transform runs on every update before the core consumes it.
+  if view.integration and view.integration.set_transform_update then
+    view.integration.set_transform_update(transform_update)
+  end
+
+  return function()
+    session:off("update", on_update)
+    session:off("notification", on_notification)
+    session:off_request("_kiro/openExternalUrl", open_external_url)
+    Commands.unregister("mcp-auth")
+    Winbar.clear_badge("cost")
+    if view.integration and view.integration.set_steering then
+      view.integration.set_steering(nil)
+    end
+    if view.integration and view.integration.set_transform_update then
+      view.integration.set_transform_update(nil)
     end
   end
 end
