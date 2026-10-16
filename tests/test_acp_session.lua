@@ -145,6 +145,40 @@ h.describe("Session set_config_option", function()
   end)
 end)
 
+h.describe("Session delete", function()
+  h.it("forwards to the client for the current session when connected", function()
+    local s = Session:new("test")
+    s.session_id = "sess-1"
+    s.client.state = "connected"
+    local sent, got_err
+    s.client.delete_session = function(_, session_id, cb)
+      sent = session_id
+      cb(nil, { code = -1, message = "boom" })
+    end
+    s:delete(nil, function(err)
+      got_err = err
+    end)
+    h.eq("sess-1", sent)
+    h.is_true(got_err ~= nil and got_err.message == "boom", "client error must reach the caller")
+  end)
+
+  h.it("no-ops (no client call) when disconnected", function()
+    local s = Session:new("test")
+    s.session_id = "sess-1"
+    s.client.state = "disconnected"
+    local called = false
+    s.client.delete_session = function()
+      called = true
+    end
+    local done = false
+    s:delete(nil, function()
+      done = true
+    end)
+    h.is_true(not called, "disconnected delete must not hit the client")
+    h.is_true(done, "callback still fires")
+  end)
+end)
+
 h.describe("ACPClient set_config_option wire shape", function()
   local ACPClient = require("emeth.acp.client")
 

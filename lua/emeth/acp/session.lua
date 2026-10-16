@@ -441,6 +441,24 @@ function Session:close(session_id, cb)
   end)
 end
 
+---Delete a session's persisted history server-side (destructive; unlike `close`
+---it does not come back). Mirrors `close`: no-ops without a session id or a live
+---client, defaults to the current session, and surfaces any error (including a
+---missing capability) through the callback for the caller to report.
+---@param session_id? string
+---@param cb? fun(err: acp.ACPError|nil)
+function Session:delete(session_id, cb)
+  cb = cb or function() end
+  session_id = session_id or self.session_id
+  if not session_id or self.client.state == "disconnected" then
+    cb(nil)
+    return
+  end
+  self.client:delete_session(session_id, function(_, err)
+    cb(err)
+  end)
+end
+
 ---Fork the current session into a new one and adopt it as this Session's active
 ---session (whole-session clone unless `opts.meta` targets a point). Ready-guarded
 ---like load; on success the forked id and its info replace the current ones.

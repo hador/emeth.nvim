@@ -542,6 +542,24 @@ h.describe("ACPClient close/fork", function()
     h.eq("s1", d.params.sessionId)
   end)
 
+  h.it("delete_session errors without the capability", function()
+    local c = make_client()
+    local err
+    c:delete_session("s1", function(_, e)
+      err = e
+    end)
+    h.is_true(err ~= nil, "unsupported delete must report an error, not send")
+  end)
+
+  h.it("delete_session sends session/delete when supported", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { sessionCapabilities = { delete = {} } }
+    c:delete_session("s1", function() end)
+    local d = vim.json.decode(sent[1])
+    h.eq("session/delete", d.method)
+    h.eq("s1", d.params.sessionId)
+  end)
+
   h.it("fork_session errors without the capability", function()
     local c = make_client()
     local err

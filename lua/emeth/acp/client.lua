@@ -840,6 +840,23 @@ function ACPClient:close_session(session_id, callback)
   self:_send_request("session/close", { sessionId = session_id }, callback)
 end
 
+---Delete a session's PERSISTED history server-side — the destructive counterpart
+---to `session/close` (which only releases runtime resources). Standard ACP, gated
+---on `sessionCapabilities.delete`. Both claude-acp and kiro-cli v3 advertise it.
+---Reports a missing capability through the callback rather than raising, so a
+---caller that also prunes a local index can proceed regardless.
+---@param session_id string
+---@param callback? fun(result: table|nil, err: acp.ACPError|nil)
+function ACPClient:delete_session(session_id, callback)
+  callback = callback or function() end
+  local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
+  if not (sc and sc.delete) then
+    callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support deleting sessions"))
+    return
+  end
+  self:_send_request("session/delete", { sessionId = session_id }, callback)
+end
+
 ---Fork a session into a new one. Standard ACP, gated on
 ---`sessionCapabilities.fork`. The base behaviour clones the whole session; a
 ---provider extension may target a point via `opts.meta` (kiro's
