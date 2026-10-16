@@ -56,6 +56,40 @@ h.describe("perf: render scaling stays flat as the session grows", function()
   end)
 end)
 
+h.describe("perf: the tool_results lookup is built over the tail, not the transcript", function()
+  -- Shape, not time. render_message (the lookup's only consumer) runs only for
+  -- the dirty tail, so a full-transcript build is O(transcript) per render for
+  -- entries no render reads. Assert the scoping directly: a prefix result must
+  -- not appear in the map, the tail's own result must.
+  local ChatView = require("emeth.ui.chat_view")
+  local Message = require("emeth.message")
+
+  local function tool_use_msg(id)
+    return Message:new("assistant", { { type = "tool_use", id = id, name = "Bash", input = {}, status = "completed" } })
+  end
+  local function tool_result_msg(id)
+    return Message:new("assistant", { { type = "tool_result", tool_use_id = id, content = "out" } })
+  end
+
+  h.it("scopes the scan to the dirty tail, excluding prefix results no render reads", function()
+    -- A cached prefix pair, then a freshly appended tail pair. The tail starts
+    -- at the new tool_use (index 3), which is what _render passes as dirty_from.
+    local messages = {
+      tool_use_msg("prefix"),
+      tool_result_msg("prefix"),
+      tool_use_msg("tail"),
+      tool_result_msg("tail"),
+    }
+    local map = ChatView._build_tool_results(messages, 3)
+    h.is_true(map["tail"] ~= nil, "the tail tool_use's own result must resolve during its render")
+    h.is_nil(
+      map["prefix"],
+      "a prefix result appeared in the lookup; the scan is walking the whole transcript again "
+        .. "rather than the dirty tail -- that makes every render O(transcript)."
+    )
+  end)
+end)
+
 h.describe("perf: a streaming tool body renders linearly (default collapsed)", function()
   -- A collapsed tool (the default until the user hits K) renders only its
   -- header, so its final buffer footprint is a fixed small number of lines no

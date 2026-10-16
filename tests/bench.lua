@@ -91,6 +91,27 @@ local function seed(v, n)
   v:_render()
 end
 
+---Seed `n` completed tool-call pairs (a tool_use message + its tool_result), so
+---the transcript is tool-heavy the way a real session is -- the paragraph seed
+---carries no tool content and can't exercise the tool_results lookup.
+---@param v chat_ui.ChatView
+---@param n integer
+local function tool_seed(v, n)
+  for i = 1, n do
+    local id = "tool_" .. i
+    local use = Message:new("assistant", {
+      { type = "tool_use", id = id, name = "Bash", input = { command = "ls " .. i }, status = "completed" },
+    })
+    use.metadata.tool_call =
+      { title = "ls " .. i, status = "completed", content = { { type = "content", content = { text = "out " .. i } } } }
+    v:add_message(use)
+    v:add_message(Message:new("assistant", {
+      { type = "tool_result", tool_use_id = id, content = "out " .. i },
+    }))
+  end
+  v:_render()
+end
+
 ---A tool_use message whose result body is `n_lines` long.
 ---@param n_lines integer
 ---@return chat_ui.Message
@@ -160,6 +181,36 @@ end
 ---@return number ms
 function M.stream_chunk_cost(prior)
   return M.time(M.stream_run(prior))
+end
+
+--- Streams STREAM_CHUNKS chunks into a fresh tail over a prefix of `n_pairs`
+--- completed tool-call pairs. Unlike `stream_run` (paragraph prefix), this
+--- measures the tool_results lookup build: scoped to the tail it stays FLAT vs
+--- `n_pairs`; a full-transcript scan would climb with it.
+---@param n_pairs integer  prior completed tool-call pairs to seed
+---@return fun() run
+function M.tool_stream_run(n_pairs)
+  local v = fresh_view()
+  tool_seed(v, n_pairs)
+  local live = Message:new("assistant", "")
+  v:add_message(live)
+  v:_render()
+  local uuid = live.uuid
+  return function()
+    for _ = 1, STREAM_CHUNKS do
+      v:update_message(uuid, function(m)
+        m:append_text("token ")
+      end)
+      v:_render()
+    end
+  end
+end
+
+--- Wall-clock cost of streaming into the tail of a tool-heavy session (make bench).
+---@param n_pairs integer
+---@return number ms
+function M.tool_stream_cost(n_pairs)
+  return M.time(M.tool_stream_run(n_pairs))
 end
 
 --- Wall-clock cost of appending APPEND_COUNT messages (make bench).
@@ -255,6 +306,11 @@ function M.run()
   print("streaming chunk into tail — should be FLAT vs prior size:")
   for _, p in ipairs({ 0, 100, 400, 800 }) do
     print(string.format("  prior=%-5d  %7.3f ms / 50 chunks", p, M.stream_chunk_cost(p)))
+  end
+
+  print("\nstreaming chunk into tail, TOOL-HEAVY prefix — should be FLAT vs prior tool pairs:")
+  for _, p in ipairs({ 0, 100, 400, 800 }) do
+    print(string.format("  prior_pairs=%-5d  %7.3f ms / 50 chunks", p, M.tool_stream_cost(p)))
   end
 
   print("\nappend new message — should be FLAT vs prior size:")
