@@ -92,12 +92,21 @@ h.describe("session_picker.items", function()
     vim.fn.delete(dir, "rf")
   end)
 
-  -- Resuming hands the agent the recorded cwd, so a session whose directory is
-  -- gone cannot work. In a real index these were 126 of 306 entries.
-  h.it("drops sessions whose directory no longer exists, and counts them", function()
-    local items, dropped = P.items({ entry({ cwd = "/definitely/not/here" }) }, NOW)
-    h.eq(0, #items)
-    h.eq(1, dropped)
+  -- Dead sessions used to be dropped and only counted, which hid exactly the
+  -- entries worth pruning. They are kept now, defaulting to valid with no verdict.
+  h.it("keeps every session; defaults to valid with no verdicts", function()
+    local items = P.items({ entry({ cwd = "/definitely/not/here" }) }, NOW)
+    h.eq(1, #items)
+    h.eq("valid", items[1].validity)
+  end)
+
+  h.it("badges a stale or gone session from the verdict map", function()
+    local id = "abcdef01-2345-6789-abcd-ef0123456789"
+    local items = P.items({ entry() }, NOW, { [id] = "gone" })
+    h.eq("gone", items[1].validity)
+    h.is_true(items[1].label:find("gone", 1, true) ~= nil, items[1].label)
+    local stale = P.items({ entry() }, NOW, { [id] = "stale" })
+    h.is_true(stale[1].label:find("stale", 1, true) ~= nil, stale[1].label)
   end)
 
   h.it("clamps an over-long title so the directory stays visible", function()
@@ -151,6 +160,27 @@ h.describe("session_picker.items", function()
     h.eq("claude-code", items[1].entry.provider)
     h.eq(dir, items[1].entry.cwd)
     vim.fn.delete(dir, "rf")
+  end)
+end)
+
+h.describe("session_picker.prune_gone", function()
+  h.it("removes only the gone ids, keeping valid and stale", function()
+    local entries = {
+      { session_id = "a", cwd = "/a" },
+      { session_id = "b", cwd = "/b" },
+      { session_id = "c", cwd = "/c" },
+    }
+    local kept, removed = P.prune_gone(entries, { a = "valid", b = "gone", c = "stale" })
+    h.eq(2, #kept)
+    h.eq("a", kept[1].session_id)
+    h.eq("c", kept[2].session_id)
+    h.eq({ "b" }, removed)
+  end)
+
+  h.it("treats an unknown verdict as keep", function()
+    local kept, removed = P.prune_gone({ { session_id = "x", cwd = "/x" } }, {})
+    h.eq(1, #kept)
+    h.eq(0, #removed)
   end)
 end)
 
