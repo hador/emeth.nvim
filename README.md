@@ -45,6 +45,7 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 
 - Neovim ≥ 0.10
 - At least one ACP-compatible agent CLI (claude-code, gemini-cli, goose, codex, kiro-cli)
+- Optional: [snacks.nvim] — not required, but recommended. emeth drives its picker directly when present, which unlocks a lot: the session-history picker (`:EmethHistory`) becomes wide and columned with a preview pane, validity badges, a footer hint bar, and per-row actions (rename / forget / delete / sync). Other `vim.ui.select` prompts also pick up snacks' styling. Without it everything still works — pickers fall back to plain `vim.ui.select` (resume only).
 
 ## Installation
 
@@ -183,6 +184,41 @@ Switch providers on the fly without closing the sidebar:
 ```
 
 When switching, the chat clears and a fresh session starts. If `resume_last_session` is set, the last session for the new provider is resumed automatically.
+
+### Session history
+
+`:EmethHistory` opens a picker over every session emeth has recorded, across all
+directories and providers (newest first). Type to fuzzy-filter; the preview pane
+shows the full title, directory, session id, and status. When [snacks.nvim] is
+installed it renders wide and columned with a footer hint bar; otherwise it falls
+back to `vim.ui.select` (resume only — the actions below need snacks).
+
+Each row carries a **validity** badge, checked without connecting to the agent:
+
+| Badge | Meaning |
+|-------|---------|
+| *(none)* | **valid** — resumable now |
+| `⚠ stale` | on disk but past the retention window — the provider will prune it on its next launch (claude: `cleanupPeriodDays`, default 30) |
+| `✖ gone` | not resumable — the transcript/record is gone, or its directory was deleted |
+
+Actions act on the highlighted row. The input opens in insert mode for
+type-to-filter, so press `<Esc>` first (the keys are normal-mode):
+
+| Key | Action | Scope |
+|-----|--------|-------|
+| `<CR>` | **resume** | — |
+| `r` | **rename** | emeth only (the title it shows; cosmetic) |
+| `d` | **forget** | emeth only — drops emeth's bookmark; the session stays resumable from the provider itself |
+| `D` | **delete** | agent **+** emeth — destroys the session's history everywhere, irreversible; refused for the active session |
+| `S` | **sync** | prune every `gone` row from emeth's index in one pass |
+
+The difference between `d` and `D`: **forget** only removes emeth's pointer — the
+underlying session is untouched and can still be resumed by the provider's own
+tooling (e.g. `claude --resume`). **delete** additionally sends `session/delete`
+to the agent (when a live client of that provider is connected and supports it),
+removing the persisted history for good.
+
+[snacks.nvim]: https://github.com/folke/snacks.nvim
 
 ### Input buffer
 

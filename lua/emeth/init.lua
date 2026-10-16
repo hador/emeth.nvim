@@ -389,7 +389,34 @@ function M.history()
     -- `resume` honours the session's recorded provider, rebuilding the right
     -- agent when it differs from the one currently connected.
     M.resume(entry.session_id, entry.provider)
-  end)
+  end, { on_destroy = M.destroy_session })
+end
+
+---Delete a session everywhere emeth can reach it: always from the local index
+---(authoritative for what the picker shows), and from the agent too when a live
+---client of that provider is connected and advertises `session/delete`. The
+---active session is refused — deleting the history out from under a live
+---conversation is never what the keystroke meant.
+---@param entry table
+---@return boolean ok, string? reason
+function M.destroy_session(entry)
+  local live = M._integration and M._integration.session
+  if live and live.session_id == entry.session_id then
+    return false, "cannot delete the active session"
+  end
+  require("emeth.sessions").remove(entry.session_id)
+  -- Best-effort agent-side delete: only when the connected provider matches, and
+  -- only reported on failure. The index removal above stands regardless.
+  if live and M._provider == entry.provider then
+    live:delete(entry.session_id, function(err)
+      if err then
+        vim.schedule(function()
+          vim.notify("[emeth] agent-side delete failed: " .. require("emeth.util").fmt_err(err), vim.log.levels.WARN)
+        end)
+      end
+    end)
+  end
+  return true
 end
 
 function M.cancel()
