@@ -413,6 +413,57 @@ h.describe("claude-code subagent attribution transform", function()
     h.eq(false, CC._transform_update(u))
   end)
 
+  -- Shapes from real claude-acp 0.94 traffic: the parent's result only points
+  -- at the handback ("not repeated here"), which carries the report itself.
+  local POINTER = "This agent's report was delivered to you as a message from \"a8fe\" "
+    .. "(its SubagentHandback call). Read it there; it is not repeated here.\n"
+
+  local function handback(parent, message)
+    return {
+      sessionUpdate = "tool_call",
+      toolCallId = "hb-" .. parent,
+      rawInput = { message = message },
+      _meta = { claudeCode = { parentToolUseId = parent, toolName = "SubagentHandback" } },
+    }
+  end
+
+  local function parent_result(parent, status)
+    return {
+      sessionUpdate = "tool_call_update",
+      toolCallId = parent,
+      status = status,
+      content = { { type = "content", content = { type = "text", text = POINTER } } },
+      _meta = { claudeCode = { toolName = "Agent" } },
+    }
+  end
+
+  h.it("puts the handed-back report on the parent's result", function()
+    CC._transform_update(handback("p-report", "Both commands worked."))
+    local u = parent_result("p-report", "completed")
+    CC._transform_update(u)
+    h.eq("Both commands worked.", u.content[1].content.text)
+  end)
+
+  h.it("leaves a parent's result alone when no report was handed back", function()
+    local u = parent_result("p-none", "completed")
+    CC._transform_update(u)
+    h.eq(POINTER, u.content[1].content.text)
+  end)
+
+  h.it("keeps the report through content-free updates until the parent finishes", function()
+    CC._transform_update(handback("p-later", "Done."))
+    local mid = { sessionUpdate = "tool_call_update", toolCallId = "p-later", _meta = { claudeCode = { toolName = "Agent" } } }
+    CC._transform_update(mid)
+    h.is_nil(mid.content, "an update without content gets none added")
+    local done = parent_result("p-later", "completed")
+    CC._transform_update(done)
+    h.eq("Done.", done.content[1].content.text)
+    -- Forgotten once the parent finished: a later pointer is left as sent.
+    local again = parent_result("p-later", "completed")
+    CC._transform_update(again)
+    h.eq(POINTER, again.content[1].content.text)
+  end)
+
   h.it("leaves an unrelated tool call alone", function()
     local u = {
       sessionUpdate = "tool_call",
