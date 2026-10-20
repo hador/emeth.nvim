@@ -17,6 +17,7 @@ local Session = require("emeth.acp.session")
 ---@field pass_env? string[]  Environment variable names to pass from the current process
 ---@field auth_method? string
 ---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
+---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize
 
 ---@class acp.Module
 ---@field config acp.Config
@@ -31,6 +32,10 @@ local defaults = {
       command = "npx",
       args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" },
       pass_env = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_MODEL_CONFIG" },
+      -- Without it claude-acp (>= ~0.86) reports a subagent as one opaque tool
+      -- call and sends none of its work. With it, each subagent runs as a child
+      -- session announced by `subagent_update` (ACP subagents RFD).
+      capabilities = { subagents = vim.empty_dict() },
     },
     ["gemini-cli"] = {
       command = "gemini",

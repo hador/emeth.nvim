@@ -30,6 +30,15 @@ M.NON_STREAMING = {
   usage_update = true,
   current_mode_update = true,
   config_option_update = true,
+  subagent_update = true,
+}
+
+--- The only `sessionUpdate` types rendered from a subagent's child session: its
+--- tool calls, which nest under the tool call that spawned it. Everything else a
+--- child sends (its prose, its prompt as a `session_message`, plans) is dropped.
+M.SUBAGENT_RENDERED = {
+  tool_call = true,
+  tool_call_update = true,
 }
 
 ---@class acp_updates.Ctx
@@ -347,6 +356,15 @@ function M.handlers(ctx)
     vim.schedule(function()
       ctx.reconcile_config_options(update.configOptions)
     end)
+  end
+
+  -- ACP subagents RFD: announces a child session before any of its traffic
+  -- (later copies only change its title/state). Recorded synchronously, not
+  -- scheduled, because the child's first updates follow right behind.
+  function handlers.subagent_update(update, stream)
+    if type(update.sessionId) == "string" and update.sessionId ~= "" then
+      stream.subagents[update.sessionId] = true
+    end
   end
 
   return handlers

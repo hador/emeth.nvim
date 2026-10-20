@@ -7,9 +7,9 @@
 ---   - `format_mode(mode_id) → render_desc`    badge + bottom-bar tag rendering
 ---   - `format_model(model_id) → string`       shorten model id for display
 ---
---- Subagents: a stateless transform_update rewrites Task/Agent tool_call titles
---- to show the description + subagent_type directly from the streaming rawInput.
---- No lifecycle tracking — titles are enriched opportunistically as data arrives.
+--- Subagents: a stateless transform_update points each subagent tool call at the
+--- Agent/Task call that spawned it, and rewrites that call's title to show the
+--- description + subagent_type from the streaming rawInput.
 ---
 --- Goal: `_meta.goal` snapshots on `session_info_update` drive a winbar badge and
 --- transcript notes. See the goal section below for why the advertised
@@ -92,17 +92,16 @@ function M.build_session_meta(emeth_config)
   }
 end
 
----Stateless transform: lift claude's subagent attribution onto generic fields,
+---Stateless transform: lift claude's subagent attribution onto a generic field,
 ---and enrich Task/Agent tool_call titles with the description and subagent_type
 ---from rawInput as it streams in.
 ---
----Subagent work arrives on the main session already attributed, so nesting it
----needs no capability negotiation — only a translation from claude's `_meta`
----namespace into fields the core integration can nest by:
----  * the spawning tool is marked `subagent = true` (its own title is the
----    literal "Task" until `rawInput.description` shows up)
----  * everything it runs carries `parentToolUseId` = that tool's `toolCallId`
+---A subagent's tool calls arrive on its child session (we advertise
+---`clientCapabilities.subagents`), each carrying `parentToolUseId` = the
+---`toolCallId` of the Agent/Task call that spawned it. The core nests by
+---`parent_tool_call_id`.
 ---@param update table
+---@return boolean|nil keep  false drops the update
 local function transform_update(update)
   if not update or type(update._meta) ~= "table" then
     return
@@ -112,11 +111,13 @@ local function transform_update(update)
     return
   end
 
+  -- The tool a subagent calls to hand its report back: plumbing, not work.
+  if meta.toolName == "SubagentHandback" then
+    return false
+  end
+
   if type(meta.parentToolUseId) == "string" and meta.parentToolUseId ~= "" then
     update.parent_tool_call_id = meta.parentToolUseId
-  end
-  if meta.subagent == true then
-    update.subagent_parent = true
   end
 
   if meta.toolName ~= "Task" and meta.toolName ~= "Agent" then
