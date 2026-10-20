@@ -33,12 +33,15 @@ M.NON_STREAMING = {
   subagent_update = true,
 }
 
---- The only `sessionUpdate` types rendered from a subagent's child session: its
---- tool calls, which nest under the tool call that spawned it. Everything else a
---- child sends (its prose, its prompt as a `session_message`, plans) is dropped.
-M.SUBAGENT_RENDERED = {
+--- `sessionUpdate` types from a subagent's child session that still reach a
+--- handler. `tool_call`/`tool_call_update` render, nested under the call that
+--- spawned the subagent; `session_message` is captured (its launch prompt goes
+--- on the parent card) but renders nothing. Everything else a child sends (its
+--- prose as thought chunks, its plans) is dropped.
+M.SUBAGENT_DISPATCHED = {
   tool_call = true,
   tool_call_update = true,
+  session_message = true,
 }
 
 ---@class acp_updates.Ctx
@@ -73,15 +76,34 @@ local function attach_subagent_expand(parent, view)
   end
 end
 
----Build the dispatch table. Each handler receives the update plus the streaming
----state for the session that update belongs to; handlers that keep no streaming
----state ignore it.
+---Build the dispatch table. Each handler receives the update, the streaming
+---state for the session that update belongs to, and that session's id; handlers
+---that need neither ignore them.
 ---@param ctx acp_updates.Ctx
----@return table<string, fun(update: table, stream: acp.StreamState)>
+---@return table<string, fun(update: table, stream: acp.StreamState, session_id: string?)>
 function M.handlers(ctx)
   local view = ctx.view
   local session = ctx.session
   local handlers = {}
+
+  -- The concatenated text of a `content` field, which is either a single block
+  -- (`{ type, text }`, as the chunk updates carry) or an array of them (as
+  -- `session_message` carries). Non-text blocks contribute nothing.
+  local function text_of(content)
+    if type(content) ~= "table" then
+      return ""
+    end
+    if content.type then
+      content = { content }
+    end
+    local parts = {}
+    for _, block in ipairs(content) do
+      if type(block) == "table" and block.type == "text" and type(block.text) == "string" then
+        parts[#parts + 1] = block.text
+      end
+    end
+    return table.concat(parts)
+  end
 
   function handlers.user_message_chunk(update)
     if update.content and update.content.type == "text" then
@@ -133,13 +155,22 @@ function M.handlers(ctx)
     end
   end
 
-  function handlers.tool_call(update, stream)
+  function handlers.tool_call(update, stream, session_id)
     -- A tool run by a subagent is folded into the tool that spawned it: one
     -- subagent easily runs dozens of calls, and left at top level they bury the
     -- main conversation. `parent_tool_call_id` is set by a provider transform,
     -- so this stays namespace-agnostic.
     local parent_uuid = update.parent_tool_call_id and stream.tool_map[update.parent_tool_call_id]
     local parent = parent_uuid and view:get_message(parent_uuid) or nil
+    -- Bind the child session to its parent card. `session_message` usually does
+    -- this first (and carries the prompt), but an Agent call with no prompt
+    -- sends none, so the first child call is the backstop.
+    if parent_uuid and session_id then
+      local record = stream.subagents[session_id]
+      if record and not record.parent_uuid then
+        record.parent_uuid = parent_uuid
+      end
+    end
     -- A top-level call ends the text/thought blocks it lands after. A nested one
     -- is placed under its parent, not at the tail, so the main stream carries on.
     if not parent then
@@ -371,9 +402,37 @@ function M.handlers(ctx)
   -- ACP subagents RFD: announces a child session before any of its traffic
   -- (later copies only change its title/state). Recorded synchronously, not
   -- scheduled, because the child's first updates follow right behind.
+  -- ACP subagents RFD: announces a child session before any of its traffic
+  -- (later copies only change its title/state). The record marks the id a
+  -- subagent (so the dispatcher routes its traffic here) and carries the link
+  -- to the parent card once known. Recorded synchronously, not scheduled,
+  -- because the child's first updates follow right behind.
   function handlers.subagent_update(update, stream)
-    if type(update.sessionId) == "string" and update.sessionId ~= "" then
-      stream.subagents[update.sessionId] = true
+    local child = update.sessionId
+    if type(child) ~= "string" or child == "" then
+      return
+    end
+    stream.subagents[child] = stream.subagents[child] or {}
+  end
+
+  -- A child session's launch message (ACP subagents RFD). Its `messageId` is the
+  -- toolCallId of the Agent/Task call that spawned the child, so it binds the
+  -- child session to that card; its text is the subagent's prompt, which the
+  -- card shows in its expanded body. Renders no message of its own.
+  function handlers.session_message(update, stream, session_id)
+    local record = session_id and stream.subagents[session_id]
+    if not record then
+      return
+    end
+    local parent_uuid = type(update.messageId) == "string" and stream.tool_map[update.messageId]
+    if parent_uuid then
+      record.parent_uuid = parent_uuid
+      local prompt = text_of(update.content)
+      if prompt ~= "" then
+        view:update_message(parent_uuid, function(m)
+          m.metadata.subagent_prompt = prompt
+        end)
+      end
     end
   end
 
