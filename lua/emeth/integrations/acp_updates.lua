@@ -126,11 +126,16 @@ function M.handlers(ctx)
     end)
   end
 
-  -- Bind a child session's record to its parent card, flushing any state that
-  -- arrived before the binding (the first `running` precedes it).
-  ---@param record { parent_uuid?: string, state?: string }
+  -- Bind a child session's record to its parent card, stamping the child's
+  -- identity (so the card can cancel it) and flushing any state that arrived
+  -- before the binding (the first `running` precedes it).
+  ---@param record { parent_uuid?: string, state?: string, session_id?: string, cancellable?: boolean }
   local function bind_parent(record, parent_uuid)
     record.parent_uuid = parent_uuid
+    view:update_message(parent_uuid, function(m)
+      m.metadata.subagent_session_id = record.session_id
+      m.metadata.subagent_cancellable = record.cancellable
+    end)
     set_card_state(record)
   end
 
@@ -442,6 +447,19 @@ function M.handlers(ctx)
     end
     local record = stream.subagents[child] or {}
     stream.subagents[child] = record
+    record.session_id = child
+    -- Advertised `capabilities.cancel` lets the card stop just this child. A
+    -- concrete capabilities object replaces the set; omitted leaves it. A
+    -- finished child clears it (null), which disables the card's cancel.
+    if type(update.capabilities) == "table" then
+      record.cancellable = update.capabilities.cancel ~= nil
+      if record.parent_uuid then
+        local can = record.cancellable
+        view:update_message(record.parent_uuid, function(m)
+          m.metadata.subagent_cancellable = can
+        end)
+      end
+    end
     -- Omitted state leaves the current one; only a concrete object replaces it.
     -- Only `requires_action` changes the card's marker (the leading status icon
     -- already tracks running/done/failed), but every state is stored so the

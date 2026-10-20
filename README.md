@@ -241,6 +241,7 @@ Keys act on the message under the cursor.
 | `e` | Put the user prompt under the cursor back in the input box to edit |
 | `<CR>` | Answer the question under the cursor (see below); otherwise moves down a line |
 | `a` `A` `r` `R` | Answer a permission request: allow once / always, reject once / always |
+| `C` | Cancel the subagent whose card is under the cursor, leaving the main turn running (shown only while it is still running) |
 
 ### Steering a running turn
 

@@ -69,6 +69,14 @@ local function spawn(session)
   emit(session, announce(), MAIN)
 end
 
+local function chunk(kind, text)
+  return { sessionUpdate = kind, content = { type = "text", text = text } }
+end
+
+local function state_update(child, state)
+  return { sessionUpdate = "subagent_update", sessionId = child or CHILD, state = { state = state } }
+end
+
 h.describe("acp integration: subagent tool nesting", function()
   h.it("hides a subagent's calls under the tool that spawned it", function()
     local session, view = make_setup()
@@ -204,10 +212,6 @@ h.describe("acp integration: subagent placement", function()
 end)
 
 h.describe("acp integration: subagent sessions", function()
-  local function chunk(kind, text)
-    return { sessionUpdate = kind, content = { type = "text", text = text } }
-  end
-
   local function launch_message(child, parent_id, text)
     return {
       sessionUpdate = "session_message",
@@ -282,10 +286,6 @@ h.describe("acp integration: subagent sessions", function()
     h.eq(1, cards, "the request reuses the child's existing card")
   end)
 
-  local function state_update(child, state)
-    return { sessionUpdate = "subagent_update", sessionId = child or CHILD, state = { state = state } }
-  end
-
   h.it("records the child's state on its parent card", function()
     local session, view = make_setup()
     spawn(session) -- announce carries running
@@ -319,6 +319,56 @@ h.describe("acp integration: subagent sessions", function()
     view.messages[1].metadata._expanded = false -- user collapsed it
     emit(session, state_update(CHILD, "requires_action"), MAIN)
     h.eq(false, view.messages[1].metadata._expanded, "a set expand state is left alone")
+  end)
+end)
+
+h.describe("acp integration: cancel a subagent", function()
+  -- announce() carries capabilities.cancel, so a live child is cancellable.
+  local function cancel_action(view)
+    return view.actions and view.actions.C
+  end
+
+  h.it("offers cancel only on a live, cancellable subagent card", function()
+    local session, view = make_setup()
+    local C = cancel_action(view)
+    h.is_true(C ~= nil, "the C action is registered")
+    spawn(session)
+    emit(session, child_call("t1", "a"), CHILD)
+    local card = view.messages[1]
+    h.is_true(C.when(card), "a running subagent card offers cancel")
+    h.is_true(not C.when(view.messages[2]), "a child tool call does not")
+  end)
+
+  h.it("hides cancel once the subagent is done", function()
+    local session, view = make_setup()
+    local C = cancel_action(view)
+    spawn(session)
+    emit(session, child_call("t1", "a"), CHILD)
+    emit(session, state_update(CHILD, "idle"), MAIN)
+    h.is_true(not C.when(view.messages[1]), "a finished subagent is not cancellable")
+  end)
+
+  h.it("cancels the child session, not the main turn", function()
+    local session, view = make_setup()
+    local cancelled
+    session.cancel = function(_, id)
+      cancelled = id
+    end
+    local C = cancel_action(view)
+    spawn(session)
+    emit(session, child_call("t1", "a"), CHILD)
+    C.run(view.messages[1])
+    h.eq(CHILD, cancelled, "cancel targets the child session id")
+  end)
+
+  h.it("does not offer cancel when the child never advertised it", function()
+    local session, view = make_setup()
+    local C = cancel_action(view)
+    -- Announce without capabilities, then bind + run.
+    emit(session, parent_call(), MAIN)
+    emit(session, { sessionUpdate = "subagent_update", sessionId = CHILD, state = { state = "running" } }, MAIN)
+    emit(session, child_call("t1", "a"), CHILD)
+    h.is_true(not C.when(view.messages[1]), "no cancel capability, no cancel")
   end)
 
   h.it("forgets announced subagents when the transcript is reset", function()
