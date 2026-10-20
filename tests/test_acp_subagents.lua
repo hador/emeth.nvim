@@ -282,6 +282,45 @@ h.describe("acp integration: subagent sessions", function()
     h.eq(1, cards, "the request reuses the child's existing card")
   end)
 
+  local function state_update(child, state)
+    return { sessionUpdate = "subagent_update", sessionId = child or CHILD, state = { state = state } }
+  end
+
+  h.it("records the child's state on its parent card", function()
+    local session, view = make_setup()
+    spawn(session) -- announce carries running
+    emit(session, child_call("t1", "a"), CHILD) -- binds the card
+    h.eq("running", view.messages[1].metadata.subagent_state)
+    emit(session, state_update(CHILD, "idle"), MAIN)
+    h.eq("idle", view.messages[1].metadata.subagent_state)
+  end)
+
+  h.it("flushes a state seen before the card was bound", function()
+    local session, view = make_setup()
+    spawn(session) -- parent card exists; announce carries running, not yet bound
+    emit(session, child_call("t1", "a"), CHILD) -- first call binds it
+    h.eq("running", view.messages[1].metadata.subagent_state, "the pre-bind state reaches the card")
+  end)
+
+  h.it("expands the parent card when its subagent needs the user", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, child_call("t1", "a"), CHILD)
+    h.eq(false, view.messages[2].visible, "child starts hidden under a collapsed card")
+    emit(session, state_update(CHILD, "requires_action"), MAIN)
+    h.eq(true, view.messages[1].metadata._expanded, "the card auto-expands")
+    h.eq(true, view.messages[2].visible, "so the request below it is visible")
+  end)
+
+  h.it("does not fight a user who already collapsed the card", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, child_call("t1", "a"), CHILD)
+    view.messages[1].metadata._expanded = false -- user collapsed it
+    emit(session, state_update(CHILD, "requires_action"), MAIN)
+    h.eq(false, view.messages[1].metadata._expanded, "a set expand state is left alone")
+  end)
+
   h.it("forgets announced subagents when the transcript is reset", function()
     local session, view = make_setup()
     emit(session, announce(), MAIN)

@@ -105,6 +105,35 @@ function M.handlers(ctx)
     return table.concat(parts)
   end
 
+  -- Push a subagent record's current state onto its parent card (if bound), and
+  -- when it needs the user, expand the card so the request below it is visible.
+  ---@param record { parent_uuid?: string, state?: string }
+  local function set_card_state(record)
+    if not (record.parent_uuid and record.state) then
+      return
+    end
+    local state = record.state
+    view:update_message(record.parent_uuid, function(m)
+      m.metadata.subagent_state = state
+      if state == "requires_action" and m.metadata._expanded == nil then
+        m.metadata._expanded = true
+        for _, child in ipairs(view:get_messages()) do
+          if child.metadata and child.metadata.parent_tool_call_id == m.content[1].id then
+            child.visible = true
+          end
+        end
+      end
+    end)
+  end
+
+  -- Bind a child session's record to its parent card, flushing any state that
+  -- arrived before the binding (the first `running` precedes it).
+  ---@param record { parent_uuid?: string, state?: string }
+  local function bind_parent(record, parent_uuid)
+    record.parent_uuid = parent_uuid
+    set_card_state(record)
+  end
+
   function handlers.user_message_chunk(update)
     if update.content and update.content.type == "text" then
       -- A provider transform may stamp the agent-side message id (kiro sets it
@@ -168,7 +197,7 @@ function M.handlers(ctx)
     if parent_uuid and session_id then
       local record = stream.subagents[session_id]
       if record and not record.parent_uuid then
-        record.parent_uuid = parent_uuid
+        bind_parent(record, parent_uuid)
       end
     end
     -- A top-level call ends the text/thought blocks it lands after. A nested one
@@ -399,20 +428,30 @@ function M.handlers(ctx)
     end)
   end
 
-  -- ACP subagents RFD: announces a child session before any of its traffic
-  -- (later copies only change its title/state). Recorded synchronously, not
-  -- scheduled, because the child's first updates follow right behind.
-  -- ACP subagents RFD: announces a child session before any of its traffic
-  -- (later copies only change its title/state). The record marks the id a
-  -- subagent (so the dispatcher routes its traffic here) and carries the link
-  -- to the parent card once known. Recorded synchronously, not scheduled,
-  -- because the child's first updates follow right behind.
+  -- ACP subagents RFD: announces a child session before any of its traffic;
+  -- later copies patch its title/state. The record marks the id a subagent (so
+  -- the dispatcher routes its traffic here) and carries the link to the parent
+  -- card once known. The `state.state` (running | requires_action | idle, with
+  -- a stopReason or error on idle) drives the card's status glyph. Recorded
+  -- synchronously, not scheduled, because the child's first updates follow
+  -- right behind.
   function handlers.subagent_update(update, stream)
     local child = update.sessionId
     if type(child) ~= "string" or child == "" then
       return
     end
-    stream.subagents[child] = stream.subagents[child] or {}
+    local record = stream.subagents[child] or {}
+    stream.subagents[child] = record
+    -- Omitted state leaves the current one; only a concrete object replaces it.
+    -- Only `requires_action` changes the card's marker (the leading status icon
+    -- already tracks running/done/failed), but every state is stored so the
+    -- latest always wins.
+    local st = type(update.state) == "table" and update.state
+    if st and type(st.state) == "string" then
+      record.state = st.state
+      -- The first `running` lands before the card is bound; the bind flushes it.
+      set_card_state(record)
+    end
   end
 
   -- A child session's launch message (ACP subagents RFD). Its `messageId` is the
@@ -426,7 +465,7 @@ function M.handlers(ctx)
     end
     local parent_uuid = type(update.messageId) == "string" and stream.tool_map[update.messageId]
     if parent_uuid then
-      record.parent_uuid = parent_uuid
+      bind_parent(record, parent_uuid)
       local prompt = text_of(update.content)
       if prompt ~= "" then
         view:update_message(parent_uuid, function(m)
