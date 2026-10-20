@@ -21,10 +21,10 @@ local PARENT_ID = "toolu_parent"
 
 local CC = require("emeth.integrations.claude-code")
 
-local function parent_call()
+local function parent_call(id)
   return {
     sessionUpdate = "tool_call",
-    toolCallId = PARENT_ID,
+    toolCallId = id or PARENT_ID,
     title = "Task",
     kind = "think",
     status = "pending",
@@ -44,14 +44,14 @@ local function announce(child)
   }
 end
 
-local function child_call(id, title, tool_name)
+local function child_call(id, title, tool_name, parent_id)
   return {
     sessionUpdate = "tool_call",
     toolCallId = id,
     title = title,
     kind = "execute",
     status = "pending",
-    _meta = { claudeCode = { parentToolUseId = PARENT_ID, toolName = tool_name or "Bash" } },
+    _meta = { claudeCode = { parentToolUseId = parent_id or PARENT_ID, toolName = tool_name or "Bash" } },
   }
 end
 
@@ -154,6 +154,52 @@ h.describe("acp integration: subagent tool nesting", function()
     emit(session, child_call("hb", "SubagentHandback", "SubagentHandback"), CHILD)
     h.eq(2, #view.messages, "the handback is plumbing, not a nested call")
     h.eq(1, view.messages[1].metadata.subagent_children)
+  end)
+end)
+
+h.describe("acp integration: subagent placement", function()
+  local function text(t)
+    return { sessionUpdate = "agent_message_chunk", content = { type = "text", text = t } }
+  end
+
+  --- The transcript as a list of labels: a tool card's title, or a text body.
+  local function layout(view)
+    local out = {}
+    for _, m in ipairs(view.messages) do
+      local c = m.content[1]
+      out[#out + 1] = (type(c) == "table" and c.type == "tool_use") and m.metadata.tool_call.title or m:text()
+    end
+    return out
+  end
+
+  h.it("keeps a subagent's calls under its parent while the main session keeps going", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, child_call("t1", "first"), CHILD)
+    emit(session, text("meanwhile"), MAIN)
+    emit(session, child_call("t2", "second"), CHILD)
+    h.eq({ "Task", "first", "second", "meanwhile" }, layout(view))
+  end)
+
+  h.it("does not split the main session's text around a subagent's call", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, text("one "), MAIN)
+    emit(session, child_call("t1", "child"), CHILD)
+    emit(session, text("two"), MAIN)
+    h.eq({ "Task", "child", "one two" }, layout(view))
+  end)
+
+  h.it("keeps parallel subagents' calls with their own parents", function()
+    local session, view = make_setup()
+    emit(session, parent_call("p1"), MAIN)
+    emit(session, announce("c1"), MAIN)
+    emit(session, parent_call("p2"), MAIN)
+    emit(session, announce("c2"), MAIN)
+    emit(session, child_call("a1", "a1", nil, "p1"), "c1")
+    emit(session, child_call("b1", "b1", nil, "p2"), "c2")
+    emit(session, child_call("a2", "a2", nil, "p1"), "c1")
+    h.eq({ "Task", "a1", "a2", "Task", "b1" }, layout(view))
   end)
 end)
 

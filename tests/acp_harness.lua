@@ -44,6 +44,16 @@ function M.make_view()
     table.insert(self.messages, msg)
   end
 
+  function view:insert_message_after(after_uuid, msg)
+    for i, m in ipairs(self.messages) do
+      if m.uuid == after_uuid then
+        table.insert(self.messages, i + 1, msg)
+        return
+      end
+    end
+    table.insert(self.messages, msg)
+  end
+
   function view:update_message(uuid, fn_or_msg, _opts)
     for _, m in ipairs(self.messages) do
       if m.uuid == uuid then

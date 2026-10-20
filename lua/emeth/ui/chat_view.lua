@@ -329,6 +329,23 @@ function ChatView:add_message(msg)
   self:_schedule_render()
 end
 
+---Insert `msg` directly after the message `after_uuid` (appends when that
+---message is gone). Lets nested content stay next to its parent while the
+---conversation keeps growing below it.
+---@param after_uuid string
+---@param msg chat_ui.Message
+function ChatView:insert_message_after(after_uuid, msg)
+  for i, m in ipairs(self.messages) do
+    if m.uuid == after_uuid then
+      table.insert(self.messages, i + 1, msg)
+      self._dirty_from = self._dirty_from and math.min(self._dirty_from, i + 1) or i + 1
+      self:_schedule_render()
+      return
+    end
+  end
+  self:add_message(msg)
+end
+
 ---@param uuid string
 ---@param msg_or_fn chat_ui.Message|fun(msg: chat_ui.Message)
 ---@param opts? { defer_render?: boolean }  defer_render: apply the mutation and

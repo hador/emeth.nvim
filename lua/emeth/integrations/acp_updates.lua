@@ -134,8 +134,18 @@ function M.handlers(ctx)
   end
 
   function handlers.tool_call(update, stream)
-    stream.assistant_uuid = nil
-    stream.thinking_uuid = nil
+    -- A tool run by a subagent is folded into the tool that spawned it: one
+    -- subagent easily runs dozens of calls, and left at top level they bury the
+    -- main conversation. `parent_tool_call_id` is set by a provider transform,
+    -- so this stays namespace-agnostic.
+    local parent_uuid = update.parent_tool_call_id and stream.tool_map[update.parent_tool_call_id]
+    local parent = parent_uuid and view:get_message(parent_uuid) or nil
+    -- A top-level call ends the text/thought blocks it lands after. A nested one
+    -- is placed under its parent, not at the tail, so the main stream carries on.
+    if not parent then
+      stream.assistant_uuid = nil
+      stream.thinking_uuid = nil
+    end
     local existing_uuid = stream.tool_map[update.toolCallId]
     if existing_uuid then
       view:update_message(existing_uuid, function(msg)
@@ -160,12 +170,6 @@ function M.handlers(ctx)
       end)
     else
       local metadata = { tool_call = update }
-      -- A tool run by a subagent is folded into the tool that spawned it: one
-      -- subagent easily runs dozens of calls, and left at top level they bury
-      -- the main conversation. `parent_tool_call_id` is set by a provider
-      -- transform, so this stays namespace-agnostic.
-      local parent_uuid = update.parent_tool_call_id and stream.tool_map[update.parent_tool_call_id]
-      local parent = parent_uuid and view:get_message(parent_uuid) or nil
       if parent then
         metadata.parent_tool_call_id = update.parent_tool_call_id
       end
@@ -177,20 +181,26 @@ function M.handlers(ctx)
         status = update.status or "pending",
         failure_reason = update.failure_reason,
       }, metadata)
-      if parent then
-        -- Hidden while the parent is collapsed; a child arriving after the user
-        -- expanded it shows up straight away.
-        msg.visible = parent.metadata._expanded == true
-        -- Repaint just the parent, whose child count changed. The child's own
-        -- add_message below only dirties from the child down, so the parent row
-        -- would otherwise keep a stale count.
-        view:update_message(parent_uuid, function(m)
-          m.metadata.subagent_children = (m.metadata.subagent_children or 0) + 1
-          attach_subagent_expand(m, view)
-        end)
-      end
       stream.tool_map[update.toolCallId] = msg.uuid
-      view:add_message(msg)
+      if not parent then
+        view:add_message(msg)
+        return
+      end
+      -- Hidden while the parent is collapsed; a child arriving after the user
+      -- expanded it shows up straight away.
+      msg.visible = parent.metadata._expanded == true
+      -- Directly after the parent's previous child, NOT at the tail: the main
+      -- session keeps streaming while a subagent runs, and appended children
+      -- would expand below everything said since.
+      local after = parent.metadata.last_child_uuid or parent_uuid
+      -- Repaint the parent too, whose child count changed: the insert only
+      -- dirties from the child down.
+      view:update_message(parent_uuid, function(m)
+        m.metadata.subagent_children = (m.metadata.subagent_children or 0) + 1
+        m.metadata.last_child_uuid = msg.uuid
+        attach_subagent_expand(m, view)
+      end)
+      view:insert_message_after(after, msg)
     end
   end
 
