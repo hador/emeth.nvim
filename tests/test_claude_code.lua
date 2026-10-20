@@ -404,15 +404,13 @@ h.describe("claude-code subagent attribution transform", function()
     h.eq("toolu_parent", u.parent_tool_call_id)
   end)
 
-  h.it("marks the spawning tool", function()
+  h.it("drops the subagent handback tool", function()
     local u = {
       sessionUpdate = "tool_call",
-      toolCallId = "p",
-      title = "Task",
-      _meta = { claudeCode = { subagent = true, toolName = "Agent" } },
+      toolCallId = "hb",
+      _meta = { claudeCode = { parentToolUseId = "toolu_parent", toolName = "SubagentHandback" } },
     }
-    CC._transform_update(u)
-    h.eq(true, u.subagent_parent)
+    h.eq(false, CC._transform_update(u))
   end)
 
   h.it("leaves an unrelated tool call alone", function()
@@ -423,7 +421,6 @@ h.describe("claude-code subagent attribution transform", function()
     }
     CC._transform_update(u)
     h.is_nil(u.parent_tool_call_id)
-    h.is_nil(u.subagent_parent)
   end)
 
   -- Attribution must survive on non-Agent tools: the old transform returned

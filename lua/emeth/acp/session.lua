@@ -137,6 +137,7 @@ function Session:new(provider_name)
     env = env,
     auth_method = provider.auth_method,
     capabilities_meta = provider.capabilities_meta,
+    capabilities = provider.capabilities,
     handlers = {
       on_session_update = function(update, update_session_id)
         session:_emit("update", update, update_session_id)

@@ -79,6 +79,11 @@ function ACPClient:new(config)
   if config and config.capabilities_meta and next(config.capabilities_meta) ~= nil then
     client.capabilities._meta = config.capabilities_meta
   end
+  -- Provider-specific standard capabilities (e.g. claude-code's `subagents`),
+  -- added beside the ones every client advertises.
+  for name, value in pairs(config and config.capabilities or {}) do
+    client.capabilities[name] = value
+  end
   client:_setup_transport()
   return client
 end

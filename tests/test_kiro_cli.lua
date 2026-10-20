@@ -50,15 +50,13 @@ h.describe("kiro-cli transform_update", function()
     h.eq("msg-7", u.provider_message_id)
   end)
 
-  h.it("marks an agent-subtask tool as a subagent parent", function()
+  h.it("never points an agent-subtask tool at itself", function()
     local u = {
       sessionUpdate = "tool_call",
       toolCallId = "subtask-1",
       _meta = { kiro = { kind = "agent-subtask", agentSubtaskId = "subtask-1" } },
     }
     transform(u)
-    h.eq(true, u.subagent_parent)
-    -- The parent must not point at itself.
     h.is_nil(u.parent_tool_call_id)
   end)
 
@@ -70,7 +68,6 @@ h.describe("kiro-cli transform_update", function()
     }
     transform(u)
     h.eq("subtask-1", u.parent_tool_call_id)
-    h.is_nil(u.subagent_parent)
   end)
 
   h.it("drops the empty replay boundary user_message_chunk", function()

@@ -251,6 +251,7 @@
 ---@field max_reconnect_attempts? number
 ---@field auth_method? string
 ---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
+---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize
 ---@field handlers? acp.Handlers
 ---@field on_state_change? fun(new_state: acp.ConnectionState, old_state: acp.ConnectionState)
 

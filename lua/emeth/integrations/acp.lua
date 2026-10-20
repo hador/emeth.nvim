@@ -35,27 +35,19 @@ function M.setup_integration(view, session)
   ---@field assistant_uuid string|nil  message the current agent text streams into
   ---@field thinking_uuid string|nil   message the current thought streams into
   ---@field plan_uuid string|nil       the live plan block, while it's still last
-  ---@field tool_map table<string, string>  toolCallId -> message uuid
+  ---@field tool_map table<string, string>  toolCallId -> message uuid, across the session and its subagents
+  ---@field subagents table<string, true>  child session ids announced by `subagent_update`
 
-  -- Keyed by the session the updates belong to. `session/update` carries a
-  -- sessionId, and a subagent's output arrives under its OWN session id, so two
-  -- streams can be live at once — sharing one state table would let them append
-  -- into each other's messages. Handlers receive their stream as an argument
-  -- rather than closing over a single table.
-  local streams = {} ---@type table<string, acp.StreamState>
-
-  ---The stream for `session_id`, created on first use.
-  ---@param session_id string|nil
+  -- One stream per transcript. A subagent's work arrives under its own child
+  -- session id, but only its tool calls are rendered (nested under the tool that
+  -- spawned it), so the text/thought/plan anchors only ever belong to the main
+  -- session. Tool call ids are agent-unique, so one tool map serves both — which
+  -- is what lets a child's call find its parent card.
   ---@return acp.StreamState
-  local function stream_for(session_id)
-    local key = session_id or "?"
-    local s = streams[key]
-    if not s then
-      s = { tool_map = {} }
-      streams[key] = s
-    end
-    return s
+  local function new_stream()
+    return { tool_map = {}, subagents = {} }
   end
+  local stream = new_stream()
   local selected_files = {} ---@type string[]
   ---@class acp.PendingElicitation
   ---@field request acp.CreateElicitationRequest
@@ -215,7 +207,7 @@ function M.setup_integration(view, session)
   end
 
   local function reset_state()
-    streams = {}
+    stream = new_stream()
   end
 
   local function refresh_file_display()
@@ -558,7 +550,6 @@ function M.setup_integration(view, session)
       -- Only the anchors: `tool_map` stays, since tool calls already in flight
       -- must keep resolving to their own rows, and `plan_uuid` re-displays
       -- itself once it is no longer the last block.
-      local stream = stream_for(session.session_id)
       stream.assistant_uuid = nil
       stream.thinking_uuid = nil
       strat.steer(prompt, text, function(outcome, err, info)
@@ -663,17 +654,31 @@ function M.setup_integration(view, session)
       end
     end
 
+    -- A subagent shows only as the tool calls it makes, nested under the call
+    -- that spawned it; its own prose (sent as thought chunks), prompt and plans
+    -- stay out of the transcript. It also never drives the winbar: a background
+    -- subagent can keep reporting after the main turn ended.
+    local from_subagent = update_session_id ~= nil and stream.subagents[update_session_id] ~= nil
+    if from_subagent and not AcpUpdates.SUBAGENT_RENDERED[update.sessionUpdate] then
+      return
+    end
+
     -- Update-driven activity transition: streaming content → generating.
     -- connecting/cancelled absorb updates (stay put); only idle transitions.
     -- Replayed history (session/load) must not flip us to generating — the
     -- transform marks it `update.replay`.
-    if not AcpUpdates.NON_STREAMING[update.sessionUpdate] and activity == "idle" and not update.replay then
+    if
+      not from_subagent
+      and not AcpUpdates.NON_STREAMING[update.sessionUpdate]
+      and activity == "idle"
+      and not update.replay
+    then
       set_activity("generating")
     end
 
     local handler = update_handlers[update.sessionUpdate]
     if handler then
-      handler(update, stream_for(update_session_id))
+      handler(update, stream)
     end
   end)
 
@@ -754,14 +759,14 @@ function M.setup_integration(view, session)
     end,
   })
 
-  session:on("permission", function(tool_call, options, callback)
+  session:on("permission", function(tool_call, options, callback, permission_session_id)
     vim.schedule(function()
-      -- Render via the same path as a regular tool_call update. The permission
-      -- event carries no session id, so attribute it to the main session — the
-      -- same stream this tool call's real updates arrive on.
-      if not stream_for(session.session_id).tool_map[tool_call.toolCallId] then
+      -- Render the card via the regular tool_call path when the agent asked
+      -- before announcing the call, under the session that asked (a subagent's
+      -- request comes from its child session).
+      if not stream.tool_map[tool_call.toolCallId] then
         local update = vim.tbl_extend("keep", tool_call, { sessionUpdate = "tool_call" })
-        session:_emit("update", update, session.session_id)
+        session:_emit("update", update, permission_session_id or session.session_id)
       end
 
       -- A nil callback means the session layer already answered this request

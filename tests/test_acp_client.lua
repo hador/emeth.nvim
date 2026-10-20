@@ -609,6 +609,19 @@ h.describe("ACPClient capabilities", function()
     h.is_nil(plain.capabilities._meta)
   end)
 
+  h.it("adds provider capabilities beside the defaults", function()
+    local real = ACPClient:new({ command = "true", capabilities = { subagents = vim.empty_dict() } })
+    h.eq("{}", vim.json.encode(real.capabilities.subagents), "an empty object, not an array")
+    h.is_true(real.capabilities.fs ~= nil, "the defaults survive")
+    h.is_nil(ACPClient:new({ command = "true" }).capabilities.subagents)
+  end)
+
+  h.it("advertises subagents for claude-code only", function()
+    local Acp = require("emeth.acp")
+    h.eq("{}", vim.json.encode(Acp.config.providers["claude-code"].capabilities.subagents))
+    h.is_nil(Acp.config.providers["kiro-cli"].capabilities)
+  end)
+
   h.it("advertises form elicitation as an empty object, not an array", function()
     local real = ACPClient:new({ command = "true" })
     -- A bare Lua `{}` would encode as `[]`; the spec requires an object here.

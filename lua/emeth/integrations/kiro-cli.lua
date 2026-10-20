@@ -72,11 +72,14 @@ local function transform_update(update)
 
   -- Subagent nesting. The spawning subtask arrives as a tool_call whose own
   -- toolCallId equals its agentSubtaskId and carries kind "agent-subtask"; each
-  -- call it makes carries that same agentSubtaskId. Mark the parent, and point
-  -- children at it so the core nests them (the same shape claude uses).
-  if k.kind == "agent-subtask" then
-    update.subagent_parent = true
-  elseif type(k.agentSubtaskId) == "string" and k.agentSubtaskId ~= "" and update.toolCallId ~= k.agentSubtaskId then
+  -- call it makes carries that same agentSubtaskId. Point the children at it so
+  -- the core nests them (the same shape claude uses).
+  if
+    k.kind ~= "agent-subtask"
+    and type(k.agentSubtaskId) == "string"
+    and k.agentSubtaskId ~= ""
+    and update.toolCallId ~= k.agentSubtaskId
+  then
     update.parent_tool_call_id = k.agentSubtaskId
   end
 end
