@@ -7,9 +7,10 @@
 ---   - `format_mode(mode_id) → render_desc`    badge + bottom-bar tag rendering
 ---   - `format_model(model_id) → string`       shorten model id for display
 ---
---- Subagents: a stateless transform_update points each subagent tool call at the
---- Agent/Task call that spawned it, and rewrites that call's title to show the
---- description + subagent_type from the streaming rawInput.
+--- Subagents: transform_update points each subagent tool call at the Agent/Task
+--- call that spawned it, rewrites that call's title to show the description +
+--- subagent_type from the streaming rawInput, and puts the subagent's handed-back
+--- report on that call's card.
 ---
 --- Goal: `_meta.goal` snapshots on `session_info_update` drive a winbar badge and
 --- transcript notes. See the goal section below for why the advertised
@@ -92,9 +93,33 @@ function M.build_session_meta(emeth_config)
   }
 end
 
----Stateless transform: lift claude's subagent attribution onto a generic field,
----and enrich Task/Agent tool_call titles with the description and subagent_type
----from rawInput as it streams in.
+-- A subagent's report, keyed by the toolCallId of the Agent/Task call that
+-- spawned it. The subagent hands it back through its own SubagentHandback call
+-- (`rawInput.message`); the parent's result then only says the report "was
+-- delivered … not repeated here". Both live and replayed traffic send the
+-- handback before the parent's result, so the parent can pick it up. An entry
+-- is dropped once the parent finishes.
+local handback_reports = {} ---@type table<string, string>
+
+---Replace a finished Agent/Task call's pointer-only result with the report its
+---subagent handed back.
+---@param update table
+local function show_handback_report(update)
+  local report = handback_reports[update.toolCallId]
+  if not report then
+    return
+  end
+  if type(update.content) == "table" and #update.content > 0 then
+    update.content = { { type = "content", content = { type = "text", text = report } } }
+  end
+  if update.status == "completed" or update.status == "failed" then
+    handback_reports[update.toolCallId] = nil
+  end
+end
+
+---Transform: lift claude's subagent attribution onto a generic field, enrich
+---Task/Agent tool_call titles with the description and subagent_type from
+---rawInput as it streams in, and route a subagent's report to its parent card.
 ---
 ---A subagent's tool calls arrive on its child session (we advertise
 ---`clientCapabilities.subagents`), each carrying `parentToolUseId` = the
@@ -111,8 +136,13 @@ local function transform_update(update)
     return
   end
 
-  -- The tool a subagent calls to hand its report back: plumbing, not work.
+  -- The tool a subagent calls to hand its report back: plumbing, not work. Its
+  -- message is the report, which belongs on the parent's card.
   if meta.toolName == "SubagentHandback" then
+    local message = type(update.rawInput) == "table" and update.rawInput.message
+    if type(message) == "string" and message ~= "" and type(meta.parentToolUseId) == "string" then
+      handback_reports[meta.parentToolUseId] = message
+    end
     return false
   end
 
@@ -123,6 +153,7 @@ local function transform_update(update)
   if meta.toolName ~= "Task" and meta.toolName ~= "Agent" then
     return
   end
+  show_handback_report(update)
   local raw = type(update.rawInput) == "table" and update.rawInput or {}
   local description = (type(raw.description) == "string" and raw.description ~= "" and raw.description) or update.title
   local subagent_type = type(raw.subagent_type) == "string" and raw.subagent_type ~= "" and raw.subagent_type or nil
