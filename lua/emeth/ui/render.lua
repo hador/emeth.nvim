@@ -3,6 +3,16 @@
 local Line = require("emeth.ui.line")
 local HL = require("emeth.ui.highlights")
 
+-- The marker before a subagent card's folded-tool count. It stays ⊳ in every
+-- state but one: the leading status icon already tracks running/done/failed, so
+-- the only signal it can't show is a child waiting on the user. That one gets a
+-- highlighted ◆ to draw the eye; everything else is the quiet default, so the
+-- common running→done path never flickers.
+local SUBAGENT_MARKERS = {
+  default = { glyph = "⊳" },
+  requires_action = { glyph = "◆", hl = HL.TOOL_CALLING },
+}
+
 local M = {}
 
 local _preferred_keys = { "command", "pattern", "query", "path", "file_path", "url", "regex", "search", "glob" }
@@ -482,12 +492,15 @@ local function render_tool_use(item, msg, messages, tool_results)
       header[#header + 1] = fail_label
     end
     -- A subagent's spawning tool stands in for everything it ran, so say how
-    -- much is folded away under it — otherwise the row looks inert.
+    -- much is folded away under it — otherwise the row looks inert. The marker
+    -- glyph carries the child's live state (running / needs-you / failed) so it
+    -- reads at a glance without a word that would flicker as the state changes.
     local children = msg.metadata.subagent_children
     if type(children) == "number" and children > 0 then
+      local marker = SUBAGENT_MARKERS[msg.metadata.subagent_state] or SUBAGENT_MARKERS.default
       header[#header + 1] = {
-        ("  ⊳ %d tool%s"):format(children, children == 1 and "" or "s"),
-        HL.MUTED,
+        ("  %s %d tool%s"):format(marker.glyph, children, children == 1 and "" or "s"),
+        marker.hl or HL.MUTED,
       }
     end
     -- Collapse non-diff tool bodies by default (K to expand).

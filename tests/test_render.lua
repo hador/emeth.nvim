@@ -686,6 +686,21 @@ h.describe("render: subagent nesting", function()
     h.eq("  " .. top, nested, "nested rows are the same row, indented")
   end)
 
+  h.it("marks a subagent waiting on the user, and nothing else", function()
+    local function marker(state)
+      local msg = tool_msg({
+        name = "Investigate the crash",
+        metadata = { tool_call = { title = "Investigate the crash" }, subagent_children = 3, subagent_state = state },
+      })
+      return tostring(Render.render_message(msg, { msg })[1])
+    end
+    h.is_true(marker("requires_action"):find("◆", 1, true) ~= nil, "needs-you is marked")
+    h.is_true(marker("running"):find("◆", 1, true) == nil, "running is not")
+    h.is_true(marker("running"):find("⊳", 1, true) ~= nil, "running keeps the quiet marker")
+    h.is_true(marker("idle"):find("⊳", 1, true) ~= nil, "done keeps the quiet marker")
+    h.is_true(marker("failed"):find("◆", 1, true) == nil, "failure rides the leading ✗, not the marker")
+  end)
+
   h.it("shows the subagent's launch prompt in the expanded body", function()
     local msg = tool_msg({
       name = "Explore watchlist handling",
