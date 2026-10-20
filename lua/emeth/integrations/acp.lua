@@ -659,7 +659,7 @@ function M.setup_integration(view, session)
     -- stay out of the transcript. It also never drives the winbar: a background
     -- subagent can keep reporting after the main turn ended.
     local from_subagent = update_session_id ~= nil and stream.subagents[update_session_id] ~= nil
-    if from_subagent and not AcpUpdates.SUBAGENT_RENDERED[update.sessionUpdate] then
+    if from_subagent and not AcpUpdates.SUBAGENT_DISPATCHED[update.sessionUpdate] then
       return
     end
 
@@ -678,7 +678,7 @@ function M.setup_integration(view, session)
 
     local handler = update_handlers[update.sessionUpdate]
     if handler then
-      handler(update, stream)
+      handler(update, stream, update_session_id)
     end
   end)
 

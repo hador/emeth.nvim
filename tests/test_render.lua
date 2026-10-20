@@ -685,6 +685,21 @@ h.describe("render: subagent nesting", function()
     local top = tostring(Render.render_message(plain, { plain })[1])
     h.eq("  " .. top, nested, "nested rows are the same row, indented")
   end)
+
+  h.it("shows the subagent's launch prompt in the expanded body", function()
+    local msg = tool_msg({
+      name = "Explore watchlist handling",
+      metadata = {
+        tool_call = { title = "Explore watchlist handling" },
+        subagent_children = 2,
+        subagent_prompt = "Find every reader of the watchlist cache.",
+        _expanded = true,
+      },
+    })
+    local text = table.concat(vim.tbl_map(tostring, Render.render_message(msg, { msg })), "\n")
+    h.is_true(text:find("├─ prompt", 1, true) ~= nil, "a prompt section: " .. text)
+    h.is_true(text:find("Find every reader of the watchlist cache.", 1, true) ~= nil)
+  end)
 end)
 
 h.describe("Line:indent", function()

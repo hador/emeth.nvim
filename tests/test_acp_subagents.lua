@@ -208,18 +208,37 @@ h.describe("acp integration: subagent sessions", function()
     return { sessionUpdate = kind, content = { type = "text", text = text } }
   end
 
-  h.it("keeps a subagent's prose out of the transcript", function()
+  local function launch_message(child, parent_id, text)
+    return {
+      sessionUpdate = "session_message",
+      messageId = parent_id or PARENT_ID,
+      senderSessionId = MAIN,
+      recipientSessionId = child or CHILD,
+      content = { { type = "text", text = text or "do the thing" } },
+    }
+  end
+
+  h.it("keeps a subagent's prose and launch message out of the transcript", function()
     local session, view = make_setup()
     spawn(session)
     emit(session, chunk("agent_thought_chunk", "`echo one` ran cleanly"), CHILD)
     emit(session, chunk("agent_message_chunk", "child says hi"), CHILD)
-    emit(session, {
-      sessionUpdate = "session_message",
-      messageId = PARENT_ID,
-      senderSessionId = MAIN,
-      recipientSessionId = CHILD,
-    }, CHILD)
+    emit(session, launch_message(), CHILD)
     h.eq(1, #view.messages, "only the spawning tool call")
+  end)
+
+  h.it("puts the subagent's launch prompt on its parent card", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, launch_message(CHILD, PARENT_ID, "investigate the crash"), CHILD)
+    h.eq("investigate the crash", view.messages[1].metadata.subagent_prompt)
+  end)
+
+  h.it("ignores a launch message whose parent card is unknown", function()
+    local session, view = make_setup()
+    emit(session, announce(), MAIN)
+    emit(session, launch_message(CHILD, "no-such-call", "orphaned"), CHILD)
+    h.eq(0, #view.messages, "nothing to attach to, nothing rendered")
   end)
 
   h.it("keeps the main session's text streaming into one message around a subagent", function()

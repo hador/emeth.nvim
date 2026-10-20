@@ -501,12 +501,20 @@ local function render_tool_use(item, msg, messages, tool_results)
     add_hidden(header, hidden)
     lines[#lines + 1] = Line:new(header)
 
-    -- The invocation, above the output: you read what ran before what it printed.
-    -- Fenced as shell for an `execute` tool (spec `kind`, so this stays provider
-    -- agnostic) so it highlights as the code it is.
-    local lang = (tc and tc.kind == "execute") and "bash" or ""
-    for _, full in ipairs(withheld) do
-      vim.list_extend(lines, fenced_lines(full, lang))
+    -- A subagent's spawning tool shows the subagent's launch prompt instead of
+    -- its own invocation, which is just the description already in the header.
+    local subagent_prompt = msg.metadata.subagent_prompt
+    if subagent_prompt then
+      lines[#lines + 1] = Line:new({ { "├─ prompt", HL.MUTED } })
+      vim.list_extend(lines, text_to_lines(subagent_prompt))
+    else
+      -- The invocation, above the output: you read what ran before what it printed.
+      -- Fenced as shell for an `execute` tool (spec `kind`, so this stays provider
+      -- agnostic) so it highlights as the code it is.
+      local lang = (tc and tc.kind == "execute") and "bash" or ""
+      for _, full in ipairs(withheld) do
+        vim.list_extend(lines, fenced_lines(full, lang))
+      end
     end
 
     local outputs = {}
