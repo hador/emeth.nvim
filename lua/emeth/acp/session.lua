@@ -418,9 +418,13 @@ function Session:send_prompt(content_items, cb)
   end)
 end
 
-function Session:cancel()
-  if self.session_id then
-    self.client:cancel_session(self.session_id)
+---Cancel a turn. Defaults to this session; pass a child's session id to cancel
+---just that subagent (ACP subagents RFD) without touching the main turn.
+---@param session_id? string
+function Session:cancel(session_id)
+  local id = session_id or self.session_id
+  if id then
+    self.client:cancel_session(id)
   end
 end
 

@@ -85,6 +85,16 @@ function M.make_view()
     return self.messages
   end
 
+  -- Per-card actions (the real ChatView binds these as result-buffer keymaps);
+  -- here they are just stored so a test can find one and drive its when/run.
+  view.actions = {}
+  function view:add_action(opts)
+    self.actions[opts.key] = opts
+  end
+  function view:remove_action(key)
+    self.actions[key] = nil
+  end
+
   function view:clear()
     self.messages = {}
     self.cleared_count = self.cleared_count + 1

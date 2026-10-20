@@ -782,6 +782,31 @@ function M.setup_integration(view, session)
     end)
   end)
 
+  -- ── Cancel one subagent (C) ──────────────────────────────────
+  -- A subagent runs as its own child session (ACP subagents RFD). `C` on its
+  -- card stops just that child, leaving the main turn running. Gated to a card
+  -- whose child is still live and advertised `cancel`, so it is absent on a
+  -- finished subagent and on ordinary tool calls. Capital, so it reads as
+  -- deliberate.
+  if view.add_action then
+    view:add_action({
+      key = "C",
+      hint = "C: cancel subagent",
+      when = function(m)
+        local meta = m.metadata
+        return meta ~= nil
+          and meta.subagent_session_id ~= nil
+          and meta.subagent_cancellable == true
+          and (meta.subagent_state == "running" or meta.subagent_state == "requires_action")
+      end,
+      run = function(m)
+        session:cancel(m.metadata.subagent_session_id)
+        local title = m.metadata.tool_call and m.metadata.tool_call.title
+        view:add_message(Message:new("system", "⏹ Cancelled subagent" .. (title and (": " .. title) or "")))
+      end,
+    })
+  end
+
   -- ── Elicitation ──────────────────────────────────────────────
   -- The agent asks the user a structured question and blocks its turn on the
   -- answer. Rendered inline in the transcript with cursor-positioned <CR>, not
