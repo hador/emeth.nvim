@@ -383,4 +383,49 @@ h.describe("acp integration: cancel a subagent", function()
   end)
 end)
 
+-- A subagent can spawn its own subagent. The grandchild is announced by a
+-- subagent_update that arrives on the CHILD's session, so that announcement has
+-- to be dispatched from a subagent session too — otherwise the grandchild is
+-- never registered and its prose and tool calls leak to the main transcript.
+h.describe("acp integration: nested subagents", function()
+  local GRANDCHILD = "grandchild-1"
+  local CHILD_AGENT = "toolu_child_agent" -- the child's Agent call that spawns the grandchild
+
+  local function setup_nested(session)
+    spawn(session) -- parent Agent call on MAIN + CHILD announced
+    emit(session, child_call(CHILD_AGENT, "Delegate deeper", "Agent"), CHILD) -- child's own Agent call
+    -- The child announces its grandchild, on the CHILD session.
+    emit(session, {
+      sessionUpdate = "subagent_update",
+      sessionId = GRANDCHILD,
+      capabilities = { cancel = vim.empty_dict() },
+      state = { state = "running" },
+    }, CHILD)
+  end
+
+  h.it("drops a grandchild's prose instead of leaking it to the main transcript", function()
+    local session, view = make_setup()
+    setup_nested(session)
+    local before = #view.messages
+    emit(session, chunk("agent_thought_chunk", "grandchild thinking"), GRANDCHILD)
+    emit(session, chunk("agent_message_chunk", "grandchild says hi"), GRANDCHILD)
+    h.eq(before, #view.messages, "nothing new rendered at the top level")
+  end)
+
+  h.it("nests a grandchild's tool call under the child's spawning call", function()
+    local session, view = make_setup()
+    setup_nested(session)
+    emit(session, child_call("gc-tool", "deep grep", "Bash", CHILD_AGENT), GRANDCHILD)
+    local gc
+    for _, m in ipairs(view.messages) do
+      if m.content[1] and m.content[1].id == "gc-tool" then
+        gc = m
+      end
+    end
+    h.is_true(gc ~= nil, "the grandchild tool call exists as a message")
+    h.eq(CHILD_AGENT, gc.metadata.parent_tool_call_id, "nested under the child's Agent call")
+    h.eq(false, gc.visible, "hidden under its collapsed parent, not shown at top level")
+  end)
+end)
+
 restore()

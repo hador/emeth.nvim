@@ -36,12 +36,16 @@ M.NON_STREAMING = {
 --- `sessionUpdate` types from a subagent's child session that still reach a
 --- handler. `tool_call`/`tool_call_update` render, nested under the call that
 --- spawned the subagent; `session_message` is captured (its launch prompt goes
---- on the parent card) but renders nothing. Everything else a child sends (its
---- prose as thought chunks, its plans) is dropped.
+--- on the parent card) but renders nothing; `subagent_update` is how a subagent
+--- announces a subagent of its OWN (nesting) — it must be dispatched from a
+--- child session or the grandchild is never registered and its traffic leaks to
+--- the main transcript. Everything else a child sends (its prose as thought
+--- chunks, its plans) is dropped.
 M.SUBAGENT_DISPATCHED = {
   tool_call = true,
   tool_call_update = true,
   session_message = true,
+  subagent_update = true,
 }
 
 ---@class acp_updates.Ctx
