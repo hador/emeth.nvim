@@ -39,6 +39,30 @@ function M.claude_transcript_path(cwd, session_id, home)
   return ("%s/.claude/projects/%s/%s.jsonl"):format(home, M.sanitize_cwd(cwd), session_id)
 end
 
+---On-disk size, in bytes, of the transcript backing a session -- or nil when
+---there is no cheap single-file answer. Only claude-code stores a per-session
+---file we can stat in one syscall; kiro's history lives in a shared sqlite db,
+---so it returns nil (the picker simply omits a size for those rows). The
+---subagent sidecar files under `<id>/subagents/` are deliberately not counted:
+---the main transcript dominates and this keeps the picker's per-row cost to a
+---single `fs_stat`. Note this is raw disk footprint -- most of a claude
+---transcript is api-request logging, not rendered conversation.
+---@param entry table  { provider, cwd, session_id }
+---@param home? string  defaults to the real home dir
+---@return integer|nil bytes
+function M.transcript_size(entry, home)
+  if entry.provider ~= "claude-code" then
+    return nil
+  end
+  local cwd = entry.cwd or ""
+  if cwd == "" then
+    return nil
+  end
+  home = home or vim.fn.expand("~")
+  local st = vim.uv.fs_stat(M.claude_transcript_path(cwd, entry.session_id, home))
+  return st and st.size or nil
+end
+
 ---Resolve `cleanupPeriodDays` from the settings cascade, later file winning,
 ---default 30. Order mirrors claude's own precedence for emeth's purposes:
 ---user (~/.claude) < project (<cwd>/.claude) < project-local.

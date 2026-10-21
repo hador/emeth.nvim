@@ -133,6 +133,19 @@ local BADGE = {
   gone = { text = "gone", mark = "✖", hl = "DiagnosticError" },
 }
 
+---Compact disk-footprint label: "812 B", "4.2 KB", "32.8 MB".
+---@param n integer
+---@return string
+local function fmt_size(n)
+  if n < 1024 then
+    return n .. " B"
+  end
+  if n < 1024 * 1024 then
+    return string.format("%.1f KB", n / 1024)
+  end
+  return string.format("%.1f MB", n / 1048576)
+end
+
 ---Build the picker rows: most recent first. Nothing is dropped; each row carries
 ---its validity verdict so the UI can badge (and later act on) dead entries.
 ---@param entries table[]  raw index entries
@@ -141,6 +154,7 @@ local BADGE = {
 ---@return table[] items
 function M.items(entries, now_iso, verdicts)
   verdicts = verdicts or {}
+  local Validity = require("emeth.validity")
 
   -- Resolve a fork's parent to a readable name for the lineage marker.
   local title_by_id = {}
@@ -166,7 +180,11 @@ function M.items(entries, now_iso, verdicts)
       fork = parent and clamp(parent, 30) or "fork"
     end
 
+    local size = Validity.transcript_size(e)
     local label = ("%s  ·  %s  ·  %s"):format(title, short, age)
+    if size then
+      label = label .. "  ·  " .. fmt_size(size)
+    end
     if fork then
       label = label .. "  ·  ⑂ " .. fork
     end
@@ -181,6 +199,7 @@ function M.items(entries, now_iso, verdicts)
       title = title,
       short = short,
       age = age,
+      size = size,
       fork = fork,
       label = label,
       -- the matcher filters on this; include dir so "project" narrows too.
@@ -218,6 +237,11 @@ function M.preview_text(item)
     "- **last used:** " .. M.ago(e.updated_at or e.created_at) .. " ago",
     "- **session id:** `" .. e.session_id .. "`",
   }
+  if item.size then
+    lines[#lines + 1] = "- **disk size:** "
+      .. fmt_size(item.size)
+      .. " _(transcript on disk; mostly api-request logging, not rendered conversation)_"
+  end
   if item.fork then
     lines[#lines + 1] = "- **forked from:** " .. item.fork
   end
@@ -314,6 +338,9 @@ local function pick_snacks(state, on_pick)
       ret[#ret + 1] = { align(it.short, DIR_MAX), "SnacksPickerDir" }
       ret[#ret + 1] = { "  " }
       ret[#ret + 1] = { align(it.age, 5), "SnacksPickerTime" }
+      if it.size then
+        ret[#ret + 1] = { "  " .. align(fmt_size(it.size), 9), "Comment" }
+      end
       if it.fork then
         ret[#ret + 1] = { "  ⑂ " .. it.fork, "SnacksPickerSpecial" }
       end
