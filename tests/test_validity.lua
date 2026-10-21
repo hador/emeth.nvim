@@ -198,3 +198,26 @@ h.describe("validity.check — fallback providers", function()
     h.eq("gone", V.check({ session_id = "x", provider = "goose", cwd = "/no/such/dir/here" }, env({})))
   end)
 end)
+
+h.describe("validity.transcript_size", function()
+  -- Hermetic: a real but throwaway home dir holding one claude transcript.
+  local home = vim.fn.tempname()
+  local proj = home .. "/.claude/projects/-tmp-proj"
+  vim.fn.mkdir(proj, "p")
+  vim.fn.writefile({ "0123456789" }, proj .. "/abc.jsonl") -- 10 bytes + newline
+
+  h.it("returns the transcript's byte size for claude-code", function()
+    h.eq(11, V.transcript_size({ provider = "claude-code", cwd = "/tmp/proj", session_id = "abc" }, home))
+  end)
+  h.it("is nil when the transcript file is absent", function()
+    h.eq(nil, V.transcript_size({ provider = "claude-code", cwd = "/tmp/proj", session_id = "missing" }, home))
+  end)
+  h.it("is nil for non-claude providers (no cheap single-file answer)", function()
+    h.eq(nil, V.transcript_size({ provider = "kiro-cli", cwd = "/tmp/proj", session_id = "abc" }, home))
+  end)
+  h.it("is nil when the session has no working dir", function()
+    h.eq(nil, V.transcript_size({ provider = "claude-code", cwd = "", session_id = "abc" }, home))
+  end)
+
+  vim.fn.delete(home, "rf")
+end)
