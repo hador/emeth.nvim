@@ -41,7 +41,7 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _line_to_msg table<integer, chat_ui.Message>  buffer row (1-based) -> message
 ---@field _line_to_msg_max? integer  highest row populated in _line_to_msg
 ---@field _prompt_key_owners { owner: string, keys: table<string, fun(): boolean?> }[]
----@field _line_cache table<string, { lines: table[], text: string[] }>  uuid -> rendered
+---@field _line_cache table<string, integer>  uuid -> rendered line count
 ---@field _dirty_from? integer  index of first message needing re-render
 ---@field _render_pending? boolean
 local ChatView = {}
@@ -114,7 +114,7 @@ function ChatView:new(opts)
     _scroll = true,
     _context_files = {},
     _line_to_msg = {},
-    _line_cache = {}, -- uuid → { lines = Line[], text = string[] }
+    _line_cache = {}, -- uuid → rendered line count (prefix offset only)
     _dirty_from = nil, -- index of first dirty message
     _pastes = {}, -- id → { text, placeholder, mark } for folded large pastes
     _paste_ns = api.nvim_create_namespace("emeth_input_paste"),
@@ -605,7 +605,7 @@ function ChatView:_render()
     if msg and msg.visible ~= false then
       local cached = self._line_cache[msg.uuid]
       if cached then
-        prefix_count = prefix_count + #cached.text
+        prefix_count = prefix_count + cached
       end
     end
   end
@@ -632,7 +632,11 @@ function ChatView:_render()
       for _, line in ipairs(expanded) do
         texts[#texts + 1] = tostring(line)
       end
-      self._line_cache[msg.uuid] = { lines = expanded, text = texts }
+      -- Cache only the rendered line COUNT: the prefix loop above needs nothing
+      -- else (the tail always re-renders fresh via render_message), and holding
+      -- the Line[]/text[] for every message was the dominant resident-memory
+      -- cost in long sessions -- hundreds of arrays retained but never reread.
+      self._line_cache[msg.uuid] = #expanded
       local base = prefix_count + #tail_lines
       vim.list_extend(tail_lines, expanded)
       vim.list_extend(tail_text, texts)
