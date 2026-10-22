@@ -406,6 +406,20 @@ end
 local function render_tool_use(item, msg, messages, tool_results)
   local result = tool_results and tool_results[item.id] or find_tool_result(item.id, messages)
   local status_icon, status_hl = tool_status(item, result)
+  -- A subagent's spawning call outlives its own tool result: the Agent call can
+  -- read "completed" while the subagent is still working. Drive the icon from
+  -- the subagent's live state instead, so the card isn't a green tick mid-run.
+  local sub_state = msg.metadata.subagent_state
+  if sub_state then
+    local icons = get_icons()
+    if sub_state == "idle" then
+      status_icon, status_hl = icons.tool_succeeded, HL.TOOL_SUCCEEDED
+    elseif sub_state == "failed" then
+      status_icon, status_hl = icons.tool_failed, HL.TOOL_FAILED
+    else -- running, requires_action
+      status_icon, status_hl = icons.tool_generating, HL.TOOL_CALLING
+    end
+  end
   local tool_name, tool_param, hidden, withheld = tool_display(item, msg)
   local tc = msg.metadata.tool_call
   local lines = {}
@@ -593,8 +607,13 @@ end
 
 ---@param msg chat_ui.Message
 ---@return chat_ui.Line[]
-local function render_user_message(msg)
+local function render_user_message(msg, is_first)
   local lines = {}
+  -- A turn break: breathing room between the previous turn's output and this
+  -- turn's header. Skipped for the first message, which has nothing above it.
+  if not is_first then
+    lines[#lines + 1] = Line:new({ { "" } })
+  end
   -- Compact header: HH:MM · provider · N files
   local parts = { msg.timestamp:match("%d%d:%d%d") or msg.timestamp }
   -- A steered message cut into a turn that was already running, which is why it
@@ -650,6 +669,24 @@ local function render_user_message(msg)
   return lines
 end
 
+---A subagent spawn card: the Agent/Task tool call that stands in for a child
+---session. Any of these markers is enough -- they arrive at different times
+---(prompt and children stream in after the card is first created).
+---@param msg chat_ui.Message
+---@return boolean
+local function is_subagent_card(msg)
+  local m = msg.metadata
+  return (
+    m
+    and (
+      m.subagent_prompt ~= nil
+      or m.subagent_children ~= nil
+      or m.subagent_state ~= nil
+      or m.subagent_session_id ~= nil
+    )
+  ) or false
+end
+
 ---@param msg chat_ui.Message
 ---@param messages chat_ui.Message[]
 ---@param tool_results? table<string, chat_ui.ContentItem>
@@ -663,16 +700,28 @@ local function render_assistant_message(msg, messages, tool_results)
       vim.list_extend(lines, render_thinking(item))
       lines[#lines + 1] = Line:new({ { "" } })
     elseif item.type == "tool_use" then
+      local from = #lines + 1
       vim.list_extend(lines, render_tool_use(item, msg, messages, tool_results))
       lines[#lines + 1] = Line:new({ { "" } })
+      -- Tint the spawn card (and the blank under it) so it reads as one region
+      -- with the nested calls that follow -- each of those is its own child
+      -- message, tinted the same in the block below. The band carries blank
+      -- lines too, so the region stays continuous where a gutter would break.
+      if is_subagent_card(msg) then
+        for i = from, #lines do
+          lines[i].line_hl = HL.SUBAGENT_NEST
+        end
+      end
     end
     -- tool_result is rendered as part of tool_use, skip
   end
-  -- Indent a subagent's calls so an expanded parent reads as one nested block
-  -- rather than as more top-level tool rows.
+  -- A subagent's nested calls: indent so they read as part of the parent, and
+  -- carry the same band (every line, blanks included) so the whole group is one
+  -- continuous tinted region rather than rows that drift free of the card.
   if msg.metadata and msg.metadata.parent_tool_call_id then
     for _, line in ipairs(lines) do
       line:indent("  ")
+      line.line_hl = HL.SUBAGENT_NEST
     end
   end
   return lines
@@ -696,7 +745,7 @@ end
 ---@return chat_ui.Line[]
 function M.render_message(msg, messages, tool_results)
   if msg.role == "user" then
-    return render_user_message(msg)
+    return render_user_message(msg, messages and messages[1] == msg)
   elseif msg.role == "assistant" then
     return render_assistant_message(msg, messages, tool_results)
   elseif msg.role == "system" then

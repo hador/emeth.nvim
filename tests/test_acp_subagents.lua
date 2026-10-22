@@ -245,6 +245,43 @@ h.describe("acp integration: subagent sessions", function()
     h.eq(0, #view.messages, "nothing to attach to, nothing rendered")
   end)
 
+  -- A subagent that pauses and is resumed by the main agent's SendMessage gets
+  -- a second session_message whose messageId is the SendMessage call, not the
+  -- spawning Agent call. The card binding must not move onto that row, or the
+  -- subagent's closing state lands there and the real card stays stuck running.
+  h.it("keeps the state on the original card but folds resumed work under the SendMessage", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, launch_message(CHILD, PARENT_ID, "first task"), CHILD)
+    emit(session, child_call("t1", "a"), CHILD)
+    emit(session, state_update(CHILD, "idle"), MAIN)
+    -- Main agent resumes the subagent: a SendMessage tool call on the main
+    -- session, then a session_message on the child naming that call. The child's
+    -- resumed tool calls still carry the ORIGINAL Agent id (the agent parents
+    -- them there) -- emeth must re-parent them to the SendMessage.
+    emit(session, { sessionUpdate = "tool_call", toolCallId = "sendmsg-1", title = "SendMessage", status = "completed" }, MAIN)
+    emit(session, launch_message(CHILD, "sendmsg-1", "keep going"), CHILD)
+    emit(session, state_update(CHILD, "running"), MAIN)
+    emit(session, child_call("t2", "resumed work", "Bash", PARENT_ID), CHILD)
+    emit(session, state_update(CHILD, "idle"), MAIN)
+
+    local by_id = {}
+    for _, m in ipairs(view.messages) do
+      if m.content[1] then
+        by_id[m.content[1].id] = m
+      end
+    end
+    -- State stays put on the original Agent card.
+    h.eq("idle", view.messages[1].metadata.subagent_state, "closing state lands on the original card")
+    h.eq("first task", view.messages[1].metadata.subagent_prompt, "launch prompt is not overwritten")
+    h.is_nil(by_id["sendmsg-1"].metadata.subagent_state, "the SendMessage row is not the state card")
+    -- First-run work folds under the original card; resumed work folds under the
+    -- SendMessage, so the user follows it inline.
+    h.eq(PARENT_ID, by_id["t1"].metadata.parent_tool_call_id, "first-run call stays under the Agent call")
+    h.eq("sendmsg-1", by_id["t2"].metadata.parent_tool_call_id, "resumed call folds under the SendMessage")
+    h.eq(1, by_id["sendmsg-1"].metadata.subagent_children, "the SendMessage card owns the resumed call")
+  end)
+
   h.it("keeps the main session's text streaming into one message around a subagent", function()
     local session, view = make_setup()
     emit(session, chunk("agent_message_chunk", "before "), MAIN)
@@ -293,6 +330,18 @@ h.describe("acp integration: subagent sessions", function()
     h.eq("running", view.messages[1].metadata.subagent_state)
     emit(session, state_update(CHILD, "idle"), MAIN)
     h.eq("idle", view.messages[1].metadata.subagent_state)
+  end)
+
+  h.it("marks an idle-with-error subagent as failed", function()
+    local session, view = make_setup()
+    spawn(session)
+    emit(session, child_call("t1", "a"), CHILD)
+    emit(session, {
+      sessionUpdate = "subagent_update",
+      sessionId = CHILD,
+      state = { state = "idle", stopReason = "error", error = "boom" },
+    }, MAIN)
+    h.eq("failed", view.messages[1].metadata.subagent_state)
   end)
 
   h.it("flushes a state seen before the card was bound", function()
