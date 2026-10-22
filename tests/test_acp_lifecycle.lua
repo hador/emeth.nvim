@@ -294,6 +294,57 @@ h.describe("acp integration: buffer reload focus", function()
     vim.fn.delete(file_a)
     vim.fn.delete(file_b)
   end)
+
+  h.it("reloads a subagent's write in place but does not steer the source window", function()
+    local session = Session:new("test")
+    session._state = "ready"
+    session.session_id = "sess-1"
+    local view = make_view()
+    Acp.setup_integration(view, session)
+
+    -- A file the user is viewing, and a file the subagent will rewrite.
+    local function mkfile(tag)
+      local p = vim.fn.tempname() .. ".txt"
+      vim.fn.writefile({ tag .. " v1" }, p)
+      return p, (vim.uv.fs_realpath(p) or vim.fn.fnamemodify(p, ":p"))
+    end
+    local viewing, abs_viewing = mkfile("viewing")
+    local edited, abs_edited = mkfile("edited")
+
+    vim.cmd("only")
+    vim.cmd("edit " .. vim.fn.fnameescape(viewing))
+    local source_win = vim.api.nvim_get_current_win()
+    vim.cmd("vsplit")
+    local emeth_win = vim.api.nvim_get_current_win()
+    local emeth_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(emeth_buf, "emeth://test-chat")
+    vim.api.nvim_win_set_buf(emeth_win, emeth_buf)
+    -- Open the to-be-edited file in a hidden buffer, so there is something to
+    -- reload in place.
+    local edited_buf = vim.fn.bufadd(abs_edited)
+    vim.fn.bufload(edited_buf)
+
+    -- A subagent (its own child session) rewrites `edited` on disk.
+    session:_emit("update", { sessionUpdate = "subagent_update", sessionId = "child-1", state = { state = "running" } }, "sess-1")
+    vim.fn.writefile({ "edited v2 by subagent" }, edited)
+    local diff = { { type = "diff", path = edited } }
+    session:_emit("update", { sessionUpdate = "tool_call", toolCallId = "w1", status = "pending", content = diff }, "child-1")
+    session:_emit("update", { sessionUpdate = "tool_call_update", toolCallId = "w1", status = "completed", content = diff }, "child-1")
+
+    -- Reload in place: the hidden buffer picks up the new on-disk content.
+    local reloaded = vim.wait(5000, function()
+      return vim.api.nvim_buf_get_lines(edited_buf, 0, 1, false)[1] == "edited v2 by subagent"
+    end, 20)
+    h.is_true(reloaded, "a subagent's write reloads an already-open buffer")
+    -- No follow: the source window stays on what the user was viewing.
+    h.eq(abs_viewing, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)), "the subagent must not steer the source window")
+
+    vim.cmd("only")
+    pcall(vim.api.nvim_buf_delete, emeth_buf, { force = true })
+    pcall(vim.api.nvim_buf_delete, edited_buf, { force = true })
+    vim.fn.delete(viewing)
+    vim.fn.delete(edited)
+  end)
 end)
 
 h.describe("acp integration: session config options (/model etc.)", function()

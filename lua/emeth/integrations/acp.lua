@@ -33,6 +33,7 @@ function M.setup_integration(view, session)
   -- currently appending to, and the tool-call-id -> message-uuid map.
   ---@class acp.StreamState
   ---@field assistant_uuid string|nil  message the current agent text streams into
+  ---@field assistant_message_id string|nil  agent messageId streaming into assistant_uuid (a change = new message)
   ---@field thinking_uuid string|nil   message the current thought streams into
   ---@field plan_uuid string|nil       the live plan block, while it's still last
   ---@field tool_map table<string, string>  toolCallId -> message uuid, across the session and its subagents
@@ -61,7 +62,7 @@ function M.setup_integration(view, session)
   ---@field prompt_uuid? string
 
   local roots = Roots.attach(view)
-  local pending_reloads = {} ---@type table<string, number|true>  -- path → first_changed or true
+  local pending_reloads = {} ---@type table<string, { line?: integer, follow: boolean }>  -- path → reload record
   -- Abs path emeth last navigated the source window to on a file write. Lets
   -- `flush_reloads` tell "the pane is still on the file I put there" from "the
   -- user has taken the wheel to read something else" and stop yanking it away.
@@ -132,7 +133,7 @@ function M.setup_integration(view, session)
   local function flush_reloads()
     local target_win = util.find_source_win()
     local first_path = nil
-    for p, first_changed in pairs(pending_reloads) do
+    for p, rec in pairs(pending_reloads) do
       local abs = vim.fn.fnamemodify(p, ":p")
       local buf = vim.fn.bufnr(abs)
       if buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) then
@@ -141,8 +142,11 @@ function M.setup_integration(view, session)
           vim.cmd("checktime")
         end)
       end
-      if not first_path then
-        first_path = { abs = abs, line = type(first_changed) == "number" and first_changed or nil }
+      -- Every write reloads an open buffer in place; only a follow-eligible one
+      -- can steer the source window. A subagent's writes reload but never
+      -- follow, so a background agent can't yank the pane around.
+      if not first_path and rec.follow then
+        first_path = { abs = abs, line = rec.line }
       end
     end
     if first_path and target_win then
@@ -176,8 +180,16 @@ function M.setup_integration(view, session)
   end
 
   local reload_debounce = util.debounce(1000, flush_reloads)
-  local function schedule_reload(path, first_changed)
-    pending_reloads[path] = first_changed or pending_reloads[path] or true
+  ---@param path string
+  ---@param first_changed? integer  the line to center when following
+  ---@param no_follow? boolean  reload an open buffer but never steer the pane (subagent writes)
+  local function schedule_reload(path, first_changed, no_follow)
+    local rec = pending_reloads[path] or { follow = false }
+    rec.line = first_changed or rec.line
+    -- Once any write to this path is follow-eligible it stays so: a subagent and
+    -- the main agent may both touch it, and the main agent's write should follow.
+    rec.follow = rec.follow or not no_follow
+    pending_reloads[path] = rec
     reload_debounce.call()
   end
 

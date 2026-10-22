@@ -52,7 +52,7 @@ M.SUBAGENT_DISPATCHED = {
 ---@field view chat_ui.ChatView
 ---@field session acp.Session
 ---@field schedule_tool_render fun()  arm the streamed-content render throttle
----@field schedule_reload fun(path: string, first_changed?: integer)
+---@field schedule_reload fun(path: string, first_changed?: integer, no_follow?: boolean)
 ---@field render_mode fun(mode_id: string)
 ---@field reconcile_config_options fun(config_options: table)
 
@@ -157,13 +157,25 @@ function M.handlers(ctx)
     if not (update.content and update.content.type == "text") then
       return
     end
+    local message_id = update.messageId
     if stream.assistant_uuid then
+      -- A turn can hold several assistant messages, each with its own id (claude
+      -- emits trailing/followup messages after a tool call or at turn end). The
+      -- chunks of one message share an id and stream into one block; a change of
+      -- id is a new message, separated with a blank line so the two don't run
+      -- together on one line.
+      local sep = (message_id and stream.assistant_message_id and message_id ~= stream.assistant_message_id) and "\n\n"
+        or ""
       view:update_message(stream.assistant_uuid, function(msg)
-        msg:append_text(update.content.text)
+        msg:append_text(sep .. update.content.text)
       end)
+      if message_id then
+        stream.assistant_message_id = message_id
+      end
     else
       local msg = Message:new("assistant", update.content.text)
       stream.assistant_uuid = msg.uuid
+      stream.assistant_message_id = message_id
       stream.thinking_uuid = nil
       view:add_message(msg)
     end
@@ -198,16 +210,22 @@ function M.handlers(ctx)
     -- subagent easily runs dozens of calls, and left at top level they bury the
     -- main conversation. `parent_tool_call_id` is set by a provider transform,
     -- so this stays namespace-agnostic.
+    local record = session_id and stream.subagents[session_id]
+    -- The agent parents every child call at the original Agent call, even after
+    -- a SendMessage resume. Re-parent to the call that triggered THIS run (the
+    -- Agent call for the launch, the SendMessage call for a resume, tracked on
+    -- the record), so resumed work folds under the SendMessage inline instead of
+    -- back up at the original card.
+    if record and record.nest_tool_id then
+      update.parent_tool_call_id = record.nest_tool_id
+    end
     local parent_uuid = update.parent_tool_call_id and stream.tool_map[update.parent_tool_call_id]
     local parent = parent_uuid and view:get_message(parent_uuid) or nil
     -- Bind the child session to its parent card. `session_message` usually does
     -- this first (and carries the prompt), but an Agent call with no prompt
     -- sends none, so the first child call is the backstop.
-    if parent_uuid and session_id then
-      local record = stream.subagents[session_id]
-      if record and not record.parent_uuid then
-        bind_parent(record, parent_uuid)
-      end
+    if parent_uuid and record and not record.parent_uuid then
+      bind_parent(record, parent_uuid)
     end
     -- A top-level call ends the text/thought blocks it lands after. A nested one
     -- is placed under its parent, not at the tail, so the main stream carries on.
@@ -273,7 +291,7 @@ function M.handlers(ctx)
     end
   end
 
-  function handlers.tool_call_update(update, stream)
+  function handlers.tool_call_update(update, stream, session_id)
     local uuid = stream.tool_map[update.toolCallId]
     if uuid then
       -- A content/rawOutput-only chunk (the common case while a tool streams)
@@ -337,9 +355,12 @@ function M.handlers(ctx)
       tc = tc and tc.tool_call
       if tc and tc.content then
         local first_line = tc.locations and tc.locations[1] and tc.locations[1].line
+        -- A subagent's write reloads an open buffer but must not steer the
+        -- source window: a background agent shouldn't yank the user's editor.
+        local no_follow = session_id ~= nil and stream.subagents[session_id] ~= nil
         for _, c in ipairs(tc.content) do
           if c.type == "diff" and c.path then
-            ctx.schedule_reload(c.path, first_line)
+            ctx.schedule_reload(c.path, first_line, no_follow)
           end
         end
       end
@@ -465,12 +486,17 @@ function M.handlers(ctx)
       end
     end
     -- Omitted state leaves the current one; only a concrete object replaces it.
-    -- Only `requires_action` changes the card's marker (the leading status icon
-    -- already tracks running/done/failed), but every state is stored so the
-    -- latest always wins.
+    -- Normalize to a display state: a failure is `idle` with an `error` stop
+    -- reason, not a state of its own, but the card's icon marks it as failed
+    -- rather than done. `requires_action` drives the folded-tool marker; every
+    -- state drives the leading status icon, so the latest always wins.
     local st = type(update.state) == "table" and update.state
     if st and type(st.state) == "string" then
-      record.state = st.state
+      if st.state == "idle" and (st.stopReason == "error" or st.error ~= nil) then
+        record.state = "failed"
+      else
+        record.state = st.state
+      end
       -- The first `running` lands before the card is bound; the bind flushes it.
       set_card_state(record)
     end
@@ -485,12 +511,24 @@ function M.handlers(ctx)
     if not record then
       return
     end
-    local parent_uuid = type(update.messageId) == "string" and stream.tool_map[update.messageId]
-    if parent_uuid then
-      bind_parent(record, parent_uuid)
+    local trigger_id = type(update.messageId) == "string" and update.messageId or nil
+    local trigger_uuid = trigger_id and stream.tool_map[trigger_id]
+    if not trigger_uuid then
+      return
+    end
+    -- Each run folds under the call that triggered it: the spawning Agent call
+    -- for the launch, the SendMessage call for a resume. handlers.tool_call
+    -- re-parents the run's child calls to this, so a resumed subagent continues
+    -- inline under the SendMessage instead of back up at the original card.
+    record.nest_tool_id = trigger_id
+    -- The state-glyph binding is permanent -- the launch owns it -- so the
+    -- subagent's status stays put even as its work moves down into a resume
+    -- fold, and a resume's later `idle` can't strand the original card.
+    if not record.parent_uuid then
+      bind_parent(record, trigger_uuid)
       local prompt = text_of(update.content)
       if prompt ~= "" then
-        view:update_message(parent_uuid, function(m)
+        view:update_message(trigger_uuid, function(m)
           m.metadata.subagent_prompt = prompt
         end)
       end

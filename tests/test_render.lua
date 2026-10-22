@@ -36,6 +36,17 @@ h.describe("Render", function()
     h.is_true(all:find("hello world") ~= nil, "expected 'hello world' in output")
   end)
 
+  h.it("separates turns with a blank line above the header, except the first", function()
+    local first = Message:new("user", "one")
+    local later = Message:new("user", "two")
+    local messages = { first, later }
+    -- The first message starts the transcript with the rule, no leading gap.
+    h.is_true(tostring(Render.render_message(first, messages)[1]):find("─") ~= nil, "first turn opens with the rule")
+    -- A later turn leads with a blank line, so it is not cramped against the
+    -- previous turn's output.
+    h.eq("", tostring(Render.render_message(later, messages)[1]), "later turns open with a blank line")
+  end)
+
   h.it("renders assistant text message", function()
     local msg = Message:new("assistant", "response text")
     local lines = Render.render_message(msg, {})
@@ -686,6 +697,32 @@ h.describe("render: subagent nesting", function()
     h.eq("  " .. top, nested, "nested rows are the same row, indented")
   end)
 
+  local HL = require("emeth.ui.highlights")
+
+  h.it("tints a nested call's whole block with the subagent band", function()
+    local child = tool_msg({
+      id = "c1",
+      metadata = { tool_call = { title = "grep -r foo" }, parent_tool_call_id = "toolu_parent" },
+    })
+    for _, line in ipairs(Render.render_message(child, { child })) do
+      h.eq(HL.SUBAGENT_NEST, line.line_hl, "every nested line carries the band, blanks included")
+    end
+  end)
+
+  h.it("tints the spawn card so it reads as one region with its children", function()
+    local card = tool_msg({
+      name = "Investigate",
+      metadata = { tool_call = { title = "Investigate" }, subagent_children = 2 },
+    })
+    local lines = Render.render_message(card, { card })
+    h.eq(HL.SUBAGENT_NEST, lines[1].line_hl, "the card row is banded")
+  end)
+
+  h.it("does not band an ordinary tool call", function()
+    local plain = tool_msg({ id = "c1", metadata = { tool_call = { title = "grep -r foo" } } })
+    h.eq(nil, Render.render_message(plain, { plain })[1].line_hl, "non-subagent rows stay unbanded")
+  end)
+
   h.it("marks a subagent waiting on the user, and nothing else", function()
     local function marker(state)
       local msg = tool_msg({
@@ -699,6 +736,24 @@ h.describe("render: subagent nesting", function()
     h.is_true(marker("running"):find("⊳", 1, true) ~= nil, "running keeps the quiet marker")
     h.is_true(marker("idle"):find("⊳", 1, true) ~= nil, "done keeps the quiet marker")
     h.is_true(marker("failed"):find("◆", 1, true) == nil, "failure rides the leading ✗, not the marker")
+  end)
+
+  h.it("drives the leading icon from the subagent state, not the Agent call", function()
+    local icons = require("emeth").config.icons
+    local function icon(state)
+      -- status "completed" on the Agent call would otherwise force a success tick.
+      local msg = tool_msg({
+        name = "Investigate",
+        status = "completed",
+        metadata = { tool_call = { title = "Investigate" }, subagent_children = 2, subagent_state = state },
+      })
+      return tostring(Render.render_message(msg, { msg })[1])
+    end
+    h.is_true(icon("running"):find(icons.tool_generating, 1, true) ~= nil, "running shows the in-progress icon, not a tick")
+    h.is_true(icon("running"):find(icons.tool_succeeded, 1, true) == nil)
+    h.is_true(icon("requires_action"):find(icons.tool_generating, 1, true) ~= nil)
+    h.is_true(icon("failed"):find(icons.tool_failed, 1, true) ~= nil)
+    h.is_true(icon("idle"):find(icons.tool_succeeded, 1, true) ~= nil, "done shows the success tick")
   end)
 
   h.it("shows the subagent's launch prompt in the expanded body", function()

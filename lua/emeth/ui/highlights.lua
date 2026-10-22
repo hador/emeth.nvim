@@ -17,6 +17,7 @@ M.PROMPT_SIGN = "EmethPromptSign"
 M.WIN_SEPARATOR = "EmethWinSeparator"
 M.HORIZ_SEP = "EmethHorizSep"
 M.TOOL_PARAM = "EmethToolParam"
+M.SUBAGENT_NEST = "EmethSubagentNest"
 
 function M.setup()
   local set = vim.api.nvim_set_hl
@@ -55,6 +56,12 @@ function M.setup()
   set(0, M.DIFF_REMOVED, { default = true, bg = blend(nf_bg, del_color, 0.12) })
   local nf_fg = nf.fg and string.format("#%06x", nf.fg) or "#abb2bf"
   set(0, M.DIFF_CONTEXT, { default = true, fg = nf_fg, bg = nf.bg and nf_bg or nil })
+
+  -- A neutral wash behind a subagent's whole block (spawn card + its nested
+  -- calls) so the group reads as one region without box-drawing. Toward the
+  -- border colour, stronger than the diff washes since it has no fg cue of its
+  -- own and must stay legible across the blank lines it also covers.
+  set(0, M.SUBAGENT_NEST, { default = true, bg = blend(nf_bg, sep_fg, 0.22) })
 
   local info_fg = vim.api.nvim_get_hl(0, { name = "DiagnosticInfo", link = false }).fg
   local prompt_fg = info_fg and string.format("#%06x", info_fg) or "#61afef"
