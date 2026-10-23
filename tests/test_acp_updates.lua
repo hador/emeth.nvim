@@ -376,10 +376,30 @@ h.describe("acp integration: available_commands_update", function()
 end)
 
 h.describe("acp integration: session_info_update", function()
+  local Sessions = require("emeth.sessions")
+
   h.it("stores title on view._session_title", function()
     local session, view = make_setup()
     session:_emit("update", { sessionUpdate = "session_info_update", title = "Renamed" })
     h.eq("Renamed", view._session_title)
+  end)
+
+  h.it("persists a non-fork session's title to the index", function()
+    local session = make_setup()
+    session.session_id = "sinfo-plain"
+    Sessions.save({ session_id = "sinfo-plain", provider = "claude-code", cwd = "/tmp" })
+    session:_emit("update", { sessionUpdate = "session_info_update", title = "My own title" })
+    h.eq("My own title", (Sessions.get("sinfo-plain") or {}).title)
+  end)
+
+  -- A fork shares its parent's history, so the derived title is the parent's.
+  -- Persisting it would duplicate the parent in the picker (title + ⑂ parent).
+  h.it("does not persist a fork's inherited title", function()
+    local session = make_setup()
+    session.session_id = "sinfo-fork"
+    Sessions.save({ session_id = "sinfo-fork", provider = "claude-code", cwd = "/tmp", forked_from = "parent-x" })
+    session:_emit("update", { sessionUpdate = "session_info_update", title = "Parent's title" })
+    h.is_nil((Sessions.get("sinfo-fork") or {}).title, "the fork keeps no inherited title")
   end)
 end)
 

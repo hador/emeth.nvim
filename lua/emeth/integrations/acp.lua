@@ -480,7 +480,10 @@ function M.setup_integration(view, session)
     Sessions.save({
       session_id = id,
       provider = session.provider_name,
-      cwd = vim.fn.getcwd(),
+      -- The session's bound cwd, not nvim's current one -- they differ once the
+      -- user has :cd'd away, and the index must point at the directory the
+      -- transcript actually lives in (same source the fork/load requests use).
+      cwd = session.cwd or vim.fn.getcwd(),
       additional_directories = roots:save_field(),
     })
     local entry = Sessions.get(id)
@@ -1491,7 +1494,9 @@ function M.setup_integration(view, session)
               Sessions.save({
                 session_id = session.session_id,
                 provider = session.provider_name,
-                cwd = vim.fn.getcwd(),
+                -- The fork's cwd is its parent's -- the directory the transcript
+                -- lives in -- not wherever nvim happens to be now.
+                cwd = session.cwd or vim.fn.getcwd(),
                 additional_directories = roots:save_field(),
                 forked_from = parent,
               })
@@ -1527,7 +1532,8 @@ function M.setup_integration(view, session)
           Sessions.save({
             session_id = fork_id,
             provider = session.provider_name,
-            cwd = vim.fn.getcwd(),
+            -- The rewound fork's cwd is its parent's, not nvim's current one.
+            cwd = session.cwd or vim.fn.getcwd(),
             additional_directories = roots:save_field(),
             forked_from = parent,
           })

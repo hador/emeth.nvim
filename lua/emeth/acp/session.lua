@@ -228,6 +228,10 @@ function Session:new(provider_name)
   session = setmetatable({
     client = ACPClient:new(client_config),
     session_id = nil,
+    -- The cwd the session is bound to: the agent resolves the transcript under
+    -- this directory, so fork and load must reuse it, not whatever nvim's cwd is
+    -- now (the user may have :cd'd away since the session started).
+    cwd = nil,
     provider_name = provider_name,
     _state = "disconnected",
     _listeners = {},
@@ -355,13 +359,17 @@ end
 ---Shared tail of every lifecycle action: record the session, extract info,
 ---and flip to ready — or error out.
 ---@private
-function Session:_finish(session_id, result, err, cb)
+---@param cwd? string  the cwd the session is now bound to (create/load/fork)
+function Session:_finish(session_id, result, err, cb, cwd)
   if err then
     self._state = "error"
     cb(err)
     return
   end
   self.session_id = session_id
+  if cwd then
+    self.cwd = cwd
+  end
   self:_extract_session_info(result)
   self._state = "ready"
   cb(nil)
@@ -397,8 +405,9 @@ end
 function Session:new_session(opts, cb)
   opts, cb = norm_args(opts, cb)
   self._state = "connecting"
-  self.client:create_session(vim.fn.getcwd(), {}, req_opts(opts), function(session_id, err, result)
-    self:_finish(session_id, result, err, cb)
+  local cwd = vim.fn.getcwd()
+  self.client:create_session(cwd, {}, req_opts(opts), function(session_id, err, result)
+    self:_finish(session_id, result, err, cb, cwd)
   end)
 end
 
@@ -476,8 +485,11 @@ function Session:fork(opts, cb)
     return
   end
   self._state = "connecting"
-  self.client:fork_session(self.session_id, vim.fn.getcwd(), {}, req_opts(opts), function(new_id, err, result)
-    self:_finish(new_id, result, err, cb)
+  -- Fork under the session's own cwd, not nvim's current one: the agent finds
+  -- the transcript to fork only in the directory the session was created in.
+  local cwd = self.cwd or vim.fn.getcwd()
+  self.client:fork_session(self.session_id, cwd, {}, req_opts(opts), function(new_id, err, result)
+    self:_finish(new_id, result, err, cb, cwd)
   end)
 end
 
@@ -518,8 +530,9 @@ end
 function Session:load(session_id, opts, cb)
   opts, cb = norm_args(opts, cb)
   self._state = "connecting"
-  self.client:load_session(session_id, vim.fn.getcwd(), {}, req_opts(opts), function(result, err)
-    self:_finish(session_id, result, err, cb)
+  local cwd = vim.fn.getcwd()
+  self.client:load_session(session_id, cwd, {}, req_opts(opts), function(result, err)
+    self:_finish(session_id, result, err, cb, cwd)
   end)
 end
 
