@@ -422,7 +422,15 @@ function M.handlers(ctx)
     if update.title then
       view._session_title = update.title
       if session.session_id then
-        Sessions.update_title(session.session_id, update.title)
+        -- A fork shares its parent's history, so the title the agent derives
+        -- (the conversation's first message) is the parent's. Persisting it
+        -- makes the fork duplicate the parent in the picker ("title … ⑂ title").
+        -- Leave a fork's own title to its first new prompt (record_session) or a
+        -- rename; the ⑂ column already names the parent.
+        local entry = Sessions.get(session.session_id)
+        if not (entry and entry.forked_from) then
+          Sessions.update_title(session.session_id, update.title)
+        end
       end
     end
   end

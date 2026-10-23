@@ -404,3 +404,29 @@ h.describe("Session _extract_session_info provider delegation", function()
     h.eq("x", s.extensions.model_id)
   end)
 end)
+
+h.describe("Session cwd binding", function()
+  h.it("remembers the cwd a session was created in", function()
+    local s = Session:new("test")
+    s.client.create_session = function(_, _cwd, _mcp, _opts, cb)
+      cb("new-1", nil, {})
+    end
+    s:new_session(function() end)
+    h.eq(vim.fn.getcwd(), s.cwd, "the session binds to the cwd it was created in")
+  end)
+
+  h.it("forks under the session's bound cwd, not nvim's current one", function()
+    local s = Session:new("test")
+    s.session_id = "s1"
+    s._state = "ready"
+    s.cwd = "/orig/project" -- bound at create; nvim may have :cd'd away since
+    local captured
+    s.client.fork_session = function(_, _id, cwd, _mcp, _opts, cb)
+      captured = cwd
+      cb("fork-1", nil, {})
+    end
+    s:fork(function() end)
+    h.eq("/orig/project", captured, "fork is sent with the session's cwd")
+    h.eq("/orig/project", s.cwd, "the fork stays bound to that cwd")
+  end)
+end)
