@@ -172,16 +172,9 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   delete (agent and emeth; refused for the active session), `S` prune every
   "gone" row. Without snacks it falls back to |vim.ui.select|, resume only.
 
-:EmethResume [id]                                              *:EmethResume*
-  Resume a session by id, in the provider that recorded it. Without an id,
-  same as |:EmethHistory|. Exists only while a session is up.
-
-:EmethCancel                                                  *:EmethCancel*
-  Cancel the current AI request. While the sidebar is still "connecting"
-  (e.g. the agent's launcher is running updates before the handshake
-  completes), this instead aborts the connection so you can retry with
-  |:Emeth|. Also bound to <C-c> inside the chat windows. Exists only while a
-  session is up.
+To cancel the current request press <C-c> in either chat window; while the
+sidebar is still "connecting" it aborts the connection instead, so you can
+retry with |:Emeth|. |emeth.cancel()| does the same from Lua.
 
 SLASH COMMANDS                                          *emeth-slash-commands*
 
@@ -224,7 +217,7 @@ require("emeth").resume({id}, {provider?})                   *emeth.resume()*
 
 require("emeth").cancel()                                    *emeth.cancel()*
   Cancel the current AI request, or abort an in-progress connection if the
-  session is still connecting. See |:EmethCancel|.
+  session is still connecting. Bound to <C-c> in the chat windows.
 
 require("emeth").send_selection()                      *emeth.send_selection()*
   Send the current visual selection to the chat as a fenced code block.
