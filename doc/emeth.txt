@@ -182,9 +182,7 @@ Type `/` in the input buffer to pick one:
 
   `/new`             Start a new session
   `/fork`            Fork the current session (needs agent support)
-  `/clear`           Clear the chat messages
   `/prompts`         Insert a prompt from |emeth-prompt_dirs|
-  `/help`            List available commands
   `/model`, `/mode`, ...  One per config option the agent exposes; opens a
                    picker (or flips a boolean option)
   `/mcp-auth <server>`  kiro-cli: re-authenticate an MCP server

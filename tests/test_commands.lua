@@ -117,20 +117,19 @@ h.describe("Commands", function()
 
   h.it("immediate is preserved on registered command", function()
     reset()
-    Commands.register("clear", {
+    Commands.register("x", {
       desc = "c",
       source = "builtin",
       immediate = true,
       execute = function() end,
     })
-    h.is_true(Commands.get("clear").immediate)
+    h.is_true(Commands.get("x").immediate)
   end)
 
-  h.it("register_builtins marks clear/new/help as immediate", function()
+  h.it("register_builtins marks new/fork as immediate", function()
     reset()
     Commands.register_builtins()
-    h.is_true(Commands.get("clear").immediate)
     h.is_true(Commands.get("new").immediate)
-    h.is_true(Commands.get("help").immediate)
+    h.is_true(Commands.get("fork").immediate)
   end)
 end)

@@ -216,9 +216,7 @@ Type `/` in the input buffer to pick one.
 |---------|--------|
 | `/new` | Start a new session |
 | `/fork` | Fork the current session into a new one (needs agent support) |
-| `/clear` | Clear the chat messages |
 | `/prompts` | Insert a prompt from `prompt_dirs` |
-| `/help` | List available commands |
 | `/model`, `/mode`, `/effort`, … | One per config option the agent exposes (ACP `configOptions`); opens a picker, or flips a boolean option |
 | `/mcp-auth <server>` | kiro-cli only: re-authenticate an MCP server |
 

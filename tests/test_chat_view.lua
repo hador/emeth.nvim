@@ -29,9 +29,9 @@ h.describe("ChatView:prefill_command", function()
 
   h.it("treats empty-string hint as no hint", function()
     local view = make_view()
-    view:prefill_command("clear", "")
+    view:prefill_command("new", "")
     local lines = vim.api.nvim_buf_get_lines(view.input_buf, 0, -1, false)
-    h.eq({ "/clear " }, lines)
+    h.eq({ "/new " }, lines)
   end)
 
   h.it("handles long command names", function()
