@@ -150,3 +150,24 @@ h.describe("Sidebar folding", function()
     vim.o.foldenable = saved_fen
   end)
 end)
+
+-- The chat buffers are reused by name across close/reopen, so anything a view
+-- or sidebar attaches to them must not stack up with each cycle.
+h.describe("close/reopen does not stack buffer autocmds", function()
+  local function count(buf, event)
+    return #vim.api.nvim_get_autocmds({ buffer = buf, event = event })
+  end
+
+  h.it("keeps one copy of each view and sidebar autocmd", function()
+    local sb, view = make_open_sidebar()
+    sb:close()
+    sb, view = make_open_sidebar()
+    sb:close()
+    sb, view = make_open_sidebar()
+    h.eq(1, count(view.result_buf, "CursorMoved"), "contextual-help hint")
+    h.eq(1, count(view.input_buf, "InsertCharPre"), "slash-command intercept")
+    -- TextChangedI: the view's mention trigger plus the sidebar's prompt sign.
+    h.eq(2, count(view.input_buf, "TextChangedI"))
+    sb:close()
+  end)
+end)

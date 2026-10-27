@@ -30,6 +30,7 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field on_remove_file fun(index: number)|nil
 ---@field integration table|nil
 ---@field _config chat_ui.Config
+---@field _augroup integer  owns the view's buffer-local autocmds; cleared per view
 ---@field _ns_id number
 ---@field _ns_input number
 ---@field _scroll boolean
@@ -107,6 +108,11 @@ function ChatView:new(opts)
   local view = setmetatable({
     result_buf = result_buf,
     input_buf = input_buf,
+    -- The buffers above are found by name and outlive any one view (a new
+    -- ChatView is built after every :EmethClose), so the view's buffer-local
+    -- autocmds live in a group each new view clears. Otherwise every reopen
+    -- stacks another copy, the old ones still closed over a dead view.
+    _augroup = api.nvim_create_augroup("emeth_chat_view", { clear = true }),
     messages = {},
     on_submit = opts.on_submit,
     on_remove_file = nil,
@@ -326,6 +332,7 @@ function ChatView:new(opts)
     end
   end
   api.nvim_create_autocmd("CursorMoved", {
+    group = view._augroup,
     buffer = result_buf,
     callback = function()
       assert(refresh_hint)(false)
@@ -941,6 +948,7 @@ function ChatView:_setup_input()
   -- Intercept "/" before it enters the buffer so completion plugins
   -- never see it and don't trigger path completion over the command picker.
   api.nvim_create_autocmd("InsertCharPre", {
+    group = self._augroup,
     buffer = buf,
     callback = function()
       if vim.v.char ~= "/" then
@@ -991,6 +999,7 @@ function ChatView:_setup_input()
   })
 
   api.nvim_create_autocmd("TextChangedI", {
+    group = self._augroup,
     buffer = buf,
     callback = function()
       local row = api.nvim_win_get_cursor(0)[1]
