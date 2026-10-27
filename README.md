@@ -131,7 +131,7 @@ require("emeth").setup({
     tool_succeeded = "✓",
     tool_failed = "✗",
   },
-  default_provider = nil,       -- required if multiple providers configured
+  default_provider = nil,       -- nil: :Emeth asks which provider to use
   resume_last_session = false,  -- auto-resume last session on open
   auto_add_current_file = true, -- add current buffer as context on open
   prompt_dirs = {},             -- e.g. { "~/.config/prompts", ".prompts" }

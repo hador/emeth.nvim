@@ -135,21 +135,37 @@ function M.setup(opts)
   require("emeth.commands").register_builtins()
 end
 
----Resolve which provider to use: explicit arg > config default > error.
+---Resolve which provider to use, then call `cb` with it: explicit arg >
+---`default_provider` > ask. The built-in providers are always configured, so
+---without a default there is never an obvious single choice; the picker lists
+---every configured provider, marking the ones whose command isn't on PATH.
+---Cancelling the picker does nothing.
 ---@param provider? string
----@return string|nil
-local function resolve_provider(provider)
+---@param cb fun(provider: string)
+local function with_provider(provider, cb)
+  provider = provider or M.config.default_provider
   if provider then
-    return provider
+    cb(provider)
+    return
   end
-  if M.config.default_provider then
-    return M.config.default_provider
-  end
-  vim.notify(
-    "[emeth] Multiple providers configured. Specify one with :Emeth <provider> or set default_provider.",
-    vim.log.levels.WARN
-  )
-  return nil
+  local providers = require("emeth.acp").config.providers
+  local names = vim.tbl_keys(providers)
+  table.sort(names)
+  vim.ui.select(names, {
+    prompt = "Emeth provider (set default_provider to skip this):",
+    format_item = function(name)
+      local command = providers[name].command
+      local found = type(command) == "string" and vim.fn.executable(command) == 1
+      return found and name or (name .. "  (" .. tostring(command) .. " not found)")
+    end,
+  }, function(choice)
+    if choice then
+      -- After the picker has closed, so the sidebar opens on a settled layout.
+      vim.schedule(function()
+        cb(choice)
+      end)
+    end
+  end)
 end
 
 ---Ensure the sidebar is open with the given view.
@@ -255,10 +271,9 @@ function M.open(provider, opts)
     return
   end
 
-  local resolved = resolve_provider(provider)
-  if resolved then
+  with_provider(provider, function(resolved)
     connect(resolved, opts)
-  end
+  end)
 end
 
 function M.close()
@@ -325,13 +340,10 @@ function M.resume(session_id, provider)
     end
   end
 
-  local resolved = resolve_provider(provider)
-  if not resolved then
-    return
-  end
-
-  local integration = start_integration(resolved)
-  integration.connect_and_load(session_id, forget_unloadable(session_id))
+  with_provider(provider, function(resolved)
+    local integration = start_integration(resolved)
+    integration.connect_and_load(session_id, forget_unloadable(session_id))
+  end)
 end
 
 ---Pick a session from any directory and resume it there.
