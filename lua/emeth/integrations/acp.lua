@@ -538,7 +538,6 @@ function M.setup_integration(view, session)
   ---@param text string
   local function restore_input(text)
     vim.api.nvim_buf_set_lines(view.input_buf, 0, -1, false, vim.split(text, "\n"))
-    view:set_context_files(view._context_files)
   end
 
   view.on_submit = function(text)

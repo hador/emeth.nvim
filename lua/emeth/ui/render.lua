@@ -593,13 +593,11 @@ local function render_user_message(msg, is_first)
   -- than behind K: a marker explaining an oddity has to be visible unprompted.
   -- `steer_state` is the richer tri-state for agents that queue (kiro): the steer
   -- is "queued" until the agent confirms injection ("steered"), or ends up "not
-  -- delivered" if the turn finished without picking it up. `steered` (boolean)
-  -- stays supported for the synchronous case.
+  -- delivered" if the turn finished without picking it up. Agents that inject
+  -- synchronously (claude) go straight to "steered".
   local STEER_LABEL = { queued = "⤳ queued", steered = "⤳ steered", not_delivered = "⤳ not delivered" }
   if msg.metadata.steer_state and STEER_LABEL[msg.metadata.steer_state] then
     parts[#parts + 1] = STEER_LABEL[msg.metadata.steer_state]
-  elseif msg.metadata.steered then
-    parts[#parts + 1] = "⤳ steered"
   end
   local files = msg.metadata.selected_files or {}
   if #files > 0 then
