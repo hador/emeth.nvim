@@ -10,11 +10,13 @@ local flush = H.flush
 -- Global stubs; released at the bottom of this file.
 local restore = H.install()
 
--- Payload shapes taken from real claude-acp 0.94 traffic with
--- `clientCapabilities.subagents` advertised: the spawning tool is `Agent` on the
--- main session, titled "Task" until its rawInput lands; `subagent_update`
--- announces the child session; everything the child runs arrives under the
--- child's session id and carries parentToolUseId.
+-- Payload shapes from real claude-acp traffic with `clientCapabilities.subagents`
+-- advertised. `subagent_update` announces the child session, and everything the
+-- child runs arrives under the child's session id carrying parentToolUseId. The
+-- spawning `Agent` call ("Task" until its rawInput lands) came first in 0.94;
+-- since 0.95 it is withheld for an announced child (the card is synthesized from
+-- the announcement) and only shows up late, in replayed history, or as the
+-- fallback for a child that was never announced. Both orders are covered.
 local MAIN = "sess-1"
 local CHILD = "child-1"
 local PARENT_ID = "toolu_parent"
@@ -241,9 +243,8 @@ h.describe("acp integration: subagent sessions", function()
   -- A subagent with no spawning Agent/Task tool_call is announced only by
   -- subagent_update; its launch message names a call that has no card. emeth
   -- synthesizes a stand-in card from the announcement so the subagent's work
-  -- nests instead of spilling onto the main transcript. Since claude-acp ~0.95
-  -- hides the Agent/Task launch tool_call, this is now the path for EVERY
-  -- subagent, not just background ones.
+  -- nests instead of spilling onto the main transcript. claude-acp withholds the
+  -- launch tool_call of every child it announces, so this is the live path.
   h.it("synthesizes a card for a subagent with no spawning tool_call", function()
     local session, view = make_setup()
     emit(session, announce(), MAIN) -- carries description + subagent_type, no Agent tool_call
@@ -264,7 +265,7 @@ h.describe("acp integration: subagent sessions", function()
     h.eq(1, card.metadata.subagent_children)
   end)
 
-  -- Fix for claude-acp ~0.95 hiding the launch tool_call: the synthesized card
+  -- Because claude-acp withholds the launch tool_call: the synthesized card
   -- must close the in-flight text block, exactly as a visible top-level tool_call
   -- used to. Otherwise every later assistant message keeps extending the
   -- pre-spawn prose block and the card is stranded at the tail below a growing
@@ -280,6 +281,30 @@ h.describe("acp integration: subagent sessions", function()
     h.eq("before spawn", view.messages[1]:text(), "pre-spawn prose stays above the card")
     h.eq("tool_use", view.messages[2].content[1].type, "the card sits at the spawn point")
     h.eq("after spawn", view.messages[3]:text(), "post-spawn prose starts a fresh message below")
+  end)
+
+  -- Replayed history (session/load) does send the Agent call, but after the
+  -- child's work, under the same id the launch message named. It must land on
+  -- the synthesized card, not open a second one.
+  h.it("merges a late Agent tool_call into the card synthesized for it", function()
+    local session, view = make_setup()
+    emit(session, announce(), MAIN)
+    emit(session, launch_message(CHILD, "toolu_late", "dig in"), CHILD)
+    emit(session, child_call("c1", "grep logs", "Bash", "toolu_late"), CHILD)
+    h.eq(2, #view.messages)
+    emit(session, {
+      sessionUpdate = "tool_call",
+      toolCallId = "toolu_late",
+      title = "Run two echo commands",
+      kind = "think",
+      status = "completed",
+      rawInput = { description = "Run two echo commands", subagent_type = "general-purpose" },
+      _meta = { claudeCode = { toolName = "Agent" } },
+    }, MAIN)
+    h.eq(2, #view.messages, "no second card for the late launch call")
+    local card = view.messages[1]
+    h.eq("Run two echo commands ⊳ general-purpose", card.metadata.tool_call.title)
+    h.eq(1, card.metadata.subagent_children, "the child stays nested under the one card")
   end)
 
   -- Guard the title fallback: an announcement with no description must still

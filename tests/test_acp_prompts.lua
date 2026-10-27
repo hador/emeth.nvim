@@ -93,6 +93,25 @@ h.describe("acp integration: permission queue", function()
     h.is_true(head:text():find("1 more pending") ~= nil, "head prompt should report 1 pending")
   end)
 
+  -- Each option normally gets its kind's key (allow_once = a, reject_once = r,
+  -- ...). A kind with no key of its own, or a second option of a kind already
+  -- placed, takes the next free option slot, so every option stays answerable.
+  h.it("gives duplicate and unknown option kinds the next free key", function()
+    local _, view, resolved, request = perm_setup()
+    request({ toolCallId = "t1", title = "Run it" }, {
+      { kind = "allow_once", name = "Once", optionId = "once" },
+      { kind = "allow_once", name = "Once more", optionId = "once-2" },
+      { kind = "custom_kind", name = "Something else", optionId = "custom" },
+    })
+    flush()
+    local text = view.messages[#view.messages]:text()
+    h.is_true(text:find("[a] Once", 1, true) ~= nil, text)
+    h.is_true(text:find("[A] Once more", 1, true) ~= nil, "duplicate kind takes the next free slot: " .. text)
+    h.is_true(text:find("[r] Something else", 1, true) ~= nil, "unknown kind takes the next free slot: " .. text)
+    h.is_true(press_on(view, "r"))
+    h.eq("custom", resolved[1].option)
+  end)
+
   -- Regression: the claims have to go when the queue empties, not just get
   -- replaced by the next request's. A lingering claim leaves the key hijacked by
   -- an already-answered prompt, so `r` would never fall through to retry again.
