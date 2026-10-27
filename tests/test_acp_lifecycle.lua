@@ -9,6 +9,19 @@ local Acp = require("emeth.integrations.acp")
 local Winbar = H.winbar()
 local make_view = H.make_view
 local make_setup = H.setup
+
+---Record every Winbar.set_state call; returns the list and an undo.
+---@return string[] states, fun() undo
+local function spy_state()
+  local states = {}
+  local prev = Winbar.set_state
+  Winbar.set_state = function(s)
+    states[#states + 1] = s
+  end
+  return states, function()
+    Winbar.set_state = prev
+  end
+end
 local flush = H.flush
 local press = H.press
 
@@ -131,17 +144,6 @@ h.describe("acp integration: unsolicited turn end", function()
     })
   end
   ---Record winbar states for one test; the module-level stub swallows them.
-  local function spy_state()
-    local states = {}
-    local prev = Winbar.set_state
-    Winbar.set_state = function(s)
-      states[#states + 1] = s
-    end
-    return states, function()
-      Winbar.set_state = prev
-    end
-  end
-
   h.it("returns to ready on the unsolicited turn's result usage", function()
     local session = make_setup()
     local cancelled = false
@@ -1299,17 +1301,6 @@ end)
 -- and `activity` never changed again. A window opened mid-turn must be re-told.
 h.describe("acp integration: resync_winbar", function()
   ---Record what the integration pushes to the winbar.
-  local function spy_state()
-    local calls = {}
-    local orig = Winbar.set_state
-    Winbar.set_state = function(s)
-      calls[#calls + 1] = s
-    end
-    return calls, function()
-      Winbar.set_state = orig
-    end
-  end
-
   h.it("re-pushes generating while a turn is running", function()
     local session, view, integration = make_setup()
     session.client = session.client or {}

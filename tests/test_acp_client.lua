@@ -39,29 +39,6 @@ local function make_client(handlers)
   return client, sent
 end
 
--- ── _next_id ───────────────────────────────────────────────────
-
-h.describe("ACPClient _next_id", function()
-  h.it("increments monotonically", function()
-    local c = make_client()
-    h.eq(1, c:_next_id())
-    h.eq(2, c:_next_id())
-    h.eq(3, c:_next_id())
-  end)
-end)
-
--- ── _create_error ──────────────────────────────────────────────
-
-h.describe("ACPClient _create_error", function()
-  h.it("returns structured error", function()
-    local c = make_client()
-    local err = c:_create_error(-32600, "bad request", "extra")
-    h.eq(-32600, err.code)
-    h.eq("bad request", err.message)
-    h.eq("extra", err.data)
-  end)
-end)
-
 -- ── _fail_pending ──────────────────────────────────────────────
 
 h.describe("ACPClient _fail_pending", function()

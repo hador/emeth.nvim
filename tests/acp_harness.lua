@@ -33,8 +33,6 @@ local bound_keymaps = {} ---@type table<string, fun()>
 function M.make_view()
   local view = {
     messages = {},
-    cleared_count = 0,
-    context_files = {},
     integration = nil,
     _context_files = {},
     _mention_handlers = {},
@@ -97,19 +95,15 @@ function M.make_view()
 
   function view:clear()
     self.messages = {}
-    self.cleared_count = self.cleared_count + 1
   end
 
   function view:invalidate() end
 
   function view:set_context_files(files)
-    self.context_files = files
     self._context_files = files
   end
 
-  function view:append_fenced(header, lines)
-    self.last_fence = { header = header, lines = lines }
-  end
+  function view:append_fenced() end
 
   function view:open_file_manager() end
 

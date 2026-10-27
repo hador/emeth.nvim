@@ -11,6 +11,24 @@ local press_on = H.press_on
 -- Global stubs; released at the bottom of this file.
 local restore = H.install()
 
+---A harness integration plus an `ask(schema, message?)` that raises a form
+---elicitation and records each reply the integration sends back.
+local function elicit_setup()
+  local session, view = make_setup()
+  local replies = {} ---@type table[]
+  ---@param schema table
+  local function ask(schema, message)
+    session:_emit("elicitation", {
+      mode = "form",
+      message = message or "Pick one",
+      requestedSchema = schema,
+    }, function(response)
+      replies[#replies + 1] = response
+    end)
+  end
+  return session, view, replies, ask
+end
+
 h.describe("acp integration: permission queue", function()
   -- Build a session whose request_permission round-trips through the integration
   -- like the real client: each call records the chosen optionId.
@@ -108,22 +126,6 @@ end)
 
 h.describe("acp integration: elicitation", function()
   --- Emit an elicitation the way the session layer does and capture the reply.
-  local function elicit_setup()
-    local session, view = make_setup()
-    local replies = {} ---@type table[]
-    ---@param schema table
-    local function ask(schema, message)
-      session:_emit("elicitation", {
-        mode = "form",
-        message = message or "Pick one",
-        requestedSchema = schema,
-      }, function(response)
-        replies[#replies + 1] = response
-      end)
-    end
-    return session, view, replies, ask
-  end
-
   local TWO_OPTIONS = {
     type = "object",
     properties = {
@@ -361,21 +363,6 @@ h.describe("acp integration: elicitation", function()
 end)
 
 h.describe("acp integration: elicitation free-text via the input box", function()
-  local function elicit_setup()
-    local session, view = make_setup()
-    local replies = {}
-    local function ask(schema, message)
-      session:_emit("elicitation", {
-        mode = "form",
-        message = message or "Pick one",
-        requestedSchema = schema,
-      }, function(response)
-        replies[#replies + 1] = response
-      end)
-    end
-    return session, view, replies, ask
-  end
-
   -- A select field whose provider-folded companion offers free text, which is
   -- the shape claude-acp sends for AskUserQuestion.
   local WITH_CUSTOM = {
