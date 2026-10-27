@@ -90,15 +90,6 @@ end
 
 --- Register builtins.
 function M.register_builtins()
-  M.register("clear", {
-    desc = "Clear chat messages",
-    source = "builtin",
-    immediate = true,
-    execute = function(_, ctx)
-      ctx.view:clear()
-    end,
-  })
-
   M.register("new", {
     desc = "Start a new session",
     source = "builtin",
@@ -118,20 +109,6 @@ function M.register_builtins()
       if ctx.integration and ctx.integration.fork then
         ctx.integration.fork()
       end
-    end,
-  })
-
-  M.register("help", {
-    desc = "List available commands",
-    source = "builtin",
-    immediate = true,
-    execute = function(_, ctx)
-      local Message = require("emeth.message")
-      local lines = { "**Available commands:**" }
-      for _, cmd in ipairs(M.list()) do
-        lines[#lines + 1] = ("  `/%s` — %s"):format(cmd.name, cmd.desc)
-      end
-      ctx.view:add_message(Message:new("system", table.concat(lines, "\n")))
     end,
   })
 
