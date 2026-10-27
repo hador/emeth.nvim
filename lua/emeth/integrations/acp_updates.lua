@@ -503,7 +503,19 @@ function M.handlers(ctx)
     end
   end
 
-  function handlers.config_option_update(update)
+  function handlers.config_option_update(update, _, session_id)
+    -- Only the root session's own snapshot is a full set to reconcile. claude-acp
+    -- also reports each subagent's model as a one-entry `config_option_update`:
+    -- on the child's session, or on the root tagged with the child's launching
+    -- `parentToolUseId`. Reconciling either would replace the root's options
+    -- with that single entry (dropping mode/effort/...), so both are ignored.
+    if session_id and session.session_id and session_id ~= session.session_id then
+      return
+    end
+    local cc = type(update._meta) == "table" and update._meta.claudeCode or nil
+    if type(cc) == "table" and cc.parentToolUseId then
+      return
+    end
     vim.schedule(function()
       ctx.reconcile_config_options(update.configOptions)
     end)

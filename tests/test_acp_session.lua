@@ -101,11 +101,14 @@ h.describe("Session _extract_session_info", function()
     h.eq("select", s.extensions.config_options.mode.type)
   end)
 
-  h.it("merges configOptions across calls (later snapshot wins per id)", function()
+  h.it("each configOptions snapshot replaces the last (dropped ids disappear)", function()
     local s = Session:new("test")
-    s:_extract_session_info({ configOptions = { { id = "model", currentValue = "opus" } } })
-    s:_extract_session_info({ configOptions = { { id = "model", currentValue = "sonnet" } } })
-    h.eq("sonnet", s.extensions.config_options.model.currentValue)
+    s:_extract_session_info({
+      configOptions = { { id = "model", currentValue = "opus" }, { id = "effort", currentValue = "high" } },
+    })
+    s:_extract_session_info({ configOptions = { { id = "model", currentValue = "haiku" } } })
+    h.eq("haiku", s.extensions.config_options.model.currentValue)
+    h.is_nil(s.extensions.config_options.effort, "an option the agent stopped offering must not linger")
   end)
 end)
 
