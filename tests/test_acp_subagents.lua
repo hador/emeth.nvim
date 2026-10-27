@@ -238,48 +238,84 @@ h.describe("acp integration: subagent sessions", function()
     h.eq("investigate the crash", view.messages[1].metadata.subagent_prompt)
   end)
 
-  h.it("ignores a launch message whose parent card is unknown", function()
+  -- A subagent with no spawning Agent/Task tool_call is announced only by
+  -- subagent_update; its launch message names a call that has no card. emeth
+  -- synthesizes a stand-in card from the announcement so the subagent's work
+  -- nests instead of spilling onto the main transcript. Since claude-acp ~0.95
+  -- hides the Agent/Task launch tool_call, this is now the path for EVERY
+  -- subagent, not just background ones.
+  h.it("synthesizes a card for a subagent with no spawning tool_call", function()
     local session, view = make_setup()
+    emit(session, announce(), MAIN) -- carries description + subagent_type, no Agent tool_call
+    emit(session, launch_message(CHILD, "no-such-call", "dig into the logs"), CHILD)
+    h.eq(1, #view.messages, "a stand-in card is created from the announcement")
+    local card = view.messages[1]
+    h.eq("tool_use", card.content[1].type)
+    -- The hidden launch means no enriched tool_call title ever arrives, so the
+    -- card is labelled from the announcement: its human `description`, with the
+    -- `subagent_type` (its `title`) appended -- never the bare, indistinguishable
+    -- subagent_type alone.
+    h.eq("Run two echo commands ⊳ general-purpose", card.metadata.tool_call.title, "titled from the announcement")
+    h.eq("dig into the logs", card.metadata.subagent_prompt, "its prompt is the launch message")
+    -- A child call naming that launch now nests under the synthesized card.
+    emit(session, child_call("c1", "grep logs", "Bash", "no-such-call"), CHILD)
+    h.eq(2, #view.messages)
+    h.eq(false, view.messages[2].visible, "the child folds under the synthesized card")
+    h.eq(1, card.metadata.subagent_children)
+  end)
+
+  -- Fix for claude-acp ~0.95 hiding the launch tool_call: the synthesized card
+  -- must close the in-flight text block, exactly as a visible top-level tool_call
+  -- used to. Otherwise every later assistant message keeps extending the
+  -- pre-spawn prose block and the card is stranded at the tail below a growing
+  -- wall of text. The card has to stay at the spawn point: prose before it above,
+  -- prose after it in a fresh message below.
+  h.it("anchors a synthesized card at the spawn point, not the tail", function()
+    local session, view = make_setup()
+    emit(session, chunk("agent_message_chunk", "before spawn"), MAIN)
     emit(session, announce(), MAIN)
-    emit(session, launch_message(CHILD, "no-such-call", "orphaned"), CHILD)
-    h.eq(0, #view.messages, "nothing to attach to, nothing rendered")
+    emit(session, launch_message(CHILD, "no-such-call", "do the thing"), CHILD)
+    emit(session, chunk("agent_message_chunk", "after spawn"), MAIN)
+    h.eq(3, #view.messages, "prose does not merge across the card")
+    h.eq("before spawn", view.messages[1]:text(), "pre-spawn prose stays above the card")
+    h.eq("tool_use", view.messages[2].content[1].type, "the card sits at the spawn point")
+    h.eq("after spawn", view.messages[3]:text(), "post-spawn prose starts a fresh message below")
+  end)
+
+  -- Guard the title fallback: an announcement with no description must still
+  -- label the card with the subagent_type, never regress to a bare "subagent".
+  h.it("falls back to the subagent_type when the announcement has no description", function()
+    local session, view = make_setup()
+    emit(session, { sessionUpdate = "subagent_update", sessionId = CHILD, title = "general-purpose", state = { state = "running" } }, MAIN)
+    emit(session, launch_message(CHILD, "no-such-call", "dig in"), CHILD)
+    h.eq("general-purpose", view.messages[1].metadata.tool_call.title)
   end)
 
   -- A subagent that pauses and is resumed by the main agent's SendMessage gets
   -- a second session_message whose messageId is the SendMessage call, not the
   -- spawning Agent call. The card binding must not move onto that row, or the
   -- subagent's closing state lands there and the real card stays stuck running.
-  h.it("keeps the state on the original card but folds resumed work under the SendMessage", function()
+  h.it("keeps the card binding through a SendMessage resume", function()
     local session, view = make_setup()
     spawn(session)
     emit(session, launch_message(CHILD, PARENT_ID, "first task"), CHILD)
     emit(session, child_call("t1", "a"), CHILD)
     emit(session, state_update(CHILD, "idle"), MAIN)
     -- Main agent resumes the subagent: a SendMessage tool call on the main
-    -- session, then a session_message on the child naming that call. The child's
-    -- resumed tool calls still carry the ORIGINAL Agent id (the agent parents
-    -- them there) -- emeth must re-parent them to the SendMessage.
+    -- session, then a session_message on the child naming that call.
     emit(session, { sessionUpdate = "tool_call", toolCallId = "sendmsg-1", title = "SendMessage", status = "completed" }, MAIN)
     emit(session, launch_message(CHILD, "sendmsg-1", "keep going"), CHILD)
     emit(session, state_update(CHILD, "running"), MAIN)
-    emit(session, child_call("t2", "resumed work", "Bash", PARENT_ID), CHILD)
     emit(session, state_update(CHILD, "idle"), MAIN)
-
-    local by_id = {}
+    -- The original Agent card (messages[1]) carries the final state; the
+    -- SendMessage card does not, and the launch prompt is unchanged.
+    h.eq("idle", view.messages[1].metadata.subagent_state, "closing state lands on the real card")
+    h.eq("first task", view.messages[1].metadata.subagent_prompt, "launch prompt is not overwritten")
     for _, m in ipairs(view.messages) do
-      if m.content[1] then
-        by_id[m.content[1].id] = m
+      if m.content[1] and m.content[1].id == "sendmsg-1" then
+        h.is_nil(m.metadata.subagent_state, "the SendMessage row never became the subagent card")
       end
     end
-    -- State stays put on the original Agent card.
-    h.eq("idle", view.messages[1].metadata.subagent_state, "closing state lands on the original card")
-    h.eq("first task", view.messages[1].metadata.subagent_prompt, "launch prompt is not overwritten")
-    h.is_nil(by_id["sendmsg-1"].metadata.subagent_state, "the SendMessage row is not the state card")
-    -- First-run work folds under the original card; resumed work folds under the
-    -- SendMessage, so the user follows it inline.
-    h.eq(PARENT_ID, by_id["t1"].metadata.parent_tool_call_id, "first-run call stays under the Agent call")
-    h.eq("sendmsg-1", by_id["t2"].metadata.parent_tool_call_id, "resumed call folds under the SendMessage")
-    h.eq(1, by_id["sendmsg-1"].metadata.subagent_children, "the SendMessage card owns the resumed call")
   end)
 
   h.it("keeps the main session's text streaming into one message around a subagent", function()
