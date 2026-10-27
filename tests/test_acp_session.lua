@@ -40,9 +40,9 @@ h.describe("Session event emitter", function()
     local fn = function()
       count = count + 1
     end
-    s:on("error", fn)
-    s:off("error", fn)
-    s:_emit("error")
+    s:on("update", fn)
+    s:off("update", fn)
+    s:_emit("update")
     h.eq(0, count)
   end)
 
@@ -186,7 +186,7 @@ h.describe("ACPClient set_config_option wire shape", function()
   local ACPClient = require("emeth.acp.client")
 
   h.it("tags boolean values with type=boolean", function()
-    local c = ACPClient:new({ transport_type = "stdio", command = "echo" })
+    local c = ACPClient:new({ command = "echo" })
     local captured
     c._send_request = function(_, method, params)
       captured = { method = method, params = params }
@@ -198,7 +198,7 @@ h.describe("ACPClient set_config_option wire shape", function()
   end)
 
   h.it("omits type for select (string) values", function()
-    local c = ACPClient:new({ transport_type = "stdio", command = "echo" })
+    local c = ACPClient:new({ command = "echo" })
     local captured
     c._send_request = function(_, method, params)
       captured = { method = method, params = params }

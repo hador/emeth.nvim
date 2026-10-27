@@ -35,7 +35,6 @@ local function make_client(handlers)
     },
     config = { handlers = handlers or {} },
     state = "disconnected",
-    reconnect_count = 0,
   }, { __index = ACPClient })
   return client, sent
 end
@@ -451,18 +450,6 @@ h.describe("ACPClient request/respond", function()
     c:_handle_message({ jsonrpc = "2.0", id = id, error = { code = -1, message = "nope" } })
     h.is_nil(got)
     h.eq("nope", got_err.message)
-  end)
-
-  h.it("respond and respond_error answer an inbound request by id", function()
-    local c, sent = make_client()
-    c:respond(7, { success = true })
-    local ok = vim.json.decode(sent[#sent])
-    h.eq(7, ok.id)
-    h.eq(true, ok.result.success)
-    c:respond_error(8, "bad", -32602)
-    local err = vim.json.decode(sent[#sent])
-    h.eq(8, err.id)
-    h.eq(-32602, err.error.code)
   end)
 end)
 

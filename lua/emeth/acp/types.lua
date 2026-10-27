@@ -175,13 +175,6 @@
 ---@field updatedAt? string|nil
 ---@field _meta? table
 
----@class acp.SessionInfo
----@field sessionId string
----@field cwd string
----@field title? string
----@field updatedAt? string
----@field _meta? table
-
 ---@class acp.PermissionOption
 ---@field optionId string
 ---@field name string
@@ -238,18 +231,14 @@
 ---@field on_elicitation? fun(request: acp.CreateElicitationRequest, callback: fun(response: acp.CreateElicitationResponse)): nil
 ---@field on_read_file? fun(path: string, line: integer|nil, limit: integer|nil, callback: fun(content: string), error_callback: fun(message: string, code: integer|nil)): nil
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
----@field on_error? fun(error: table)
----@field on_notification? fun(method: string, params: table, message_id: number|nil)
+---@field on_notification? fun(method: string, params: table)
 ---@field on_request? fun(method: string, params: table, respond: fun(result: table|nil), respond_error: fun(message: string, code?: number)): boolean|nil
 
 ---@class acp.ClientConfig
----@field transport_type? "stdio" | "websocket" | "tcp"
 ---@field command? string
 ---@field args? string[]
 ---@field env? table
 ---@field timeout? number
----@field reconnect? boolean
----@field max_reconnect_attempts? number
 ---@field auth_method? string
 ---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
 ---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize

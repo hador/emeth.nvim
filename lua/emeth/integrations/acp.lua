@@ -1148,10 +1148,6 @@ function M.setup_integration(view, session)
     end)
   end)
 
-  session:on("error", function(err)
-    view:add_message(Message:new("assistant", "**Error:** " .. util.fmt_err(err)))
-  end)
-
   session:on("file_written", function(path, first_changed)
     schedule_reload(path, first_changed)
   end)
