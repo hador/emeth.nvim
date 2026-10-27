@@ -398,7 +398,6 @@ A provider extension at `lua/emeth/integrations/<provider>.lua` may export any o
 | `setup` | `(session, view) → cleanup()` | Session connection — subscribe to events, register `@mention` handlers, etc. |
 | `build_session_meta` | `(emeth_config) → meta\|nil` | About to send `session/new` or `session/load` — return a `_meta` payload to attach |
 | `format_mode` | `(mode_id) → render_desc\|nil` | A `current_mode_update` arrives — return `{ badge?, tag?, tag_kind? }` for winbar rendering |
-| `extract_session_info` | `(result, extensions)` | After `session/new` or `session/load` — scrape any non-spec fields from `result` into `extensions` |
 
 `render_desc` fields:
 - `badge` — text shown in the right winbar segment as a `mode` badge. Omit/empty to clear.

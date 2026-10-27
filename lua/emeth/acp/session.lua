@@ -271,11 +271,10 @@ end
 
 -- ── Session info extraction ────────────────────────────────────
 
----Extract provider-specific fields from session/new or session/load responses.
----Standard ACP fields (`models.currentModelId`, `modes.currentModeId`) are
----read directly. Anything beyond the spec is delegated to the provider
----extension's `extract_session_info(result, extensions)` hook (if any), so
----claude-acp's `configOptions` shape stays out of this module.
+---Record the session state a session/new, session/load or set_config_option
+---result (or a `config_option_update`) carries: the current mode and model
+---(from `modes`/`models`, or the `mode`/`model` config options) and the full
+---set of standard ACP config options.
 ---@private
 function Session:_extract_session_info(result)
   if not result then
@@ -310,12 +309,6 @@ function Session:_extract_session_info(result)
           self.extensions.mode_id = opt.currentValue
         end
       end
-    end
-  end
-  if self.provider_name then
-    local ok, ext = pcall(require, "emeth.integrations." .. self.provider_name)
-    if ok and type(ext.extract_session_info) == "function" then
-      pcall(ext.extract_session_info, result, self.extensions)
     end
   end
 end
