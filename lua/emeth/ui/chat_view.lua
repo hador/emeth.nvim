@@ -694,15 +694,7 @@ function ChatView:_render()
   end
 end
 
---- Human-readable byte size for paste placeholders.
----@param n integer
----@return string
-local function fmt_size(n)
-  if n < 1024 then
-    return n .. " B"
-  end
-  return string.format("%.1f KB", n / 1024)
-end
+local fmt_size = require("emeth.util").fmt_size
 
 --- Forget all folded-paste state and remove their placeholder extmarks.
 --- Called whenever the input buffer's contents are discarded.

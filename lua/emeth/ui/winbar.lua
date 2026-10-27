@@ -46,14 +46,7 @@ local function get_hl_color(name, attr, fallback)
   return hl[attr] and string.format("#%06x", hl[attr]) or fallback
 end
 
-local function blend(a, b, t)
-  local ar, ag, ab = tonumber(a:sub(2, 3), 16) or 0, tonumber(a:sub(4, 5), 16) or 0, tonumber(a:sub(6, 7), 16) or 0
-  local br, bg, bb = tonumber(b:sub(2, 3), 16) or 0, tonumber(b:sub(4, 5), 16) or 0, tonumber(b:sub(6, 7), 16) or 0
-  local function clamp(v)
-    return math.max(0, math.min(255, math.floor(v)))
-  end
-  return string.format("#%02x%02x%02x", clamp(ar + (br - ar) * t), clamp(ag + (bg - ag) * t), clamp(ab + (bb - ab) * t))
-end
+local blend = require("emeth.util").blend
 
 -- ── Highlight cache ────────────────────────────────────────────
 local hl_cache = {}

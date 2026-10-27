@@ -133,18 +133,7 @@ local BADGE = {
   gone = { text = "gone", mark = "✖", hl = "DiagnosticError" },
 }
 
----Compact disk-footprint label: "812 B", "4.2 KB", "32.8 MB".
----@param n integer
----@return string
-local function fmt_size(n)
-  if n < 1024 then
-    return n .. " B"
-  end
-  if n < 1024 * 1024 then
-    return string.format("%.1f KB", n / 1024)
-  end
-  return string.format("%.1f MB", n / 1048576)
-end
+local fmt_size = require("emeth.util").fmt_size
 
 ---Build the picker rows: most recent first. Nothing is dropped; each row carries
 ---its validity verdict so the UI can badge (and later act on) dead entries.

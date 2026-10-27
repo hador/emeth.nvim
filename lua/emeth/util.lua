@@ -42,6 +42,48 @@ function M.debounce(ms, fn)
   }
 end
 
+---Compact byte-size label: "812 B", "4.2 KB", "32.8 MB".
+---@param n integer
+---@return string
+function M.fmt_size(n)
+  if n < 1024 then
+    return n .. " B"
+  end
+  if n < 1024 * 1024 then
+    return string.format("%.1f KB", n / 1024)
+  end
+  return string.format("%.1f MB", n / 1048576)
+end
+
+---Mix two "#rrggbb" colours: `t` = 0 gives `a`, 1 gives `b`. Malformed
+---components read as 0 and the result is clamped, so it never errors.
+---@param a string
+---@param b string
+---@param t number
+---@return string
+function M.blend(a, b, t)
+  local ar, ag, ab = tonumber(a:sub(2, 3), 16) or 0, tonumber(a:sub(4, 5), 16) or 0, tonumber(a:sub(6, 7), 16) or 0
+  local br, bg, bb = tonumber(b:sub(2, 3), 16) or 0, tonumber(b:sub(4, 5), 16) or 0, tonumber(b:sub(6, 7), 16) or 0
+  local function clamp(v)
+    return math.max(0, math.min(255, math.floor(v)))
+  end
+  return string.format("#%02x%02x%02x", clamp(ar + (br - ar) * t), clamp(ag + (bg - ag) * t), clamp(ab + (bb - ab) * t))
+end
+
+---Decode a JSON file, or nil when it is missing, unreadable or not a JSON
+---object/array.
+---@param path string
+---@return table|nil
+function M.read_json(path)
+  if vim.fn.filereadable(path) ~= 1 then
+    return nil
+  end
+  local ok, data = pcall(function()
+    return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+  end)
+  return ok and type(data) == "table" and data or nil
+end
+
 ---Format an ACP error, including .data when present. A bare string (some
 ---callbacks pass one) is returned as is.
 ---@param err table|string|nil

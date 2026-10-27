@@ -31,16 +31,7 @@ function M.setup()
   set(0, M.MUTED, { default = true, link = "Comment" })
 
   -- Diff backgrounds: faint wash of green/red into the float background
-  local function blend(a, b, t)
-    local ar, ag, ab = tonumber(a:sub(2, 3), 16), tonumber(a:sub(4, 5), 16), tonumber(a:sub(6, 7), 16)
-    local br, bg, bb = tonumber(b:sub(2, 3), 16), tonumber(b:sub(4, 5), 16), tonumber(b:sub(6, 7), 16)
-    return string.format(
-      "#%02x%02x%02x",
-      math.floor(ar + (br - ar) * t),
-      math.floor(ag + (bg - ag) * t),
-      math.floor(ab + (bb - ab) * t)
-    )
-  end
+  local blend = require("emeth.util").blend
   local ok_fg = vim.api.nvim_get_hl(0, { name = "DiagnosticOk", link = false }).fg
   local err_fg = vim.api.nvim_get_hl(0, { name = "DiagnosticError", link = false }).fg
   local add_color = ok_fg and string.format("#%06x", ok_fg) or "#98c379"
