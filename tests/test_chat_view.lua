@@ -795,13 +795,45 @@ h.describe("ChatView:add_action", function()
     h.eq(1, #ran)
     h.eq(msg, ran[1])
 
+    -- Removing the action (kiro disconnect) must leave R working as a prompt
+    -- key: the view outlives a provider switch, so deleting the keymap would
+    -- strand reject_always for the rest of the session.
     view:remove_action("R")
-    local still
+    local after
     for _, km in ipairs(vim.api.nvim_buf_get_keymap(view.result_buf, "n")) do
-      if km.lhs == "R" then
-        still = true
+      if km.lhs == "R" and km.callback then
+        after = km.callback
       end
     end
-    h.is_nil(still, "remove_action unbinds the key")
+    h.is_true(after ~= nil, "R stays bound after remove_action")
+    claimed = false
+    view._prompt_key_owners =
+      { { owner = "p", keys = {
+        R = function()
+          claimed = true
+          return true
+        end,
+      } } }
+    after()
+    h.is_true(claimed, "a prompt still receives R")
+    view._prompt_key_owners = {}
+    after()
+    h.eq(1, #ran, "the removed action no longer runs")
+  end)
+
+  h.it("binds and unbinds a key that is not a prompt key", function()
+    local view = make_view()
+    local function bound()
+      for _, km in ipairs(vim.api.nvim_buf_get_keymap(view.result_buf, "n")) do
+        if km.lhs == "X" then
+          return true
+        end
+      end
+      return false
+    end
+    view:add_action({ key = "X", run = function() end })
+    h.is_true(bound(), "a custom action key gets its own keymap")
+    view:remove_action("X")
+    h.is_true(not bound(), "and loses it on remove")
   end)
 end)

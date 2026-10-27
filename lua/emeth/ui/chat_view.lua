@@ -41,6 +41,9 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _line_to_msg table<integer, chat_ui.Message>  buffer row (1-based) -> message
 ---@field _line_to_msg_max? integer  highest row populated in _line_to_msg
 ---@field _prompt_key_owners { owner: string, keys: table<string, fun(): boolean?> }[]
+---@field _permanent_keys table<string, true>  prompt keys bound once for the view's life
+---@field _key_fallback table<string, fun()>  a permanent key's default when nothing claims it
+---@field _actions? table<string, chat_ui.MessageAction>  provider actions by key
 ---@field _line_cache table<string, integer>  uuid -> rendered line count
 ---@field _dirty_from? integer  index of first message needing re-render
 ---@field _render_pending? boolean
@@ -163,23 +166,15 @@ function ChatView:new(opts)
     end,
   }
 
+  view._key_fallback = prompt_key_fallback
+  view._permanent_keys = {}
   for _, key in ipairs(PROMPT_KEYS) do
+    view._permanent_keys[key] = true
     api.nvim_buf_set_keymap(result_buf, "n", key, "", {
       noremap = true,
       silent = true,
       callback = function()
-        -- First registration wins, so two prompts claiming one key stay
-        -- deterministic (in practice their key sets are disjoint).
-        for _, entry in ipairs(view._prompt_key_owners) do
-          local fn = entry.keys[key]
-          if fn and fn() ~= false then
-            return
-          end
-        end
-        local fallback = prompt_key_fallback[key]
-        if fallback then
-          fallback()
-        end
+        view:_dispatch_key(key)
       end,
     })
   end
@@ -480,43 +475,69 @@ end
 ---@field when? fun(msg: chat_ui.Message): boolean
 ---@field run fun(msg: chat_ui.Message)
 
----Register a per-message transcript action. Binds `opts.key` on the result
----buffer to run `opts.run(msg)` for the message under the cursor when
----`opts.when(msg)` holds, and surfaces `opts.hint` in the contextual help for
----matching messages. Lets a provider extension add actions (e.g. kiro's rewind)
----without this file knowing them.
+---The single dispatch path for a result-buffer key, in priority order: an
+---active transient prompt's claim (first registration wins, so two prompts
+---claiming one key stay deterministic), then a provider action whose `when`
+---matches the message under the cursor, then the key's own default. So `R` is
+---reject_always while a permission is pending, kiro's rewind on a user message
+---otherwise -- the way `r` is reject_once during a prompt and retry otherwise.
+---@param key string
+function ChatView:_dispatch_key(key)
+  for _, entry in ipairs(self._prompt_key_owners or {}) do
+    local fn = entry.keys[key]
+    if fn and fn() ~= false then
+      return
+    end
+  end
+  local action = self._actions and self._actions[key]
+  if action then
+    local msg = self:cursor_message_line()
+    if msg and (not action.when or action.when(msg)) then
+      action.run(msg)
+      return
+    end
+  end
+  local fallback = self._key_fallback[key]
+  if fallback then
+    fallback()
+  end
+end
+
+---Register a per-message transcript action: `opts.key` runs `opts.run(msg)` for
+---the message under the cursor when `opts.when(msg)` holds, and `opts.hint`
+---shows in the contextual help for matching messages. Lets a provider extension
+---add actions (e.g. kiro's rewind) without this file knowing them. A key that is
+---already one of the permanent prompt keys keeps its keymap and just gains the
+---action in `_dispatch_key`; any other key gets a keymap of its own.
 ---@param opts chat_ui.MessageAction
 function ChatView:add_action(opts)
   self._actions = self._actions or {}
   self._actions[opts.key] = opts
+  if self._permanent_keys[opts.key] then
+    return
+  end
   if self.result_buf and vim.api.nvim_buf_is_valid(self.result_buf) then
     vim.api.nvim_buf_set_keymap(self.result_buf, "n", opts.key, "", {
       noremap = true,
       silent = true,
       callback = function()
-        -- A key shared with a transient prompt (e.g. R is also reject_always)
-        -- must answer an active prompt first; only otherwise run the action.
-        -- Mirrors how r is reject_once during a prompt and retry otherwise.
-        for _, entry in ipairs(self._prompt_key_owners or {}) do
-          local fn = entry.keys[opts.key]
-          if fn and fn() ~= false then
-            return
-          end
-        end
-        local msg = self:cursor_message_line()
-        if msg and (not opts.when or opts.when(msg)) then
-          opts.run(msg)
-        end
+        self:_dispatch_key(opts.key)
       end,
     })
   end
 end
 
----Remove an action registered with `add_action` (keymap + hint).
+---Remove an action registered with `add_action` (dispatch entry + hint). A
+---permanent prompt key keeps its keymap -- deleting it would strand the prompt
+---slot (e.g. `R` = reject_always) for as long as the view lives, which outlasts
+---a provider switch; only a keymap `add_action` created is deleted.
 ---@param key string
 function ChatView:remove_action(key)
   if self._actions then
     self._actions[key] = nil
+  end
+  if self._permanent_keys[key] then
+    return
   end
   if self.result_buf and vim.api.nvim_buf_is_valid(self.result_buf) then
     pcall(vim.api.nvim_buf_del_keymap, self.result_buf, "n", key)
