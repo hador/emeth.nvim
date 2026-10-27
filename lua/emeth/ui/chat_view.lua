@@ -51,31 +51,6 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 local ChatView = {}
 ChatView.__index = ChatView
 
---- The tool_id → tool_result lookup a render consults to resolve tool output.
----
---- Scoped to `from..#messages`, not the whole transcript: only the tail is
---- re-rendered, render_message is the sole consumer, and a result always arrives
---- at or after its tool_use, so a tail tool_use's result is in the tail.
---- Scanning the prefix would be O(transcript) per render for entries no one
---- reads. Factored out so the scoping is guarded in tests/test_perf.lua.
----@param messages chat_ui.Message[]
----@param from integer  first message index to scan (the dirty tail's start)
----@return table<string, chat_ui.ContentItem>
-function ChatView._build_tool_results(messages, from)
-  local tool_results = {}
-  for i = from, #messages do
-    local msg = messages[i]
-    if msg then
-      for _, item in ipairs(msg.content) do
-        if item.type == "tool_result" and item.tool_use_id then
-          tool_results[item.tool_use_id] = item
-        end
-      end
-    end
-  end
-  return tool_results
-end
-
 ---True if the user message has any expandable details to show on K.
 ---@param msg chat_ui.Message
 ---@return boolean
@@ -665,16 +640,13 @@ function ChatView:_render()
     self._line_to_msg[j] = nil
   end
 
-  -- Build tool_id → result lookup for O(1) resolution during render.
-  local tool_results = ChatView._build_tool_results(self.messages, dirty_from)
-
   -- Render dirty messages
   local tail_lines = {}
   local tail_text = {}
   for i = dirty_from, #self.messages do
     local msg = self.messages[i]
     if msg and msg.visible ~= false then
-      local raw = Render.render_message(msg, self.messages, tool_results)
+      local raw = Render.render_message(msg, self.messages)
       local expanded = expand(raw)
       local texts = {}
       for _, line in ipairs(expanded) do

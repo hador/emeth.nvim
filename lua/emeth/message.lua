@@ -3,15 +3,12 @@
 local _uuid_counter = 0
 
 ---@class chat_ui.ContentItem
----@field type "text"|"thinking"|"tool_use"|"tool_result"
+---@field type "text"|"thinking"|"tool_use"
 ---@field text? string
 ---@field thinking? string
 ---@field name? string
 ---@field id? string
 ---@field input? table
----@field tool_use_id? string
----@field content? string|table
----@field is_error? boolean
 ---@field status? "pending"|"in_progress"|"completed"|"failed"|"cancelled"
 ---@field failure_reason? "cancelled"|"denied"|"error"
 

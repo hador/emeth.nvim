@@ -91,9 +91,9 @@ local function seed(v, n)
   v:_render()
 end
 
----Seed `n` completed tool-call pairs (a tool_use message + its tool_result), so
----the transcript is tool-heavy the way a real session is -- the paragraph seed
----carries no tool content and can't exercise the tool_results lookup.
+---Seed `n` completed tool calls (output carried on the tool_call, as ACP sends
+---it), so the transcript is tool-heavy the way a real session is -- the
+---paragraph seed carries no tool content.
 ---@param v chat_ui.ChatView
 ---@param n integer
 local function tool_seed(v, n)
@@ -105,9 +105,6 @@ local function tool_seed(v, n)
     use.metadata.tool_call =
       { title = "ls " .. i, status = "completed", content = { { type = "content", content = { text = "out " .. i } } } }
     v:add_message(use)
-    v:add_message(Message:new("assistant", {
-      { type = "tool_result", tool_use_id = id, content = "out " .. i },
-    }))
   end
   v:_render()
 end
@@ -184,10 +181,10 @@ function M.stream_chunk_cost(prior)
 end
 
 --- Streams STREAM_CHUNKS chunks into a fresh tail over a prefix of `n_pairs`
---- completed tool-call pairs. Unlike `stream_run` (paragraph prefix), this
---- measures the tool_results lookup build: scoped to the tail it stays FLAT vs
---- `n_pairs`; a full-transcript scan would climb with it.
----@param n_pairs integer  prior completed tool-call pairs to seed
+--- completed tool calls. Unlike `stream_run` (paragraph prefix), the prefix is
+--- tool-heavy; streaming into the tail must stay FLAT vs `n_pairs`, since only
+--- the dirty tail re-renders.
+---@param n_pairs integer  prior completed tool calls to seed
 ---@return fun() run
 function M.tool_stream_run(n_pairs)
   local v = fresh_view()
