@@ -99,7 +99,7 @@ Full example:
       providers = {
         ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent-engine=v3", "--auth-method=cli" } },
         ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
-        ["claude-code"] = { command = "npx", args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" } },
+        ["claude-code"] = { command = "npx", args = { "-y", "@agentclientprotocol/claude-agent-acp" } },
       },
     },
   },
@@ -119,7 +119,7 @@ require("emeth").setup({
   },
   mappings = {
     submit = { insert = "<C-s>", normal = "<CR>" },
-    close = { normal = { "q", "<Esc>" } },
+    close = { normal = "q" },             -- hide the sidebar (session keeps running)
     switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
     open_file = { normal = { "gf", "gd" } },   -- open the path under the cursor next door
     zoom = { normal = "<leader>ez" },          -- grow the sidebar to fill the screen and back
@@ -154,10 +154,10 @@ require("emeth").setup({
     debug = false,               -- per-session logs in stdpath("state")/emeth/logs/
     auto_approve_tools = false, -- auto-approve tool permission requests
     providers = {
-      ["claude-code"] = { command = "npx", args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" } },
+      ["claude-code"] = { command = "npx", args = { "-y", "@agentclientprotocol/claude-agent-acp" } },
       ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
       ["goose"]       = { command = "goose", args = { "acp" } },
-      ["codex"]       = { command = "npx", args = { "-y", "-g", "@zed-industries/codex-acp" } },
+      ["codex"]       = { command = "npx", args = { "-y", "@zed-industries/codex-acp" } },
       ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent-engine=v3", "--auth-method=cli" } },
     },
   },
@@ -267,9 +267,9 @@ removing the persisted history for good.
 | `<Tab>` / `<S-Tab>` | Insert/Normal | Switch between input/result |
 | `za` / `zo` | Normal | Unfold the folded paste under the cursor |
 | `<leader>ez` | Normal | Zoom the sidebar |
-| `q` / `<Esc>` | Normal | Close sidebar |
+| `q` | Normal | Hide the sidebar (the session keeps running; `:EmethClose` disconnects) |
 
-`<C-c>`, `<Tab>`/`<S-Tab>`, `<leader>ez` and `q`/`<Esc>` work in the result buffer too.
+`<C-c>`, `<Tab>`/`<S-Tab>`, `<leader>ez` and `q` work in the result buffer too.
 
 ### Result buffer
 
