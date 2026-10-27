@@ -94,3 +94,27 @@ h.describe("kiro-cli transform_update", function()
     h.is_nil(u.replay)
   end)
 end)
+
+h.describe("kiro-cli session_store", function()
+  local store = Kiro.session_store
+
+  h.it("names the transcript sessions/cli/<id>.jsonl under ~/.kiro, whatever the cwd", function()
+    local saved = vim.env.KIRO_HOME
+    vim.env.KIRO_HOME = nil
+    local got = store.transcript_path({ cwd = "/anywhere", session_id = "u-1" }, "/home/me")
+    vim.env.KIRO_HOME = saved
+    h.eq("/home/me/.kiro/sessions/cli/u-1.jsonl", got)
+  end)
+
+  h.it("honours $KIRO_HOME", function()
+    local saved = vim.env.KIRO_HOME
+    vim.env.KIRO_HOME = "/opt/kiro"
+    local got = store.transcript_path({ session_id = "u-1" }, "/home/me")
+    vim.env.KIRO_HOME = saved
+    h.eq("/opt/kiro/sessions/cli/u-1.jsonl", got)
+  end)
+
+  h.it("has no staleness rule (kiro sweeps by disk budget, not age)", function()
+    h.is_nil(store.is_stale)
+  end)
+end)

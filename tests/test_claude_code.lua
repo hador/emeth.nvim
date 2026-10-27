@@ -238,3 +238,51 @@ h.describe("claude-code subagent attribution transform", function()
     h.eq("toolu_parent", u.parent_tool_call_id)
   end)
 end)
+
+h.describe("claude-code session_store", function()
+  local store = CC.session_store
+  local DAY = 86400
+
+  h.it("names the transcript projects/<sanitized cwd>/<id>.jsonl", function()
+    -- `/` and `.` both become `-`; nothing else is substituted.
+    h.eq(
+      "/home/me/.claude/projects/-Volumes-workplace-emeth-nvim/abc.jsonl",
+      store.transcript_path({ cwd = "/Volumes/workplace/emeth.nvim", session_id = "abc" }, "/home/me")
+    )
+    h.eq(
+      "/home/me/.claude/projects/-Users-me-Dark_room/abc.jsonl",
+      store.transcript_path({ cwd = "/Users/me/Dark_room", session_id = "abc" }, "/home/me")
+    )
+  end)
+
+  h.it("has no transcript for an entry without a working dir", function()
+    h.is_nil(store.transcript_path({ cwd = "", session_id = "abc" }, "/home/me"))
+  end)
+
+  ---@param settings table<string, number>  path -> cleanupPeriodDays
+  local function env(settings)
+    return {
+      now = 1000 * DAY,
+      home = "/home/me",
+      read_json = function(path)
+        return settings[path] and { cleanupPeriodDays = settings[path] } or nil
+      end,
+    }
+  end
+  local entry = { cwd = "/tmp/proj", session_id = "abc" }
+
+  h.it("is stale past the default 30-day retention", function()
+    h.eq(false, store.is_stale(entry, (1000 - 29) * DAY, env({})))
+    h.eq(true, store.is_stale(entry, (1000 - 30) * DAY, env({})))
+  end)
+
+  h.it("honours cleanupPeriodDays, project-local winning over project and user", function()
+    local e = env({
+      ["/home/me/.claude/settings.json"] = 10,
+      ["/tmp/proj/.claude/settings.json"] = 20,
+      ["/tmp/proj/.claude/settings.local.json"] = 5,
+    })
+    h.eq(true, store.is_stale(entry, (1000 - 6) * DAY, e))
+    h.eq(false, store.is_stale(entry, (1000 - 4) * DAY, e))
+  end)
+end)

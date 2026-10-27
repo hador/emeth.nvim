@@ -63,6 +63,57 @@ function M.format_model(model_id)
   )
 end
 
+-- ── Session store (validity.lua's interface) ─────────────────────
+-- Claude Code keeps one transcript per session under
+-- ~/.claude/projects/<sanitized cwd>/<id>.jsonl and prunes transcripts idle
+-- longer than `cleanupPeriodDays` (default 30) on its next launch.
+
+local DEFAULT_RETENTION_DAYS = 30
+
+---`/` and `.` both map to `-`; claude names each project dir this way and nothing
+---else is substituted (verified against a real `~/.claude/projects`).
+---@param cwd string
+---@return string
+local function sanitize_cwd(cwd)
+  return (cwd:gsub("[/.]", "-"))
+end
+
+---Resolve `cleanupPeriodDays` from the settings cascade, later file winning:
+---user (~/.claude) < project (<cwd>/.claude) < project-local.
+---@param cwd string
+---@param home string
+---@param read_json fun(path: string): table|nil
+---@return integer
+local function retention_days(cwd, home, read_json)
+  local days = DEFAULT_RETENTION_DAYS
+  for _, f in ipairs({
+    home .. "/.claude/settings.json",
+    cwd .. "/.claude/settings.json",
+    cwd .. "/.claude/settings.local.json",
+  }) do
+    local data = read_json(f)
+    if type(data) == "table" and type(data.cleanupPeriodDays) == "number" then
+      days = math.floor(data.cleanupPeriodDays)
+    end
+  end
+  return days
+end
+
+---@type emeth.SessionStore
+M.session_store = {
+  transcript_path = function(entry, home)
+    local cwd = entry.cwd or ""
+    if cwd == "" then
+      return nil -- the store is keyed by working dir; no cwd, no transcript
+    end
+    return ("%s/.claude/projects/%s/%s.jsonl"):format(home, sanitize_cwd(cwd), entry.session_id)
+  end,
+  is_stale = function(entry, mtime, env)
+    local days = retention_days(entry.cwd or "", env.home, env.read_json)
+    return (env.now - mtime) / 86400 >= days
+  end,
+}
+
 ---Build the `_meta` payload to attach to `session/new`/`session/load`.
 ---Reads `config.claude_code.extra_args` and emits the claude-acp-shaped
 ---`{ claudeCode = { options = { extraArgs = {...} } } }` envelope.
