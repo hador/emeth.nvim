@@ -125,3 +125,28 @@ h.describe("Sidebar statusline ownership", function()
     sb:close()
   end)
 end)
+
+-- A global `foldmethod=expr` + treesitter foldexpr (common in user configs) is
+-- window-inherited, so without an explicit override emeth's windows would run
+-- foldexpr over the whole transcript -- an O(buffer) main-loop stall on long
+-- sessions. The sidebar must pin manual folding on both windows.
+h.describe("Sidebar folding", function()
+  h.it("does not inherit a global treesitter foldexpr on either window", function()
+    local saved_fm = vim.o.foldmethod
+    local saved_fe = vim.o.foldexpr
+    local saved_fen = vim.o.foldenable
+    -- Simulate the pathological global config before opening.
+    vim.o.foldmethod = "expr"
+    vim.o.foldexpr = "v:lua.vim.treesitter.foldexpr()"
+    vim.o.foldenable = true
+    local sb = make_open_sidebar()
+    for _, win in ipairs({ sb.result_win, sb.input_win }) do
+      h.eq("manual", vim.api.nvim_get_option_value("foldmethod", { win = win }))
+      h.eq(false, vim.api.nvim_get_option_value("foldenable", { win = win }))
+    end
+    sb:close()
+    vim.o.foldmethod = saved_fm
+    vim.o.foldexpr = saved_fe
+    vim.o.foldenable = saved_fen
+  end)
+end)
