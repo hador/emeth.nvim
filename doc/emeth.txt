@@ -73,7 +73,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     mappings = {
       submit = { insert = "<C-s>", normal = "<CR>" },
       close = { normal = { "q", "<Esc>" } },
-      switch_window = { normal = "<Tab>" },
+      switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
     },
     icons = {
       user = "> ",

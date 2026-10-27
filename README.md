@@ -117,7 +117,7 @@ require("emeth").setup({
   mappings = {
     submit = { insert = "<C-s>", normal = "<CR>" },
     close = { normal = { "q", "<Esc>" } },
-    switch_window = { normal = "<Tab>" },
+    switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
   },
   icons = {
     user = "> ",

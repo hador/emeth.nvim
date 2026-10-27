@@ -351,26 +351,6 @@ function Sidebar:_setup_keymaps()
     end
   end
 
-  local switch_key = config.mappings.switch_window.normal
-  if switch_key then
-    for _, buf in ipairs({ view.result_buf, view.input_buf }) do
-      if api.nvim_buf_is_valid(buf) then
-        api.nvim_buf_set_keymap(buf, "n", switch_key, "", {
-          noremap = true,
-          silent = true,
-          callback = function()
-            local cur = api.nvim_get_current_win()
-            if cur == self.result_win then
-              self:focus_input()
-            else
-              self:focus_result()
-            end
-          end,
-        })
-      end
-    end
-  end
-
   local zoom_keys = config.mappings.zoom and config.mappings.zoom.normal
   if type(zoom_keys) == "string" then
     zoom_keys = { zoom_keys }
@@ -414,6 +394,9 @@ function Sidebar:_setup_keymaps()
     end
   end
 
+  -- Hop between the result and input windows. Bound per mode from
+  -- `mappings.switch_window` (a key or list per mode; false/{} disables), so the
+  -- default <Tab>/<S-Tab> can be moved or dropped like every other mapping.
   local function cycle_window()
     local cur = api.nvim_get_current_win()
     if cur == self.result_win then
@@ -424,12 +407,15 @@ function Sidebar:_setup_keymaps()
       self:focus_result()
     end
   end
-  for _, buf in ipairs({ view.result_buf, view.input_buf }) do
-    if api.nvim_buf_is_valid(buf) then
-      api.nvim_buf_set_keymap(buf, "n", "<Tab>", "", { noremap = true, silent = true, callback = cycle_window })
-      api.nvim_buf_set_keymap(buf, "i", "<Tab>", "", { noremap = true, silent = true, callback = cycle_window })
-      api.nvim_buf_set_keymap(buf, "n", "<S-Tab>", "", { noremap = true, silent = true, callback = cycle_window })
-      api.nvim_buf_set_keymap(buf, "i", "<S-Tab>", "", { noremap = true, silent = true, callback = cycle_window })
+  local switch = config.mappings.switch_window or {}
+  for mode, spec in pairs({ n = switch.normal, i = switch.insert }) do
+    local keys = type(spec) == "string" and { spec } or (type(spec) == "table" and spec or {})
+    for _, key in ipairs(keys) do
+      for _, buf in ipairs({ view.result_buf, view.input_buf }) do
+        if api.nvim_buf_is_valid(buf) then
+          api.nvim_buf_set_keymap(buf, mode, key, "", { noremap = true, silent = true, callback = cycle_window })
+        end
+      end
     end
   end
 end
