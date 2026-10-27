@@ -92,6 +92,16 @@ function Sidebar:open(view)
   api.nvim_set_option_value("linebreak", true, { win = self.result_win })
   api.nvim_set_option_value("breakindent", true, { win = self.result_win })
   api.nvim_set_option_value("fillchars", "eob: ", { win = self.result_win })
+  -- Disable folding. The transcript has its own K-expand model and uses no vim
+  -- folds, but a global `foldmethod=expr` + `foldexpr=vim.treesitter.foldexpr()`
+  -- (common in user configs) would otherwise be inherited here and evaluate a
+  -- fold level for every line -- forcing a full treesitter parse of the whole
+  -- transcript and re-running on redraws/edits. On a long session that stalls
+  -- the main loop (input lags everywhere, not just this window) until the fold
+  -- state happens to get fully computed (e.g. by scrolling top-to-bottom once).
+  -- manual folding never calls foldexpr, so the cost never exists.
+  api.nvim_set_option_value("foldmethod", "manual", { win = self.result_win })
+  api.nvim_set_option_value("foldenable", false, { win = self.result_win })
   api.nvim_set_option_value(
     "winhighlight",
     "Normal:NormalFloat,WinSeparator:EmethWinSeparator",
@@ -110,6 +120,9 @@ function Sidebar:open(view)
   api.nvim_set_option_value("relativenumber", false, { win = self.input_win })
   api.nvim_set_option_value("signcolumn", "no", { win = self.input_win })
   api.nvim_set_option_value("winfixheight", true, { win = self.input_win })
+  -- Same rationale as the result window: never inherit a treesitter foldexpr.
+  api.nvim_set_option_value("foldmethod", "manual", { win = self.input_win })
+  api.nvim_set_option_value("foldenable", false, { win = self.input_win })
   api.nvim_set_option_value("winhighlight", "Normal:NormalFloat,WinSeparator:FloatBorder", { win = self.input_win })
   -- Own the input window's statusline too (the result window already blanks
   -- its own). The chat's status row is rendered by the winbar on this window;
