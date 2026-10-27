@@ -1,4 +1,5 @@
---- emeth.nvim — Reusable chat UI library for AI/LLM interactions.
+--- emeth.nvim: an ACP (Agent Client Protocol) chat sidebar for Neovim. Entry
+--- point: config, the sidebar/view lifecycle, provider resolution and resume.
 
 ---@class chat_ui.ClaudeCodeConfig
 ---@field extra_args? table<string, string|boolean>

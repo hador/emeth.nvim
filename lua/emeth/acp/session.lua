@@ -281,6 +281,9 @@ function Session:_extract_session_info(result)
     return
   end
   self.extensions = self.extensions or {}
+  -- `models.currentModelId` is the older ACP model channel. Neither claude-acp
+  -- nor kiro v3 sends it (both use the `model` config option below); kept for
+  -- agents that still do (gemini-cli, codex are configured but unexercised).
   if result.models and result.models.currentModelId then
     self.extensions.model_id = result.models.currentModelId
   end

@@ -153,9 +153,10 @@ function M.handlers(ctx)
   ---@param tool_id string
   ---@return string uuid
   local function create_subagent_card(stream, record, tool_id)
-    -- Since claude-acp ~0.95 the Agent/Task launch tool_call is hidden, so the
-    -- enriched `description ⊳ subagent_type` title never arrives as a tool_call
-    -- and EVERY subagent lands here, not just background ones. The
+    -- claude-acp withholds the Agent/Task launch tool_call of every child it
+    -- announces (RFD routing), so for those the enriched `description ⊳
+    -- subagent_type` title never arrives as a tool_call and the card is built
+    -- here; only a fallback for an unannounced child shows the call. The
     -- `subagent_update` announcement is then the only label source: its
     -- `description` is the human task summary, its `title` the subagent_type.
     -- Prefer the description and reproduce the old enrichment when both exist,

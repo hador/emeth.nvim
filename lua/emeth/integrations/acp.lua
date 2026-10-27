@@ -614,8 +614,8 @@ function M.setup_integration(view, session)
   -- ── Session events ─────────────────────────────────────────────
 
   -- Reconcile a fresh `configOptions` snapshot into session state: re-store the
-  -- options (via _extract_session_info, so the provider's badge/model_id refresh
-  -- runs) and re-register the slash commands so newly available options (e.g.
+  -- options (via _extract_session_info, which also mirrors the model/mode
+  -- options into model_id/mode_id) and re-register the slash commands so newly available options (e.g.
   -- /effort appearing after a model switch) appear and gone ones disappear.
   -- Shared by the agent-pushed `config_option_update` AND the response to a
   -- client-initiated set_config_option (the wrapper only *pushes* for
@@ -881,13 +881,11 @@ function M.setup_integration(view, session)
     end
   end
 
-  -- ── Session config options (model / mode / effort / agent / fast) ──
+  -- ── Session config options (model / mode / effort / ultracode ...) ──
   -- These ride the standard ACP `configOptions` + `session/set_config_option`
-  -- channel. Generic: we register one slash command per option the agent
-  -- exposes and drive it through a single picker, so we don't hard-code
-  -- "model". Providers using a bespoke mechanism (e.g. kiro-cli's own
-  -- _kiro.dev/commands) never populate `config_options`, so this stays inert
-  -- for them.
+  -- channel, which both claude-acp and kiro-cli's v3 engine use. Generic: we
+  -- register one slash command per option the agent exposes and drive it
+  -- through a single picker, so no option id is hard-coded.
 
   ---Flatten a config option's select values into a picker list. `options` is
   ---either a flat array of `{ value, name, description }` or an array of

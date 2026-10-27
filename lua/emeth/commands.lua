@@ -140,9 +140,8 @@ function M.register_builtins()
     source = "builtin",
     has_picker = true,
     execute = function(_, ctx)
-      -- If an ACP provider also registered /prompts (e.g. kiro-cli), it
-      -- handles local+server prompt merging itself — skip the builtin picker
-      -- to avoid showing two pickers in sequence.
+      -- If the agent also advertises its own /prompts, the agent's command
+      -- wins: skip the builtin picker so two don't open in sequence.
       local self_cmd = commands["prompts"]
       if self_cmd and self_cmd._builtin then
         return

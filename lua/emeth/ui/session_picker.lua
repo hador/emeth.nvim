@@ -6,10 +6,9 @@
 --- so the list is built from it rather than from the agent's `session/list`,
 --- which is scoped to one cwd and needs a live connection.
 ---
---- Sessions whose directory has since been deleted are dropped, not dimmed:
---- resuming one cannot work (the agent is handed that cwd), and in a real index
---- they were 41% of entries — mostly transient per-review workspaces. The count
---- is reported so they aren't hidden silently.
+--- Nothing is dropped: each row carries a validity verdict (validity.lua) and
+--- sessions the provider can no longer resume are badged, not hidden. `S`
+--- prunes the dead ones from the index on demand.
 
 local Sessions = require("emeth.sessions")
 

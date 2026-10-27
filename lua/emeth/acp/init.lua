@@ -27,8 +27,8 @@ local defaults = {
       command = "npx",
       args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" },
       pass_env = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_MODEL_CONFIG" },
-      -- Without it claude-acp (>= ~0.86) reports a subagent as one opaque tool
-      -- call and sends none of its work. With it, each subagent runs as a child
+      -- Without it claude-acp reports a subagent as one opaque tool call and
+      -- sends none of its work. With it, each subagent runs as a child
       -- session announced by `subagent_update` (ACP subagents RFD).
       capabilities = { subagents = vim.empty_dict() },
     },
@@ -49,9 +49,10 @@ local defaults = {
     ["kiro-cli"] = {
       command = "kiro-cli",
       -- v3 (Kiro Agent Server-backed) ACP. `acp` alone still defaults to the
-      -- legacy v2 engine; v3 is selected explicitly. `--auth-method=cli` keeps
-      -- token handling in the CLI relay (otherwise the client must implement
-      -- `_kiro/auth/getAccessToken`).
+      -- legacy v2 engine (`acp --help`, 2.34.2), so v3 is selected explicitly.
+      -- `--auth-method=cli` (the current default, pinned here) keeps token
+      -- handling in the CLI relay; "client" would require emeth to implement
+      -- `_kiro/auth/getAccessToken`.
       args = { "acp", "--agent-engine=v3", "--auth-method=cli" },
       -- Advertised so the agent drives its MCP OAuth flow through our
       -- `_kiro/openExternalUrl` request handler.

@@ -468,8 +468,8 @@ function ACPClient:_handle_request_permission(message_id, params)
       -- `sessionId` is forwarded as the trailing argument (rather than folded
       -- into the toolCall) so existing 3-arg handlers keep working. ACP requires
       -- it on the request and we were validating it above only to discard it —
-      -- it identifies which session is asking, which is what any future
-      -- multi-session work needs to attribute a prompt correctly.
+      -- it identifies which session is asking: a subagent's request comes from
+      -- its child session, and the integration renders it under that session.
       -- (Elicitations need no equivalent: their `params` already carries
       -- `sessionId` for session-scoped requests, and the handler gets `params`.)
       self.config.handlers.on_request_permission(params.toolCall, params.options, function(option_id)

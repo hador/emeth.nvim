@@ -12,8 +12,8 @@
 ---   * MCP OAuth: `/mcp-auth` + the `_kiro/openExternalUrl` request
 ---   * a transform normalising `_meta.kiro` onto generic update fields
 ---
---- Verified live against kiro-cli 2.31.1; see the migration guide for the full
---- CLI v2→v3 contract.
+--- Written against kiro-cli 2.31.1's v3 engine; re-checked against 2.34.x (its
+--- ACP surface is byte-identical from 2.34.0 to 2.34.2).
 
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
@@ -62,10 +62,11 @@ local function transform_update(update)
   if type(k.messageId) == "string" then
     update.provider_message_id = k.messageId
   end
-  -- CLI v3 classifies a failed tool call via `_meta.kiro.failureReason`
-  -- (cancelled | denied | error); the generic renderer reads `failure_reason`.
-  -- 2.31.1 omits it on denied/cancelled calls, where the only signal is the
-  -- rejection text in the tool output.
+  -- `_meta.kiro.failureReason` (cancelled | denied | error) would classify a
+  -- failed tool call for the generic renderer's `failure_reason`. Unconfirmed:
+  -- in the 2.31.1 and 2.34.0 v3 bundles `failureReason` appears only on
+  -- workflow-node state, not on tool_call `_meta.kiro`, so this may never fire.
+  -- Kept until a denied v3 tool call is captured to settle it.
   if type(k.failureReason) == "string" then
     update.failure_reason = k.failureReason
   end
