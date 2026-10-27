@@ -8,14 +8,8 @@ end
 
 ---@return table[]
 local function read_index()
-  local path = index_path()
-  if vim.fn.filereadable(path) ~= 1 then
-    return {}
-  end
-  local ok, data = pcall(function()
-    return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
-  end)
-  if not ok or type(data) ~= "table" then
+  local data = require("emeth.util").read_json(index_path())
+  if not data then
     return {}
   end
   -- Drop entries with no id. One such record (timestamps only) was found in a
@@ -37,10 +31,34 @@ local function write_index(entries)
   vim.fn.writefile({ vim.json.encode(entries) }, path)
 end
 
+---UTC timestamp in the index's ISO-8601 form.
+---@return string
+local function now_iso()
+  return os.date("!%Y-%m-%dT%H:%M:%SZ") --[[@as string]]
+end
+
+---Apply `fn` to one entry and persist, bumping its `updated_at`. No-op when
+---the id isn't indexed.
+---@param session_id string
+---@param fn? fun(e: table)
+local function update_entry(session_id, fn)
+  local entries = read_index()
+  for _, e in ipairs(entries) do
+    if e.session_id == session_id then
+      if fn then
+        fn(e)
+      end
+      e.updated_at = now_iso()
+      write_index(entries)
+      return
+    end
+  end
+end
+
 ---@param entry { session_id: string, provider: string, cwd: string, title?: string, additional_directories?: string[], forked_from?: string }
 function M.save(entry)
   local entries = read_index()
-  local now = os.date("!%Y-%m-%dT%H:%M:%SZ")
+  local now = now_iso()
   -- Update existing or insert new
   for _, e in ipairs(entries) do
     if e.session_id == entry.session_id then
@@ -76,27 +94,14 @@ end
 ---@param session_id string
 ---@param title string
 function M.update_title(session_id, title)
-  local entries = read_index()
-  for _, e in ipairs(entries) do
-    if e.session_id == session_id then
-      e.title = title
-      e.updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
-      write_index(entries)
-      return
-    end
-  end
+  update_entry(session_id, function(e)
+    e.title = title
+  end)
 end
 
 ---@param session_id string
 function M.touch(session_id)
-  local entries = read_index()
-  for _, e in ipairs(entries) do
-    if e.session_id == session_id then
-      e.updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
-      write_index(entries)
-      return
-    end
-  end
+  update_entry(session_id)
 end
 
 ---@param session_id string

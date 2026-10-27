@@ -123,15 +123,7 @@ function M.default_env()
       local st = vim.uv.fs_stat(path)
       return st and st.mtime and st.mtime.sec or nil
     end,
-    read_json = function(path)
-      if vim.fn.filereadable(path) ~= 1 then
-        return nil
-      end
-      local ok, data = pcall(function()
-        return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
-      end)
-      return ok and type(data) == "table" and data or nil
-    end,
+    read_json = require("emeth.util").read_json,
   }
 end
 
