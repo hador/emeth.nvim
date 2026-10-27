@@ -740,6 +740,49 @@ h.describe("ChatView K on a diff tool call", function()
     h.eq(true, Render.is_expanded(msg), "K did not expand it")
   end)
 
+  ---The contextual-help text currently painted in the result buffer.
+  ---@param view chat_ui.ChatView
+  local function hint_text(view)
+    local ns = vim.api.nvim_create_namespace("emeth_help_hints")
+    local out = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(view.result_buf, ns, 0, -1, { details = true })) do
+      for _, chunk in ipairs(m[4].virt_text or {}) do
+        out[#out + 1] = chunk[1]
+      end
+    end
+    return table.concat(out)
+  end
+
+  h.it("hints what K will do to what's on screen, and repaints after K", function()
+    local msg = diff_msg("a\nb\nc", "a\nX\nc") -- small: expanded while _expanded is nil
+    local view = make_view()
+    view:add_message(msg)
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    for row, m in pairs(view._line_to_msg) do
+      if m.uuid == msg.uuid then
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        break
+      end
+    end
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = view.result_buf })
+    h.is_true(hint_text(view):find("K: collapse", 1, true) ~= nil, "got: " .. hint_text(view))
+    -- K without moving the cursor: the hint must follow the new state.
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("K", true, false, true), "x", false)
+    h.is_true(hint_text(view):find("K: expand", 1, true) ~= nil, "got: " .. hint_text(view))
+  end)
+
+  h.it("hints K on a prompt that has more to show", function()
+    local view = make_view()
+    local prompt = Message:new("system", "Pick one", { on_expand = function() end })
+    view:add_message(prompt)
+    view:_render()
+    vim.api.nvim_win_set_buf(0, view.result_buf)
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = view.result_buf })
+    h.is_true(hint_text(view):find("K: details", 1, true) ~= nil, "got: " .. hint_text(view))
+  end)
+
   h.it("takes the diff body out of the buffer when it collapses", function()
     local msg = big()
     msg.metadata._expanded = true

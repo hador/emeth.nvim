@@ -124,7 +124,12 @@ function ChatView:new(opts)
     _paste_seq = 0,
   }, ChatView)
 
-  -- Toggle tool purpose detail on K
+  -- Repaints the contextual help for the cursor row; assigned with the hint
+  -- autocmd below. Forward-declared because K (via invalidate_msg) must redraw
+  -- it after a toggle, and the hint text depends on the state K just flipped.
+  local refresh_hint ---@type fun(force: boolean)|nil
+
+  -- Re-render one message in place after K (or any local toggle) changed it.
   local function invalidate_msg(msg)
     view._line_cache[msg.uuid] = nil
     for i, m in ipairs(view.messages) do
@@ -136,6 +141,9 @@ function ChatView:new(opts)
     view._scroll = false
     view:_render()
     view._scroll = true
+    if refresh_hint and api.nvim_get_current_buf() == result_buf then
+      refresh_hint(true)
+    end
   end
 
   -- `a`/`A`/`R` need no fallback: result_buf is nomodifiable, so their normal
@@ -266,49 +274,61 @@ function ChatView:new(opts)
   end
 
   local last_anchor_row = nil
+  ---@param force boolean  repaint even when the cursor stayed on the same message
+  refresh_hint = function(force)
+    local row = api.nvim_win_get_cursor(0)[1]
+    local msg = view._line_to_msg[row]
+    local anchor_row = msg and primary_row_for(msg, row) or nil
+    if anchor_row == last_anchor_row and not force then
+      return
+    end
+    last_anchor_row = anchor_row
+    api.nvim_buf_clear_namespace(result_buf, help_ns, 0, -1)
+    if not msg then
+      return
+    end
+    local hints = {}
+    if msg.role == "user" then
+      hints[#hints + 1] = "r: retry"
+      hints[#hints + 1] = "e: edit"
+      if has_user_details(msg) then
+        hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
+      end
+    end
+    local has_tool = false
+    for _, item in ipairs(msg.content or {}) do
+      if item.type == "tool_use" then
+        has_tool = true
+        break
+      end
+    end
+    if has_tool then
+      -- What's on screen, as K itself decides: a small diff renders expanded
+      -- while `_expanded` is still nil.
+      hints[#hints + 1] = "K: " .. (Render.is_expanded(msg) and "collapse" or "expand")
+    elseif msg.metadata and type(msg.metadata.on_expand) == "function" then
+      -- A prompt with more to show (e.g. an elicitation's full field list);
+      -- its toggle state lives with its owner, so name the action, not a state.
+      hints[#hints + 1] = "K: details"
+    end
+    -- Provider-registered actions (e.g. kiro's rewind) contribute their hints
+    -- for the messages they apply to.
+    for _, a in pairs(view._actions or {}) do
+      if a.hint and (not a.when or a.when(msg)) then
+        hints[#hints + 1] = a.hint
+      end
+    end
+    if #hints > 0 and anchor_row then
+      api.nvim_buf_set_extmark(result_buf, help_ns, anchor_row - 1, 0, {
+        virt_text = { { "  [" .. table.concat(hints, ", ") .. "]", "Comment" } },
+        virt_text_pos = "eol",
+      })
+    end
+  end
   api.nvim_create_autocmd("CursorMoved", {
     buffer = result_buf,
     callback = function()
-      local row = api.nvim_win_get_cursor(0)[1]
-      local msg = view._line_to_msg[row]
-      local anchor_row = msg and primary_row_for(msg, row) or nil
-      if anchor_row == last_anchor_row then
-        return
-      end
-      last_anchor_row = anchor_row
-      api.nvim_buf_clear_namespace(result_buf, help_ns, 0, -1)
-      if not msg then
-        return
-      end
-      local hints = {}
-      if msg.role == "user" then
-        hints[#hints + 1] = "r: retry"
-        hints[#hints + 1] = "e: edit"
-        if has_user_details(msg) then
-          hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
-        end
-      end
-      if msg.content then
-        for _, item in ipairs(msg.content) do
-          if item.type == "tool_use" then
-            hints[#hints + 1] = "K: " .. (msg.metadata._expanded and "collapse" or "expand")
-            break
-          end
-        end
-      end
-      -- Provider-registered actions (e.g. kiro's rewind) contribute their hints
-      -- for the messages they apply to.
-      for _, a in pairs(view._actions or {}) do
-        if a.hint and (not a.when or a.when(msg)) then
-          hints[#hints + 1] = a.hint
-        end
-      end
-      if #hints > 0 and anchor_row then
-        api.nvim_buf_set_extmark(result_buf, help_ns, anchor_row - 1, 0, {
-          virt_text = { { "  [" .. table.concat(hints, ", ") .. "]", "Comment" } },
-          virt_text_pos = "eol",
-        })
-      end
+      assert(refresh_hint)(false)
     end,
   })
 
