@@ -120,8 +120,6 @@ require("emeth").setup({
     switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
   },
   icons = {
-    user = "> ",
-    assistant = "",
     thinking = "🤔 ",
     tool_generating = "⏳",
     tool_succeeded = "✓",

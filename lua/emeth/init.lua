@@ -1,7 +1,6 @@
 --- emeth.nvim — Reusable chat UI library for AI/LLM interactions.
 
 ---@class chat_ui.ClaudeCodeConfig
----@field show_raw_sdk_messages? boolean
 ---@field extra_args? table<string, string|boolean>
 
 ---@class chat_ui.KiroCliConfig
@@ -54,8 +53,6 @@ local defaults = {
     expand_paste = { normal = { "za", "zo" } },
   },
   icons = {
-    user = "> ",
-    assistant = "",
     thinking = "🤔 ",
     tool_generating = "⏳",
     tool_succeeded = "✓",
@@ -87,7 +84,6 @@ local defaults = {
   default_provider = nil,
   auto_add_current_file = true,
   claude_code = {
-    show_raw_sdk_messages = false,
     -- Forwarded as `--<key> <value>` to the Claude CLI on session/new and
     -- session/load via the agent SDK's `extraArgs` channel. Use `true` for
     -- boolean flags. Example:
