@@ -150,6 +150,7 @@ function Sidebar:open(view)
   end
   update_prompt()
   api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufEnter" }, {
+    group = self._augroup, -- cleared on close; the input buffer outlives the sidebar
     buffer = view.input_buf,
     callback = update_prompt,
   })
