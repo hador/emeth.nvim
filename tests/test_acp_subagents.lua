@@ -170,10 +170,6 @@ h.describe("acp integration: subagent tool nesting", function()
 end)
 
 h.describe("acp integration: subagent placement", function()
-  local function text(t)
-    return { sessionUpdate = "agent_message_chunk", content = { type = "text", text = t } }
-  end
-
   --- The transcript as a list of labels: a tool card's title, or a text body.
   local function layout(view)
     local out = {}
@@ -188,7 +184,7 @@ h.describe("acp integration: subagent placement", function()
     local session, view = make_setup()
     spawn(session)
     emit(session, child_call("t1", "first"), CHILD)
-    emit(session, text("meanwhile"), MAIN)
+    emit(session, chunk("agent_message_chunk", "meanwhile"), MAIN)
     emit(session, child_call("t2", "second"), CHILD)
     h.eq({ "Task", "first", "second", "meanwhile" }, layout(view))
   end)
@@ -196,9 +192,9 @@ h.describe("acp integration: subagent placement", function()
   h.it("does not split the main session's text around a subagent's call", function()
     local session, view = make_setup()
     spawn(session)
-    emit(session, text("one "), MAIN)
+    emit(session, chunk("agent_message_chunk", "one "), MAIN)
     emit(session, child_call("t1", "child"), CHILD)
-    emit(session, text("two"), MAIN)
+    emit(session, chunk("agent_message_chunk", "two"), MAIN)
     h.eq({ "Task", "child", "one two" }, layout(view))
   end)
 

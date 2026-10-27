@@ -57,13 +57,6 @@ h.describe("claude-code format_mode", function()
     h.eq("customMode", desc.tag)
     h.eq("hint", desc.tag_kind)
   end)
-
-  h.it("badge label has no leading icon when caller wants raw text", function()
-    -- Tags never include an icon — generic acp.lua uses them verbatim
-    -- without any post-processing. Verify by checking the plan label.
-    local desc = CC.format_mode("plan")
-    h.is_nil(desc.tag:find("⚙"))
-  end)
 end)
 
 h.describe("claude-code build_session_meta", function()

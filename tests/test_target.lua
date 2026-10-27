@@ -72,17 +72,23 @@ h.describe("Target.resolve", function()
   end)
 end)
 
+---A known source window holding a real buffer, with the sidebar opened next
+---to it on a screen wide enough for both.
+---@return chat_ui.SidebarLayout sb, chat_ui.ChatView view, integer src_win
+local function open_beside_source()
+  vim.o.columns = 200
+  vim.o.lines = 50
+  vim.cmd("enew")
+  local src_win = api.nvim_get_current_win()
+  local view = ChatView:new({ config = require("emeth").config })
+  local sb = Sidebar:new(require("emeth").config)
+  sb:open(view)
+  return sb, view, src_win
+end
+
 h.describe("Target.open", function()
   h.it("opens the file in the source window, not the chat", function()
-    vim.o.columns = 200
-    vim.o.lines = 50
-    -- A known source window with a real buffer.
-    vim.cmd("enew")
-    local src_win = api.nvim_get_current_win()
-
-    local view = ChatView:new({ config = require("emeth").config })
-    local sb = Sidebar:new(require("emeth").config)
-    sb:open(view)
+    local sb, view, src_win = open_beside_source()
 
     local tmp = vim.fn.tempname() .. ".lua"
     vim.fn.writefile({ "line1", "line2", "line3" }, tmp)
@@ -106,14 +112,7 @@ end)
 
 h.describe("Sidebar auto-eject", function()
   h.it("bounces a file opened into the chat window to the source window", function()
-    vim.o.columns = 200
-    vim.o.lines = 50
-    vim.cmd("enew")
-    local src_win = api.nvim_get_current_win()
-
-    local view = ChatView:new({ config = require("emeth").config })
-    local sb = Sidebar:new(require("emeth").config)
-    sb:open(view)
+    local sb, view, src_win = open_beside_source()
 
     -- Simulate any picker/LSP/gf that drops a file into the chat window.
     local tmp = vim.fn.tempname() .. ".lua"

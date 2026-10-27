@@ -70,15 +70,9 @@ do
   PARAGRAPH = table.concat(body, "\n")
 end
 
----A fresh view with a clean slate.
+---A fresh view (ChatView:new starts with empty messages and render caches).
 local function fresh_view()
-  local v = ChatView:new({ config = require("emeth").config })
-  v.messages = {}
-  v._line_cache = {}
-  v._dirty_from = nil
-  v._line_to_msg = {}
-  v._line_to_msg_max = nil
-  return v
+  return ChatView:new({ config = require("emeth").config })
 end
 
 ---Seed `n` finished assistant messages, warm the cache with one render.
