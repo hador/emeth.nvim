@@ -2,7 +2,7 @@
 ---
 --- All claude-acp-specific knowledge lives here. The generic ACP integration
 --- talks to this module through these optional hooks:
----   - `setup(session, view) → cleanup`        custom notification subscriber
+---   - `setup(session, view) → cleanup`        steering + update/elicitation transforms
 ---   - `build_session_meta(emeth_config) → t`  `_meta` to attach on session/new
 ---   - `format_mode(mode_id) → render_desc`    badge + bottom-bar tag rendering
 ---   - `format_model(model_id) → string`       shorten model id for display
@@ -11,7 +11,6 @@
 --- call that spawned it, and rewrites that call's title to show the description +
 --- subagent_type from its rawInput.
 
-local Message = require("emeth.message")
 local Winbar = require("emeth.ui.winbar")
 
 local M = {}
@@ -219,30 +218,11 @@ end
 -- Exposed for testing.
 M._transform_elicitation = transform_elicitation
 
----Hook claude-code-specific notifications and the title transform.
+---Install claude-code's steering strategy and its update/elicitation transforms.
 ---@param session acp.Session
 ---@param view chat_ui.ChatView
 ---@return fun() cleanup
 function M.setup(session, view)
-  local function on_notification(method, params)
-    if method ~= "_claude/sdkMessage" or not params or not params.message then
-      return
-    end
-    local cfg = require("emeth").config.claude_code or {}
-    if not cfg.show_raw_sdk_messages then
-      return
-    end
-    vim.schedule(function()
-      local encoded = vim.json.encode(params.message)
-      if #encoded > 800 then
-        encoded = encoded:sub(1, 800) .. "…"
-      end
-      view:add_message(Message:new("system", "[claude/sdk] " .. encoded))
-    end)
-  end
-
-  session:on("notification", on_notification)
-
   -- Steering. claude-acp advertises support on the InitializeResponse `_meta`
   -- (not agentCapabilities), and injects synchronously via `_session/steering`
   -- returning an `outcome`. `idleBehavior = "promptRequired"` makes the agent
@@ -279,7 +259,6 @@ function M.setup(session, view)
   end
 
   return function()
-    session:off("notification", on_notification)
     Winbar.clear_badge("model")
     Winbar.clear_badge("mode")
     Winbar.clear_badge("cost")
