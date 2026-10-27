@@ -126,6 +126,11 @@ function M.make_view()
   -- `press` can walk them. Dispatch semantics (first owner wins, fallback to
   -- the key's default) are covered by ChatView's own tests.
   view._prompt_key_owners = {}
+  -- The real view's option slots, read from ChatView so the mock can't drift.
+  function view:prompt_keys()
+    return require("emeth.ui.chat_view").prompt_keys()
+  end
+
   function view:set_prompt_keys(owner, keys)
     self:clear_prompt_keys(owner)
     self._prompt_key_owners[#self._prompt_key_owners + 1] = { owner = owner, keys = keys }
