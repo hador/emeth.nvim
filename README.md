@@ -462,6 +462,7 @@ A provider extension at `lua/emeth/integrations/<provider>.lua` may export any o
 | `build_session_meta` | `(emeth_config, kind) → meta\|nil` | About to send `session/new` (`kind = "new"`) or `session/load` (`"load"`) — return a `_meta` payload to attach |
 | `format_mode` | `(mode_id) → render_desc\|nil` | A `current_mode_update` arrives — return `{ badge?, tag?, tag_kind? }` for winbar rendering |
 | `format_model` | `(model_id) → string` | Displaying the model — shorten a provider-shaped id (the core still clamps the length) |
+| `session_store` | table `{ transcript_path(entry, home) → path\|nil, is_stale?(entry, mtime, env) → bool }` | The session picker checks resumability — where this provider keeps a session's transcript, and (optionally) whether it is about to prune it. Without one, a session counts as valid while its directory exists. |
 
 `render_desc` fields:
 - `badge` — text shown in the right winbar segment as a `mode` badge. Omit/empty to clear.

@@ -88,6 +88,23 @@ end
 -- Exposed for testing.
 M._transform_update = transform_update
 
+-- ── Session store (validity.lua's interface) ─────────────────────
+-- The v3 engine keeps one transcript per session at
+-- `$KIRO_HOME/sessions/cli/<id>.jsonl` (default `~/.kiro`; read from the v3
+-- bundle: `userConfigDir` from KIRO_HOME, `sessionsPath = <dir>/sessions`).
+-- The store is global, not per cwd. kiro sweeps it against a disk budget rather
+-- than by age, which one file can't predict, so there is no `is_stale`.
+---@type emeth.SessionStore
+M.session_store = {
+  transcript_path = function(entry, home)
+    local kiro_home = vim.env.KIRO_HOME
+    if not kiro_home or kiro_home == "" then
+      kiro_home = home .. "/.kiro"
+    end
+    return ("%s/sessions/cli/%s.jsonl"):format(kiro_home, entry.session_id)
+  end,
+}
+
 ---Build the `session/new` `_meta` payload. When `config.kiro_cli.mode` is set,
 ---start new sessions on that agent/mode via `_meta.kiro.modeId` (v3 session
 ---input, verified live). Applied to NEW sessions only — a resumed session keeps
