@@ -965,7 +965,7 @@ end)
 
 h.describe("acp integration: close and fork", function()
   h.it("closes the previous session when /new replaces it", function()
-    local session, _view, integration = make_setup()
+    local session, _, integration = make_setup()
     local closed = {}
     session.close = function(_, sid)
       closed[#closed + 1] = sid
@@ -980,7 +980,7 @@ h.describe("acp integration: close and fork", function()
   end)
 
   h.it("closes the previous session when loading a different one", function()
-    local session, _view, integration = make_setup()
+    local session, _, integration = make_setup()
     local closed = {}
     session.close = function(_, sid)
       closed[#closed + 1] = sid
@@ -1015,7 +1015,7 @@ h.describe("acp integration: close and fork", function()
   end)
 
   h.it("records the fork with its parent for lineage", function()
-    local session, _view, integration = make_setup()
+    local session, _, integration = make_setup()
     session.fork = function(_, _opts, cb)
       session.session_id, session._state = "fork-sess", "ready"
       cb(nil)
@@ -1027,7 +1027,7 @@ h.describe("acp integration: close and fork", function()
   end)
 
   h.it("rewind forks at a message id, reloads the fork, and records lineage", function()
-    local session, _view, integration = make_setup()
+    local session, _, integration = make_setup()
     local fork_meta
     session.fork = function(_, opts, cb)
       fork_meta = opts and opts.meta

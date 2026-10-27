@@ -3,7 +3,6 @@
 
 local h = require("tests.helpers")
 
-package.loaded["emeth"] = nil
 require("emeth").setup({})
 
 local Target = require("emeth.target")

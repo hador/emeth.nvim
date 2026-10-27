@@ -417,14 +417,14 @@ h.describe("acp integration: current_mode_update", function()
   h.it("renders the new mode and records it on the session", function()
     local session, view = make_setup()
     local badges = {}
-    local restore = Winbar.set_badge
+    local orig_set_badge = Winbar.set_badge
     Winbar.set_badge = function(key, text)
       badges[key] = text
     end
 
     session:_emit("update", { sessionUpdate = "current_mode_update", currentModeId = "plan" })
     flush()
-    Winbar.set_badge = restore
+    Winbar.set_badge = orig_set_badge
 
     h.eq("plan", (session.extensions or {}).mode_id)
     h.eq("plan", badges.mode, "render_mode should have pushed the mode badge")

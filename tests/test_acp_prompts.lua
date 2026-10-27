@@ -158,7 +158,7 @@ h.describe("acp integration: elicitation", function()
   h.it("nudges out of band when the sidebar is closed", function()
     local _, view, _, ask = elicit_setup()
     local notes = {}
-    local restore = vim.notify
+    local orig_notify = vim.notify
     vim.notify = function(msg)
       notes[#notes + 1] = msg
     end
@@ -166,7 +166,7 @@ h.describe("acp integration: elicitation", function()
     view._visible = false
     ask(TWO_OPTIONS)
     flush()
-    vim.notify = restore
+    vim.notify = orig_notify
 
     h.eq(1, #notes, "a blocked question behind a closed sidebar should notify")
     h.is_true(notes[1]:find(":Emeth") ~= nil, "the nudge should say how to get to it")
@@ -175,7 +175,7 @@ h.describe("acp integration: elicitation", function()
   h.it("stays quiet when the sidebar is already showing", function()
     local _, view, _, ask = elicit_setup()
     local notes = {}
-    local restore = vim.notify
+    local orig_notify = vim.notify
     vim.notify = function(msg)
       notes[#notes + 1] = msg
     end
@@ -183,7 +183,7 @@ h.describe("acp integration: elicitation", function()
     view._visible = true
     ask(TWO_OPTIONS)
     flush()
-    vim.notify = restore
+    vim.notify = orig_notify
 
     h.eq(0, #notes, "the inline prompt is visible; no nudge needed")
   end)

@@ -1,26 +1,5 @@
 local h = require("tests.helpers")
 
--- Stub emeth config so render can access icons
-package.loaded["emeth"] = {
-  config = {
-    icons = {
-      user = "> ",
-      assistant = "",
-      thinking = "🤔 ",
-      tool_generating = "⏳",
-      tool_succeeded = "✓",
-      tool_failed = "✗",
-    },
-  },
-}
-
--- Stub highlights to return plain strings
-package.loaded["emeth.highlights"] = setmetatable({}, {
-  __index = function(_, k)
-    return k
-  end,
-})
-
 local Message = require("emeth.message")
 local Render = require("emeth.ui.render")
 
@@ -611,11 +590,12 @@ h.describe("render: diff folding", function()
   end)
 
   h.it("honours diff_collapse_lines", function()
-    local emeth = package.loaded["emeth"]
+    local config = require("emeth").config
+    local saved = config.diff_collapse_lines
     local msg = diff_msg("a\nb\nc", "a\nX\nc")
-    emeth.config.diff_collapse_lines = 1
+    config.diff_collapse_lines = 1
     local folded = render(msg)
-    emeth.config.diff_collapse_lines = nil
+    config.diff_collapse_lines = saved
     h.is_true(folded:find("┏━", 1, true) == nil, "config ignored: " .. folded)
   end)
 
