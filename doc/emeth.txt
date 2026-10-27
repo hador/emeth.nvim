@@ -66,14 +66,17 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
 
   {
     sidebar = {
-      position = "right",  -- "right" | "left" | "bottom"
-      width = 40,          -- columns (or % for bottom)
+      position = "right",  -- "right" | "left" | "top" | "bottom"
+      width = 40,          -- columns (or % for top/bottom)
       input_height = 8,    -- lines
     },
     mappings = {
       submit = { insert = "<C-s>", normal = "<CR>" },
       close = { normal = { "q", "<Esc>" } },
       switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
+      open_file = { normal = { "gf", "gd" } },
+      zoom = { normal = "<leader>ez" },
+      expand_paste = { normal = { "za", "zo" } },
     },
     icons = {
       thinking = "🤔 ",
@@ -86,11 +89,25 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     auto_add_current_file = true, -- add current buffer as context
     slow_connect_ms = 10000,      -- nudge if connect exceeds this (0 disables)
     prompt_dirs = {},             -- e.g. { "~/.config/prompts" }
+    prompt_edit_before_send = true, -- edit a picked prompt before sending
+    fold_pasted_text = true,      -- collapse large pastes to one line
+    paste_fold_min_lines = 10,
+    paste_fold_min_chars = 1000,
+    show_title = true,            -- centered winbar title
+    tool_header_max_chars = 100,  -- clamp collapsed tool headers
+    diff_collapse_lines = 30,     -- longer diffs start folded behind K
+    claude_code = { extra_args = nil },        -- CLI flags for claude
+    kiro_cli = { mode = nil, rewind_key = "R" },
     acp = {
       debug = false,  -- per-session logs in stdpath("state")/emeth/logs/
+      auto_approve_tools = false, -- answer permission requests automatically
       providers = {
-        ["kiro-cli"] = { command = "kiro-cli", args = { "acp" } },
-        -- see :checkhealth emeth for all built-in providers
+        ["kiro-cli"] = {
+          command = "kiro-cli",
+          args = { "acp", "--agent-engine=v3", "--auth-method=cli" },
+        },
+        -- also claude-code, gemini-cli, goose, codex; each takes
+        -- command, args, env, pass_env, auth_method
       },
     },
   }
@@ -117,8 +134,8 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
 
                                                          *emeth-prompt_dirs*
 `prompt_dirs` ~
-  List of directories containing `.md` files that can be inserted via the
-  `@prompts` mention. Example: >lua
+  List of directories containing `.md` files that the `/prompts` slash
+  command offers (|emeth-slash-commands|). Example: >lua
 
   prompt_dirs = { "~/.config/prompts", ".prompts" }
 <
@@ -140,17 +157,46 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
 :EmethToggle                                                  *:EmethToggle*
   Toggle the sidebar open/closed.
 
+:EmethZoom                                                      *:EmethZoom*
+  Grow the sidebar to fill the screen, and back (also <leader>ez in the
+  chat windows).
+
 :EmethClose                                                    *:EmethClose*
   Close the sidebar and disconnect.
 
 :EmethHistory                                                *:EmethHistory*
-  Pick and resume a previous session.
+  Pick and resume a previous session from any directory (newest first). Each
+  row is badged "stale" (past the provider's retention, about to be pruned)
+  or "gone" (no longer resumable). With snacks.nvim the picker also offers,
+  in normal mode: `r` rename, `d` forget (drop emeth's entry only), `D`
+  delete (agent and emeth; refused for the active session), `S` prune every
+  "gone" row. Without snacks it falls back to |vim.ui.select|, resume only.
+
+:EmethResume [id]                                              *:EmethResume*
+  Resume a session by id, in the provider that recorded it. Without an id,
+  same as |:EmethHistory|. Exists only while a session is up.
 
 :EmethCancel                                                  *:EmethCancel*
   Cancel the current AI request. While the sidebar is still "connecting"
   (e.g. the agent's launcher is running updates before the handshake
   completes), this instead aborts the connection so you can retry with
-  |:Emeth|. Also bound to <C-c> inside the chat windows.
+  |:Emeth|. Also bound to <C-c> inside the chat windows. Exists only while a
+  session is up.
+
+SLASH COMMANDS                                          *emeth-slash-commands*
+
+Type `/` in the input buffer to pick one:
+
+  `/new`             Start a new session
+  `/fork`            Fork the current session (needs agent support)
+  `/clear`           Clear the chat messages
+  `/prompts`         Insert a prompt from |emeth-prompt_dirs|
+  `/help`            List available commands
+  `/model`, `/mode`, ...  One per config option the agent exposes; opens a
+                   picker (or flips a boolean option)
+  `/mcp-auth <server>`  kiro-cli: re-authenticate an MCP server
+
+Commands the agent advertises (e.g. skills) appear in the same picker.
 
 ==============================================================================
 6. LUA API                                                    *emeth-lua-api*
@@ -166,8 +212,15 @@ require("emeth").close()                                      *emeth.close()*
 require("emeth").toggle({provider?})                         *emeth.toggle()*
   Toggle the sidebar. Accepts an optional provider like |emeth.open()|.
 
+require("emeth").zoom()                                        *emeth.zoom()*
+  Toggle sidebar zoom. See |:EmethZoom|.
+
 require("emeth").history()                                  *emeth.history()*
-  Pick and resume a previous session.
+  Pick and resume a previous session. See |:EmethHistory|.
+
+require("emeth").resume({id}, {provider?})                   *emeth.resume()*
+  Resume session {id}. Its recorded provider wins over {provider}; a running
+  integration of another provider is replaced.
 
 require("emeth").cancel()                                    *emeth.cancel()*
   Cancel the current AI request, or abort an in-progress connection if the
@@ -186,8 +239,12 @@ Input buffer:
   `<C-s>`      Insert   Send message
   `<CR>`       Normal   Send message
   `<C-c>`      Both     Cancel the request, or abort a stuck connection
-  `<Tab>`      Normal   Switch between input and result
+  `<Tab>` `<S-Tab>`  Both  Switch between input and result
+  `za` / `zo`    Normal   Unfold the folded paste under the cursor
+  `<leader>ez`   Normal   Zoom the sidebar
   `q` / `<Esc>`  Normal   Close sidebar
+
+<C-c>, <Tab>/<S-Tab>, <leader>ez and q/<Esc> work in the result buffer too.
 
 Result buffer. These act on the message under the cursor:
 
@@ -200,22 +257,29 @@ Result buffer. These act on the message under the cursor:
              (|emeth-agent-interaction|); otherwise moves down a line
   `a` `A` `r` `R`  Answer a permission request: allow once/always,
              reject once/always
+  `C`          Cancel the subagent whose card is under the cursor, leaving
+             the main turn running (only while it runs)
+  `R`          kiro-cli: rewind, forking the session at the user message
+             under the cursor (`kiro_cli.rewind_key`)
+  `gf` / `gd`    Open the file path under the cursor in the code window
 
 ==============================================================================
 8. AGENT INTERACTION                                 *emeth-agent-interaction*
 
 STEERING
 
-Submitting while the agent is working delivers the message *into* the running
+Submitting while the agent is working delivers the message into the running
 turn instead of declining it, so a long edit can be corrected part-way through
 without cancelling and losing the work in flight.
 
-Steered messages are marked "steered" in the transcript, since they appear
-mid-stream between the agent's own output. If the turn finishes just as you
-submit, the message becomes an ordinary prompt instead.
+Steered messages are marked in the transcript header, since they appear
+mid-stream between the agent's own output: "steered" once the agent took it,
+"queued" while kiro-cli holds it for its next inference boundary, and "not
+delivered" if kiro-cli's turn ended first. With claude-code, if the turn
+finishes just as you submit, the message is sent as an ordinary prompt.
 
-Requires an agent that advertises steering (currently claude-code). Others
-decline input while a turn is in flight, as before.
+Supported by claude-code and kiro-cli. Other agents decline input while a turn
+is in flight, as before.
 
 QUESTIONS FROM THE AGENT
 
@@ -243,7 +307,12 @@ Type these in the input buffer to attach context:
   `@file`        Pick a project file
   `@buffers`     Attach all open buffers
   `@files`       Review/remove attached files
-  `@prompts`     Pick a prompt template from |emeth-prompt_dirs|
+  `@diagnostics` Attach LSP diagnostics from the current buffer
+  `@workspace`   Add a workspace root (sent as `additionalDirectories`)
+  `@roots`       Review/remove workspace roots
+
+Prompt templates come from the `/prompts` slash command
+(|emeth-slash-commands|).
 
 ==============================================================================
 10. PROVIDER SWITCHING                              *emeth-provider-switching*
@@ -256,8 +325,8 @@ Switch providers on the fly: >vim
 <
 
 When switching, the chat clears and a fresh session starts. If
-|emeth-default_provider| and `resume_last_session` are set, the last session
-for the new provider is resumed automatically.
+`resume_last_session` is set, the last session for the new provider in the
+current directory is resumed automatically.
 
 ==============================================================================
 11. ADDING A PROVIDER                                     *emeth-new-provider*
@@ -277,7 +346,8 @@ Add an entry to `acp.providers` in your config: >lua
 <
 
 Everything driven by the ACP protocol works automatically: streaming, tool
-calls, slash commands, plans, session info, file writes, and winbar states.
+calls, slash commands, config options, plans, session info, usage, permission
+requests and elicitations, file writes, and winbar states.
 
 For custom notifications beyond the ACP spec, create a module at
 `lua/emeth/integrations/<provider-name>.lua`. It will be loaded automatically.

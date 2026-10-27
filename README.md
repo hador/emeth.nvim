@@ -29,14 +29,17 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 - Chat sidebar with result + input split
 - Markdown rendering with treesitter highlighting
 - Tool call visualization with box-drawing, inline diffs, status glyphs
-- Thinking/reasoning blocks (collapsible)
-- Subagent tool calls folded under the task that spawned them
+- Thinking/reasoning blocks
+- Subagent cards: each subagent's tool calls fold under one card showing its
+  state, launch prompt and progress; `C` cancels just that subagent
 - The agent can ask you questions, answered inline without stealing focus
 - Steering: redirect a running turn instead of cancelling it
 - Winbar with spinner, context usage %, compaction indicator
-- File context mentions: `@file`, `@buffers`, `@files`
-- Prompt templates via `/prompts` (local `.md` files + MCP server prompts)
-- Session history: list, load, resume previous conversations
+- File context mentions: `@file`, `@buffers`, `@files`, `@diagnostics`
+- Workspace roots (`@workspace`, `@roots`) sent as ACP `additionalDirectories`
+- Prompt templates via `/prompts` (local `.md` files from `prompt_dirs`)
+- Agent config options (model, mode, effort, …) as `/model`-style slash commands
+- Session history: list, load, resume, fork; rewind to a past message (kiro-cli)
 - Provider switching on the fly (`:Emeth <provider>`)
 - Send visual selections to chat
 - Configurable layout, keymaps, icons
@@ -110,7 +113,7 @@ Default values:
 ```lua
 require("emeth").setup({
   sidebar = {
-    position = "right",  -- "right" | "left" | "bottom"
+    position = "right",  -- "right" | "left" | "top" | "bottom"
     width = 40,          -- columns (or % of screen for bottom)
     input_height = 8,    -- lines
   },
@@ -118,6 +121,9 @@ require("emeth").setup({
     submit = { insert = "<C-s>", normal = "<CR>" },
     close = { normal = { "q", "<Esc>" } },
     switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
+    open_file = { normal = { "gf", "gd" } },   -- open the path under the cursor next door
+    zoom = { normal = "<leader>ez" },          -- grow the sidebar to fill the screen and back
+    expand_paste = { normal = { "za", "zo" } }, -- unfold a folded paste in the input
   },
   icons = {
     thinking = "🤔 ",
@@ -130,11 +136,25 @@ require("emeth").setup({
   auto_add_current_file = true, -- add current buffer as context on open
   prompt_dirs = {},             -- e.g. { "~/.config/prompts", ".prompts" }
   prompt_edit_before_send = true, -- paste prompt into input for editing; false = send immediately
+  fold_pasted_text = true,      -- collapse large pastes to one placeholder line
+  paste_fold_min_lines = 10,    -- ...pastes of at least this many lines
+  paste_fold_min_chars = 1000,  -- ...or this many characters
+  show_title = true,            -- the centered "✦ אמת" winbar title
+  slow_connect_ms = 10000,      -- nudge when a connect takes this long (0 disables)
+  tool_header_max_chars = 100,  -- clamp a collapsed tool row's header (K shows the rest)
+  diff_collapse_lines = 30,     -- diffs longer than this start folded behind K
+  claude_code = {
+    extra_args = nil,           -- CLI flags for claude, e.g. { agent = "my-agent" } (see below)
+  },
+  kiro_cli = {
+    mode = nil,                 -- default mode/agent for new kiro sessions (see below)
+    rewind_key = "R",           -- result-buffer rewind key on a user message; false disables
+  },
   acp = {
     debug = false,               -- per-session logs in stdpath("state")/emeth/logs/
     auto_approve_tools = false, -- auto-approve tool permission requests
     providers = {
-      ["claude-code"] = { command = "npx", args = { "-y", "@agentclientprotocol/claude-agent-acp" } },
+      ["claude-code"] = { command = "npx", args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" } },
       ["gemini-cli"]  = { command = "gemini", args = { "--acp" } },
       ["goose"]       = { command = "goose", args = { "acp" } },
       ["codex"]       = { command = "npx", args = { "-y", "-g", "@zed-industries/codex-acp" } },
@@ -155,19 +175,26 @@ require("emeth").setup({
 | Command | Description |
 |---------|-------------|
 | `:Emeth [provider]` | Open sidebar and connect (switch provider if different) |
+| `:EmethNew [provider]` | Open with a fresh session, skipping `resume_last_session` |
 | `:EmethToggle` | Toggle sidebar |
+| `:EmethZoom` | Grow the sidebar to fill the screen, and back |
 | `:EmethClose` | Close sidebar and disconnect |
-| `:EmethHistory` | Pick and resume a previous session |
+| `:EmethHistory` | Pick and resume a previous session, from any directory |
+| `:EmethResume [id]` | Resume a session by id (no id: same as `:EmethHistory`) |
 | `:EmethCancel` | Cancel current AI request (or abort a stuck connection) |
+
+`:EmethResume` and `:EmethCancel` exist only while a session is up.
 
 ### Lua API
 
 | Function | Description |
 |----------|-------------|
-| `require("emeth").open(provider?)` | Open/focus sidebar, optionally switch provider |
+| `require("emeth").open(provider?, { fresh? })` | Open/focus sidebar, optionally switch provider; `fresh = true` skips resume |
 | `require("emeth").close()` | Close sidebar and disconnect |
 | `require("emeth").toggle(provider?)` | Toggle sidebar |
+| `require("emeth").zoom()` | Toggle sidebar zoom |
 | `require("emeth").history()` | Pick and resume a previous session |
+| `require("emeth").resume(id, provider?)` | Resume a session by id (in its recorded provider) |
 | `require("emeth").cancel()` | Cancel current AI request (or abort a stuck connection) |
 | `require("emeth").send_selection()` | Send visual selection to chat |
 
@@ -181,7 +208,23 @@ Switch providers on the fly without closing the sidebar:
 :Emeth              " focus sidebar (no switch)
 ```
 
-When switching, the chat clears and a fresh session starts. If `resume_last_session` is set, the last session for the new provider is resumed automatically.
+When switching, the chat clears and a fresh session starts. If `resume_last_session` is set, the last session for the new provider in this directory is resumed automatically.
+
+### Slash commands
+
+Type `/` in the input buffer to pick one.
+
+| Command | Action |
+|---------|--------|
+| `/new` | Start a new session |
+| `/fork` | Fork the current session into a new one (needs agent support) |
+| `/clear` | Clear the chat messages |
+| `/prompts` | Insert a prompt from `prompt_dirs` |
+| `/help` | List available commands |
+| `/model`, `/mode`, `/effort`, … | One per config option the agent exposes (ACP `configOptions`); opens a picker, or flips a boolean option |
+| `/mcp-auth <server>` | kiro-cli only: re-authenticate an MCP server |
+
+Agents may also advertise their own commands (claude-code and kiro-cli surface skills this way); they appear in the same picker.
 
 ### Session history
 
@@ -225,8 +268,12 @@ removing the persisted history for good.
 | `<C-s>` | Insert | Send message |
 | `<CR>` | Normal | Send message |
 | `<C-c>` | Insert/Normal | Cancel the current request, or abort a stuck connection |
-| `<Tab>` | Normal | Switch between input/result |
+| `<Tab>` / `<S-Tab>` | Insert/Normal | Switch between input/result |
+| `za` / `zo` | Normal | Unfold the folded paste under the cursor |
+| `<leader>ez` | Normal | Zoom the sidebar |
 | `q` / `<Esc>` | Normal | Close sidebar |
+
+`<C-c>`, `<Tab>`/`<S-Tab>`, `<leader>ez` and `q`/`<Esc>` work in the result buffer too.
 
 ### Result buffer
 
@@ -240,6 +287,8 @@ Keys act on the message under the cursor.
 | `<CR>` | Answer the question under the cursor (see below); otherwise moves down a line |
 | `a` `A` `r` `R` | Answer a permission request: allow once / always, reject once / always |
 | `C` | Cancel the subagent whose card is under the cursor, leaving the main turn running (shown only while it is still running) |
+| `R` | kiro-cli: rewind, forking the session at the user message under the cursor (`kiro_cli.rewind_key`); during a permission prompt `R` is reject-always |
+| `gf` / `gd` | Open the file path under the cursor in the code window (honours `:LINE`) |
 
 ### Steering a running turn
 
@@ -250,12 +299,19 @@ without cancelling and losing the work in flight:
 > The agent is 30 seconds into a refactor. You type "use tabs, not spaces" and
 > submit. It picks that up and carries on in the same turn.
 
-Steered messages are marked `⤳ steered` in the transcript, since they appear
-mid-stream between the agent's own output. If the turn happens to finish just as
-you submit, the message becomes an ordinary prompt instead.
+Steered messages are marked in the transcript header, since they appear
+mid-stream between the agent's own output:
 
-Requires an agent that advertises steering (currently claude-code). Others keep
-the previous behaviour of declining input while a turn is in flight.
+- `⤳ steered`: the agent took it into the running turn.
+- `⤳ queued`: kiro-cli accepted it into its queue; it is injected at the next
+  inference boundary and then turns into `⤳ steered`.
+- `⤳ not delivered`: kiro-cli's turn ended before picking it up.
+
+With claude-code, if the turn happens to finish just as you submit, the message
+is sent as an ordinary prompt instead.
+
+Supported by claude-code and kiro-cli. Other agents keep the previous behaviour
+of declining input while a turn is in flight.
 
 ### Answering the agent's questions
 
@@ -293,8 +349,10 @@ Type these in the input buffer:
 | `@buffers` | Attach all open buffers as context |
 | `@files` | Review/remove attached context files |
 | `@diagnostics` | Attach LSP diagnostics from current buffer |
+| `@workspace` | Add a workspace root directory (sent as `additionalDirectories` on the next session start) |
+| `@roots` | Review/remove workspace roots |
 
-Prompts are available via the `/prompts` slash command (type `/` to see all commands), sourced from `~/.kiro/prompts/` and any `prompt_dirs`. Agents may also advertise their own slash commands (kiro-cli surfaces skills and steering docs this way). When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
+Prompts come from the `/prompts` slash command, which reads the `.md` files in `prompt_dirs`. When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
 
 ## Statusline
 
@@ -345,6 +403,11 @@ Everything driven by the ACP protocol is handled generically:
 - **Slash commands** — `available_commands_update` registers commands in the `/` picker
 - **Plans** — `plan` updates render as checklists
 - **Session info** — `session_info_update` updates the title
+- **Config options** — `configOptions` / `config_option_update` become slash commands with pickers
+- **Usage** — `usage_update` drives the context % and cost
+- **Questions** — `session/request_permission` and form elicitations render inline
+- **Subagents** — the ACP subagents RFD (`subagent_update`, `session_message`), when the provider config advertises `capabilities = { subagents = vim.empty_dict() }`
+- **Session lifecycle** — `session/load`, `close`, `fork` and `delete` when the agent advertises them
 - **File writes** — buffers auto-reload when the agent writes files
 - **Winbar** — spinner states (`connecting` → `generating` → `ready`) work for all providers. A slow connect (e.g. a launcher running updates before the handshake) can be aborted with `<C-c>`.
 
@@ -396,8 +459,9 @@ A provider extension at `lua/emeth/integrations/<provider>.lua` may export any o
 | Hook | Signature | Called when |
 |------|-----------|-------------|
 | `setup` | `(session, view) → cleanup()` | Session connection — subscribe to events, register `@mention` handlers, etc. |
-| `build_session_meta` | `(emeth_config) → meta\|nil` | About to send `session/new` or `session/load` — return a `_meta` payload to attach |
+| `build_session_meta` | `(emeth_config, kind) → meta\|nil` | About to send `session/new` (`kind = "new"`) or `session/load` (`"load"`) — return a `_meta` payload to attach |
 | `format_mode` | `(mode_id) → render_desc\|nil` | A `current_mode_update` arrives — return `{ badge?, tag?, tag_kind? }` for winbar rendering |
+| `format_model` | `(model_id) → string` | Displaying the model — shorten a provider-shaped id (the core still clamps the length) |
 
 `render_desc` fields:
 - `badge` — text shown in the right winbar segment as a `mode` badge. Omit/empty to clear.
@@ -410,7 +474,9 @@ In addition to the module-level hooks above, an extension's `setup(session, view
 
 | Setter | Callback | Purpose |
 |--------|----------|---------|
-| `view.integration.set_transform_update(fn)` | `fn(update)` | Mutate a `session/update` payload in place before the integration consumes it. The bundled claude-code extension uses this to enrich Task tool_call titles with the subagent's description and type. |
+| `view.integration.set_transform_update(fn)` | `fn(update) → false?` | Mutate a `session/update` payload in place before the integration consumes it; return `false` to drop it. The bundled claude-code extension lifts subagent attribution and enriches Agent/Task titles this way. |
+| `view.integration.set_transform_elicitation(fn)` | `fn(fields, request) → fields?` | Reshape parsed elicitation fields before they render (claude-code folds AskUserQuestion's "Other" box into its question). |
+| `view.integration.set_steering(strategy)` | `{ supported, steer }` | Let a submit during a running turn steer it. `supported` is a boolean or a function; `steer(prompt, text, cb)` answers `cb(outcome, err, info?)` with `"injected"`, `"promptRequired"` or `"queued"`. |
 
 Pass `nil` to clear; the integration also clears registered callbacks on disconnect. The setter exists at `view.integration` from the moment `setup` is called, so the registration can happen synchronously inside `setup`.
 
@@ -561,12 +627,13 @@ Winbar.set_right(Winbar.fmt.gradient(72))
 
 ### Session extensions
 
-Providers that return `models` or `modes` in their `createSession` response get them stored in `session.extensions`:
+What the agent reports about the session is kept in `session.extensions`:
 
-- `session.extensions.model_id` — current model
-- `session.extensions.mode_id` — current mode/agent
+- `session.extensions.config_options` — the agent's current `configOptions`, keyed by id. Each `session/new`/`load` result, `set_config_option` response and `config_option_update` replaces the whole set.
+- `session.extensions.model_id` — current model, from the `model` config option (or a `models` field, for agents that still send one)
+- `session.extensions.mode_id` — current mode, from the `mode` option, `modes`, or `current_mode_update`
 
-These are displayed in session metadata and can be updated via custom notifications.
+They feed the winbar and the per-prompt details (`K` on a user message).
 
 ## Health
 
