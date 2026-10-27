@@ -461,6 +461,22 @@ function M.setup_integration(view, session)
     return prompt
   end
 
+  ---Upsert this session's index entry. The cwd is the session's bound one, not
+  ---nvim's current one: they differ once the user has :cd'd away, and the index
+  ---must point at the directory the transcript actually lives in (the same
+  ---source the fork/load requests use). A fork or rewind passes its parent.
+  ---@param id string
+  ---@param forked_from? string
+  local function save_entry(id, forked_from)
+    Sessions.save({
+      session_id = id,
+      provider = session.provider_name,
+      cwd = session.cwd or vim.fn.getcwd(),
+      additional_directories = roots:save_field(),
+      forked_from = forked_from,
+    })
+  end
+
   ---Enter this session in the local index, keyed on its first prompt.
   ---
   ---Deliberately not at connect time: connecting is what `:Emeth` does on open,
@@ -479,15 +495,7 @@ function M.setup_integration(view, session)
     if not id then
       return
     end
-    Sessions.save({
-      session_id = id,
-      provider = session.provider_name,
-      -- The session's bound cwd, not nvim's current one -- they differ once the
-      -- user has :cd'd away, and the index must point at the directory the
-      -- transcript actually lives in (same source the fork/load requests use).
-      cwd = session.cwd or vim.fn.getcwd(),
-      additional_directories = roots:save_field(),
-    })
+    save_entry(id)
     local entry = Sessions.get(id)
     if entry and not entry.title then
       Sessions.update_title(id, first_text:sub(1, 80):gsub("\n", " "))
@@ -555,8 +563,8 @@ function M.setup_integration(view, session)
     -- in-flight session/prompt still owns settling the activity state, and
     -- bumping the epoch would invalidate its callback, stranding the winbar in
     -- "generating" forever.
-    if session:is_connected() and activity == "generating" and steering_supported() and steering then
-      local strat = steering
+    if session:is_connected() and activity == "generating" and steering_supported() then
+      local strat = assert(steering) -- steering_supported() implies it
       local prompt = build_prompt(text)
       local msg = add_user_message(text)
       -- Close the text/thought blocks the turn was streaming into. They sit
@@ -822,24 +830,22 @@ function M.setup_integration(view, session)
   -- whose child is still live and advertised `cancel`, so it is absent on a
   -- finished subagent and on ordinary tool calls. Capital, so it reads as
   -- deliberate.
-  if view.add_action then
-    view:add_action({
-      key = "C",
-      hint = "C: cancel subagent",
-      when = function(m)
-        local meta = m.metadata
-        return meta ~= nil
-          and meta.subagent_session_id ~= nil
-          and meta.subagent_cancellable == true
-          and (meta.subagent_state == "running" or meta.subagent_state == "requires_action")
-      end,
-      run = function(m)
-        session:cancel(m.metadata.subagent_session_id)
-        local title = m.metadata.tool_call and m.metadata.tool_call.title
-        view:add_message(Message:new("system", "⏹ Cancelled subagent" .. (title and (": " .. title) or "")))
-      end,
-    })
-  end
+  view:add_action({
+    key = "C",
+    hint = "C: cancel subagent",
+    when = function(m)
+      local meta = m.metadata
+      return meta ~= nil
+        and meta.subagent_session_id ~= nil
+        and meta.subagent_cancellable == true
+        and (meta.subagent_state == "running" or meta.subagent_state == "requires_action")
+    end,
+    run = function(m)
+      session:cancel(m.metadata.subagent_session_id)
+      local title = m.metadata.tool_call and m.metadata.tool_call.title
+      view:add_message(Message:new("system", "⏹ Cancelled subagent" .. (title and (": " .. title) or "")))
+    end,
+  })
 
   -- ── Elicitation ──────────────────────────────────────────────
   -- The agent asks the user a structured question and blocks its turn on the
@@ -1148,17 +1154,23 @@ function M.setup_integration(view, session)
     schedule_reload(path, first_changed)
   end)
 
-  -- Stub integration that exposes only the per-session setters extensions
-  -- need *during* setup. The real `integration` table is built below; we
-  -- set `view.integration` to it later. Any setter the extension calls here
-  -- mutates the same upvalue the real integration's method will mutate.
+  -- The per-session setters an extension calls *during* setup, before the real
+  -- `integration` table exists (it's built below). The real table carries the
+  -- same functions, so a provider's cleanup can clear its hooks at disconnect.
   local ext_integration = {
+    ---Register a function that mutates session/update payloads in place
+    ---before the integration consumes them (return false to drop). nil clears.
+    ---@param fn fun(update: table): boolean|nil
     set_transform_update = function(fn)
       transform_update_fn = fn
     end,
+    ---Register a function that enriches parsed elicitation fields before they
+    ---are rendered, returning the list to use. nil clears.
+    ---@param fn fun(fields: acp.ElicitationField[], request: table): acp.ElicitationField[]|nil
     set_transform_elicitation = function(fn)
       transform_elicitation_fn = fn
     end,
+    ---Install the provider's steering strategy (`{ supported, steer }`). nil clears.
     set_steering = function(s)
       steering = s
     end,
@@ -1512,15 +1524,7 @@ function M.setup_integration(view, session)
             -- moment the parent id is known. Chains nest naturally — each fork
             -- points at its direct parent.
             if session.session_id then
-              Sessions.save({
-                session_id = session.session_id,
-                provider = session.provider_name,
-                -- The fork's cwd is its parent's -- the directory the transcript
-                -- lives in -- not wherever nvim happens to be now.
-                cwd = session.cwd or vim.fn.getcwd(),
-                additional_directories = roots:save_field(),
-                forked_from = parent,
-              })
+              save_entry(session.session_id, parent)
             end
             announce_session("Forked session.")
           end
@@ -1550,14 +1554,7 @@ function M.setup_integration(view, session)
             done(nil)
             return
           end
-          Sessions.save({
-            session_id = fork_id,
-            provider = session.provider_name,
-            -- The rewound fork's cwd is its parent's, not nvim's current one.
-            cwd = session.cwd or vim.fn.getcwd(),
-            additional_directories = roots:save_field(),
-            forked_from = parent,
-          })
+          save_entry(fork_id, parent)
           -- Rebuild from the fork's truncated replay. Cleared only now, so the
           -- old transcript stays up until the replay is ready (no empty gap).
           vim.schedule(function()
@@ -1600,29 +1597,9 @@ function M.setup_integration(view, session)
       Winbar.set_left(Winbar.fmt.plain(session.provider_name))
       set_activity(activity)
     end,
-
-    ---Register a function that mutates session/update payloads in place
-    ---before the integration consumes them. Pass nil to clear.
-    ---@param fn fun(update: table)|nil
-    set_transform_update = function(fn)
-      transform_update_fn = fn
-    end,
-
-    ---Register a function that enriches parsed elicitation fields before they
-    ---are rendered, returning the list to use. Pass nil to clear.
-    ---@param fn fun(fields: acp.ElicitationField[], request: table): acp.ElicitationField[]|nil
-    set_transform_elicitation = function(fn)
-      transform_elicitation_fn = fn
-    end,
   }
-
-  -- Transfer any extra fields the provider extension added to the temporary
-  -- stub onto the real integration table so they remain accessible after the
-  -- stub is replaced.
   for k, v in pairs(ext_integration) do
-    if integration[k] == nil then
-      integration[k] = v
-    end
+    integration[k] = v
   end
 
   view.integration = integration
