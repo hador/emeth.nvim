@@ -203,6 +203,10 @@ function M.setup_integration(view, session)
   ---@type "idle"|"connecting"|"generating"|"cancelled"
   local activity = "idle"
   local epoch = 0
+  -- Outstanding `session/prompt` requests. Counted separately from `activity`
+  -- because a cancel invalidates the prompt's callback (epoch) without the
+  -- request itself being answered yet. Zero means any streaming is unsolicited.
+  local prompts_in_flight = 0
   local WINBAR = { idle = "ready", cancelled = "ready", connecting = "connecting", generating = "generating" }
 
   local function set_activity(a)
@@ -517,8 +521,10 @@ function M.setup_integration(view, session)
     reset_state()
     Winbar.clear_mode_tag()
     local token = begin("generating")
+    prompts_in_flight = prompts_in_flight + 1
     session:send_prompt(prompt, function(_, err)
       vim.schedule(function()
+        prompts_in_flight = math.max(0, prompts_in_flight - 1)
         if epoch == token then
           set_activity("idle")
         end
@@ -689,6 +695,23 @@ function M.setup_integration(view, session)
       and not update.replay
     then
       set_activity("generating")
+    end
+
+    -- ...and the matching exit. An unsolicited turn (claude-acp: one Claude Code
+    -- starts with no prompt open, e.g. to answer a background-task notification)
+    -- has no `session/prompt` response to settle it, so the flip above would
+    -- strand the winbar in "generating". Its end is the turn result's
+    -- `usage_update` -- the only one that carries `cost` -- which the agent sends
+    -- after the turn's last chunk, cancelled or not. With a prompt in flight the
+    -- response owns settling, so this stays out of the way.
+    if
+      not from_subagent
+      and update.sessionUpdate == "usage_update"
+      and type(update.cost) == "table"
+      and prompts_in_flight == 0
+      and (activity == "generating" or activity == "cancelled")
+    then
+      set_activity("idle")
     end
 
     local handler = update_handlers[update.sessionUpdate]
