@@ -32,18 +32,7 @@
 ---@field name string
 ---@field description string|nil
 
----@class acp.McpServer
----@field name string
----@field command string
----@field args string[]
----@field env acp.EnvVariable[]
-
----@class acp.EnvVariable
----@field name string
----@field value string
-
----@alias acp.StopReason "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled"
----@alias acp.ToolKind "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "other"
+---@alias acp.ToolKind "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "switch_mode" | "other"
 ---@alias acp.ToolCallStatus "pending" | "in_progress" | "completed" | "failed"
 ---@alias acp.PlanEntryStatus "pending" | "in_progress" | "completed"
 ---@alias acp.PlanEntryPriority "high" | "medium" | "low"
@@ -93,16 +82,6 @@
 
 ---@alias acp.Content acp.TextContent | acp.ImageContent | acp.AudioContent | acp.ResourceLinkContent | acp.ResourceContent
 
----@class acp.ToolCall
----@field toolCallId string
----@field title string
----@field kind acp.ToolKind
----@field status acp.ToolCallStatus
----@field content acp.ToolCallContent[]
----@field locations acp.ToolCallLocation[]
----@field rawInput table
----@field rawOutput table
-
 ---@class acp.BaseToolCallContent
 ---@field type "content" | "diff"
 
@@ -127,20 +106,16 @@
 ---@field priority acp.PlanEntryPriority
 ---@field status acp.PlanEntryStatus
 
----@class acp.Plan
----@field entries acp.PlanEntry[]
-
 ---@class acp.AvailableCommand
 ---@field name string
 ---@field description string
 ---@field input? table<string, any>
 
 ---@class acp.BaseSessionUpdate
----@field sessionUpdate "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" | "plan" | "available_commands_update" | "session_info_update"
-
----@class acp.UserMessageChunk : acp.BaseSessionUpdate
----@field sessionUpdate "user_message_chunk"
----@field content acp.Content
+---The types emeth dispatches (acp_updates.lua). `subagent_update` and
+---`session_message` are the ACP subagents RFD (draft), sent because emeth
+---advertises `clientCapabilities.subagents`.
+---@field sessionUpdate "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" | "plan" | "available_commands_update" | "session_info_update" | "current_mode_update" | "config_option_update" | "usage_update" | "subagent_update" | "session_message"
 
 ---@class acp.AgentMessageChunk : acp.BaseSessionUpdate
 ---@field sessionUpdate "agent_message_chunk"
@@ -168,21 +143,6 @@
 ---@class acp.AvailableCommandsUpdate : acp.BaseSessionUpdate
 ---@field sessionUpdate "available_commands_update"
 ---@field availableCommands acp.AvailableCommand[]
-
----@class acp.SessionInfoUpdate : acp.BaseSessionUpdate
----@field sessionUpdate "session_info_update"
----@field title? string|nil
----@field updatedAt? string|nil
----@field _meta? table
-
----@class acp.PermissionOption
----@field optionId string
----@field name string
----@field kind "allow_once" | "allow_always" | "reject_once" | "reject_always"
-
----@class acp.RequestPermissionOutcome
----@field outcome "cancelled" | "selected"
----@field optionId string|nil
 
 --- Inbound `elicitation/create`. `mode` is "form" (renders `requestedSchema`)
 --- or "url" (send the user to `url`, then await `elicitation/complete`).
