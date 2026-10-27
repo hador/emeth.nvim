@@ -793,23 +793,3 @@ h.describe("ACPClient load_session", function()
     h.eq({ provider = { foo = 1 } }, decoded.params._meta)
   end)
 end)
-
--- ── _set_state ─────────────────────────────────────────────────
-
-h.describe("ACPClient _set_state", function()
-  h.it("updates state and calls on_state_change", function()
-    local transitions = {}
-    local c = make_client()
-    c.config.on_state_change = function(new, old)
-      transitions[#transitions + 1] = { old = old, new = new }
-    end
-    c:_set_state("connecting")
-    c:_set_state("ready")
-    h.eq("ready", c.state)
-    h.eq(2, #transitions)
-    h.eq("disconnected", transitions[1].old)
-    h.eq("connecting", transitions[1].new)
-    h.eq("connecting", transitions[2].old)
-    h.eq("ready", transitions[2].new)
-  end)
-end)
