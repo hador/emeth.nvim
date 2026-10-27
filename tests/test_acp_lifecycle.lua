@@ -641,6 +641,51 @@ h.describe("acp integration: session config options (/model etc.)", function()
     Commands.clear_config()
   end)
 
+  local EFFORT_OPT = {
+    id = "effort",
+    type = "select",
+    name = "Effort",
+    currentValue = "high",
+    options = { { value = "high", name = "High" }, { value = "low", name = "Low" } },
+  }
+
+  h.it("a snapshot that drops an option unregisters its command", function()
+    Commands.clear_config()
+    local session = make_setup()
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT, EFFORT_OPT } })
+    flush()
+    h.is_true(Commands.get("effort") ~= nil, "/effort registered while offered")
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT } })
+    flush()
+    h.is_nil(Commands.get("effort"), "/effort must go once the agent stops offering it")
+    h.is_true(Commands.get("model") ~= nil)
+    Commands.clear_config()
+  end)
+
+  h.it("ignores a subagent's one-entry model report (child session or parentToolUseId)", function()
+    Commands.clear_config()
+    local session = make_setup()
+    session:_emit("update", { sessionUpdate = "config_option_update", configOptions = { MODEL_OPT, EFFORT_OPT } })
+    flush()
+    local child_model = { id = "model", type = "select", currentValue = "haiku", options = {} }
+    -- On the child's own (not yet announced) session...
+    session:_emit(
+      "update",
+      { sessionUpdate = "config_option_update", configOptions = { child_model } },
+      "a1b2c3d4e5f6a7b8c"
+    )
+    -- ...and addressed to the root, tagged with the child's launching call.
+    session:_emit("update", {
+      sessionUpdate = "config_option_update",
+      configOptions = { child_model },
+      _meta = { claudeCode = { parentToolUseId = "toolu_1" } },
+    }, session.session_id)
+    flush()
+    h.eq("opus", session.extensions.config_options.model.currentValue, "root model untouched")
+    h.is_true(Commands.get("effort") ~= nil, "root options not replaced by the child's single entry")
+    Commands.clear_config()
+  end)
+
   h.it("disconnect clears config commands", function()
     Commands.clear_config()
     local session, _, integration = make_setup()

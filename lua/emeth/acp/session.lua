@@ -308,12 +308,15 @@ function Session:_extract_session_info(result)
   if result.modes and result.modes.currentModeId then
     self.extensions.mode_id = result.modes.currentModeId
   end
-  -- Standard ACP session config options (model, mode, effort, agent, fast, ...).
+  -- Standard ACP session config options (model, mode, effort, ultracode, ...).
   -- Keyed by id so the integration can drive a generic picker per option
   -- without knowing which ids an agent happens to expose. Present on
-  -- session/new, session/load, and pushed via `config_option_update`.
+  -- session/new, session/load, the set_config_option response, and pushed via
+  -- `config_option_update`. Every one of those carries the session's FULL set,
+  -- so each replaces the last: an option the agent stopped offering (e.g.
+  -- effort after a switch to a model without it) must disappear, not linger.
   if type(result.configOptions) == "table" then
-    self.extensions.config_options = self.extensions.config_options or {}
+    self.extensions.config_options = {}
     for _, opt in ipairs(result.configOptions) do
       if opt.id then
         self.extensions.config_options[opt.id] = opt
