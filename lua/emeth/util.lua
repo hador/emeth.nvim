@@ -42,12 +42,16 @@ function M.debounce(ms, fn)
   }
 end
 
----Format an ACP error, including .data when present.
----@param err table|nil
+---Format an ACP error, including .data when present. A bare string (some
+---callbacks pass one) is returned as is.
+---@param err table|string|nil
 ---@return string
 function M.fmt_err(err)
   if not err then
     return "unknown error"
+  end
+  if type(err) ~= "table" then
+    return tostring(err)
   end
   local msg = err.message or "unknown error"
   if err.data then

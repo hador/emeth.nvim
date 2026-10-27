@@ -630,8 +630,7 @@ function ACPClient:initialize(callback)
       self:_set_state("error")
       vim.schedule(function()
         vim.notify(
-          "[emeth-acp] Failed to initialize: "
-            .. (err and (err.message or "") .. (err.data and (": " .. tostring(err.data)) or "") or "missing result"),
+          "[emeth-acp] Failed to initialize: " .. (err and require("emeth.util").fmt_err(err) or "missing result"),
           vim.log.levels.ERROR
         )
       end)
@@ -718,10 +717,7 @@ function ACPClient:create_session(cwd, mcp_servers, opts_or_cb, maybe_cb)
   self:_send_request("session/new", params, function(result, err)
     if err then
       vim.schedule(function()
-        vim.notify(
-          "[emeth-acp] Failed to create session: " .. err.message .. (err.data and (": " .. tostring(err.data)) or ""),
-          vim.log.levels.ERROR
-        )
+        vim.notify("[emeth-acp] Failed to create session: " .. require("emeth.util").fmt_err(err), vim.log.levels.ERROR)
       end)
       callback(nil, err)
       return

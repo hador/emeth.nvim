@@ -358,7 +358,7 @@ function M.setup(session, view)
       session:request("_kiro/mcp/resetServer", { serverName = server, startOAuth = true }, function(_, err)
         if err then
           vim.schedule(function()
-            view:add_message(Message:new("system", "MCP auth failed: " .. tostring(err.message or err)))
+            view:add_message(Message:new("system", "MCP auth failed: " .. require("emeth.util").fmt_err(err)))
           end)
         end
       end)

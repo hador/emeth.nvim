@@ -6,6 +6,10 @@ h.describe("Util", function()
     h.eq("unknown error", util.fmt_err(nil))
   end)
 
+  h.it("fmt_err passes a bare string through", function()
+    h.eq("socket closed", util.fmt_err("socket closed"))
+  end)
+
   h.it("fmt_err with message only", function()
     h.eq("something broke", util.fmt_err({ message = "something broke" }))
   end)
