@@ -343,8 +343,7 @@ h.describe("render: oversized tool headers", function()
 
     h.it("keeps the command above the output", function()
       local msg = bash_msg(SCRIPT)
-      msg.metadata.tool_call.content =
-        { { type = "content", content = { type = "text", text = "OUTPUT_MARKER" } } }
+      msg.metadata.tool_call.content = { { type = "content", content = { type = "text", text = "OUTPUT_MARKER" } } }
       local out = expanded(msg)
       local cmd_at = out:find("import sys", 1, true)
       local out_at = out:find("OUTPUT_MARKER", 1, true)
@@ -435,7 +434,7 @@ h.describe("render: oversized tool headers", function()
     local emeth = package.loaded["emeth"]
     local long = "grep -rn " .. string.rep("x", 400)
     emeth.config.tool_header_max_chars = 20
-        local short = vim.fn.strchars(tostring(Render.render_message(bash_msg(long), {})[1]))
+    local short = vim.fn.strchars(tostring(Render.render_message(bash_msg(long), {})[1]))
     emeth.config.tool_header_max_chars = 200
     local wide = vim.fn.strchars(tostring(Render.render_message(bash_msg(long), {})[1]))
     emeth.config.tool_header_max_chars = nil
@@ -479,16 +478,15 @@ h.describe("render: model-supplied summary as the header", function()
   end
 
   h.it("labels the collapsed row with the summary, not the command", function()
-    local row = tostring(Render.render_message(
-      exec_msg({ command = "grep -rn foo src/ | head -50", desc = "Find the cache API" }),
-      {}
-    )[1])
+    local row = tostring(
+      Render.render_message(exec_msg({ command = "grep -rn foo src/ | head -50", desc = "Find the cache API" }), {})[1]
+    )
     h.is_true(row:find("Find the cache API", 1, true) ~= nil, "summary missing: " .. row)
     h.is_true(row:find("grep -rn", 1, true) == nil, "command should not be in the header: " .. row)
   end)
 
   h.it("keeps that row to one line even for a huge command", function()
-    local msg = exec_msg({ command = "python3 -c \"\n" .. string.rep("print(1)\n", 200) .. '"', desc = "Run a script" })
+    local msg = exec_msg({ command = 'python3 -c "\n' .. string.rep("print(1)\n", 200) .. '"', desc = "Run a script" })
     local content = vim.tbl_filter(function(l)
       return tostring(l) ~= ""
     end, Render.render_message(msg, {}))
@@ -501,10 +499,7 @@ h.describe("render: model-supplied summary as the header", function()
   end)
 
   h.it("ignores a multi-line description, which would defeat the point", function()
-    local row = tostring(Render.render_message(
-      exec_msg({ command = "ls -la", desc = "line one\nline two" }),
-      {}
-    )[1])
+    local row = tostring(Render.render_message(exec_msg({ command = "ls -la", desc = "line one\nline two" }), {})[1])
     h.is_true(row:find("line two", 1, true) == nil, "multi-line summary leaked into the header: " .. row)
     h.is_true(row:find("ls -la", 1, true) ~= nil, "should have fallen back to the command: " .. row)
   end)
@@ -749,7 +744,10 @@ h.describe("render: subagent nesting", function()
       })
       return tostring(Render.render_message(msg, { msg })[1])
     end
-    h.is_true(icon("running"):find(icons.tool_generating, 1, true) ~= nil, "running shows the in-progress icon, not a tick")
+    h.is_true(
+      icon("running"):find(icons.tool_generating, 1, true) ~= nil,
+      "running shows the in-progress icon, not a tick"
+    )
     h.is_true(icon("running"):find(icons.tool_succeeded, 1, true) == nil)
     h.is_true(icon("requires_action"):find(icons.tool_generating, 1, true) ~= nil)
     h.is_true(icon("failed"):find(icons.tool_failed, 1, true) ~= nil)
@@ -824,10 +822,7 @@ h.describe("render: steered marker", function()
   h.it("is visible without expanding details", function()
     local msg = Message:new("user", "use tabs", { steer_state = "steered", model = "opus" })
     h.eq(false, msg._show_details == true)
-    local text = table.concat(
-      vim.tbl_map(tostring, Render.render_message(msg, { msg })),
-      "\n"
-    )
+    local text = table.concat(vim.tbl_map(tostring, Render.render_message(msg, { msg })), "\n")
     h.is_true(text:find("steered", 1, true) ~= nil)
   end)
 end)

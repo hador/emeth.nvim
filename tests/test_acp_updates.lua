@@ -48,8 +48,14 @@ h.describe("acp integration: agent_message_chunk", function()
   -- (claude emits trailing/followup messages). Same id streams into one block.
   h.it("streams same-id chunks into one block", function()
     local session, view = make_setup()
-    session:_emit("update", { sessionUpdate = "agent_message_chunk", messageId = "m1", content = { type = "text", text = "foo" } })
-    session:_emit("update", { sessionUpdate = "agent_message_chunk", messageId = "m1", content = { type = "text", text = "bar" } })
+    session:_emit(
+      "update",
+      { sessionUpdate = "agent_message_chunk", messageId = "m1", content = { type = "text", text = "foo" } }
+    )
+    session:_emit(
+      "update",
+      { sessionUpdate = "agent_message_chunk", messageId = "m1", content = { type = "text", text = "bar" } }
+    )
     h.eq(1, #view.messages)
     h.eq("foobar", view.messages[1]:text())
   end)
@@ -58,8 +64,14 @@ h.describe("acp integration: agent_message_chunk", function()
   -- line so the two don't run together on one line ("...relaying.Let me...").
   h.it("separates a new messageId with a blank line", function()
     local session, view = make_setup()
-    session:_emit("update", { sessionUpdate = "agent_message_chunk", messageId = "m1", content = { type = "text", text = "first." } })
-    session:_emit("update", { sessionUpdate = "agent_message_chunk", messageId = "m2", content = { type = "text", text = "Second." } })
+    session:_emit(
+      "update",
+      { sessionUpdate = "agent_message_chunk", messageId = "m1", content = { type = "text", text = "first." } }
+    )
+    session:_emit(
+      "update",
+      { sessionUpdate = "agent_message_chunk", messageId = "m2", content = { type = "text", text = "Second." } }
+    )
     h.eq(1, #view.messages)
     h.eq("first.\n\nSecond.", view.messages[1]:text())
   end)

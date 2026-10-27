@@ -31,25 +31,28 @@ end)
 
 h.describe("validity.claude_transcript_path", function()
   h.it("builds the projects/<sanitized>/<id>.jsonl path", function()
-    h.eq(
-      "/home/me/.claude/projects/-tmp-proj/abc.jsonl",
-      V.claude_transcript_path("/tmp/proj", "abc", "/home/me")
-    )
+    h.eq("/home/me/.claude/projects/-tmp-proj/abc.jsonl", V.claude_transcript_path("/tmp/proj", "abc", "/home/me"))
   end)
 end)
 
 h.describe("validity.claude_retention_days", function()
   h.it("defaults to 30 when nothing is set", function()
-    h.eq(30, V.claude_retention_days("/tmp/proj", "/home/me", function()
-      return nil
-    end))
+    h.eq(
+      30,
+      V.claude_retention_days("/tmp/proj", "/home/me", function()
+        return nil
+      end)
+    )
   end)
   h.it("reads cleanupPeriodDays from user settings", function()
-    h.eq(7, V.claude_retention_days("/tmp/proj", "/home/me", function(path)
-      if path == "/home/me/.claude/settings.json" then
-        return { cleanupPeriodDays = 7 }
-      end
-    end))
+    h.eq(
+      7,
+      V.claude_retention_days("/tmp/proj", "/home/me", function(path)
+        if path == "/home/me/.claude/settings.json" then
+          return { cleanupPeriodDays = 7 }
+        end
+      end)
+    )
   end)
   h.it("project-local wins over user and project", function()
     local days = V.claude_retention_days("/tmp/proj", "/home/me", function(path)
@@ -69,46 +72,63 @@ h.describe("validity.check — claude-code", function()
   local entry = { session_id = "abc", provider = "claude-code", cwd = "/tmp/proj" }
 
   h.it("gone when the transcript is missing", function()
-    h.eq("gone", V.check(entry, env({ file_mtime = function()
-      return nil
-    end })))
+    h.eq(
+      "gone",
+      V.check(
+        entry,
+        env({
+          file_mtime = function()
+            return nil
+          end,
+        })
+      )
+    )
   end)
 
   h.it("valid when fresh (within retention)", function()
     h.eq(
       "valid",
-      V.check(entry, env({
-        file_mtime = function()
-          return 1000 * DAY - 5 * DAY -- 5 days old
-        end,
-      }))
+      V.check(
+        entry,
+        env({
+          file_mtime = function()
+            return 1000 * DAY - 5 * DAY -- 5 days old
+          end,
+        })
+      )
     )
   end)
 
   h.it("stale when past the retention window", function()
     h.eq(
       "stale",
-      V.check(entry, env({
-        file_mtime = function()
-          return 1000 * DAY - 40 * DAY -- 40 days old, default window 30
-        end,
-      }))
+      V.check(
+        entry,
+        env({
+          file_mtime = function()
+            return 1000 * DAY - 40 * DAY -- 40 days old, default window 30
+          end,
+        })
+      )
     )
   end)
 
   h.it("honours a shortened retention window", function()
     h.eq(
       "stale",
-      V.check(entry, env({
-        file_mtime = function()
-          return 1000 * DAY - 8 * DAY -- 8 days old
-        end,
-        read_json = function(path)
-          if path == "/home/me/.claude/settings.json" then
-            return { cleanupPeriodDays = 7 }
-          end
-        end,
-      }))
+      V.check(
+        entry,
+        env({
+          file_mtime = function()
+            return 1000 * DAY - 8 * DAY -- 8 days old
+          end,
+          read_json = function(path)
+            if path == "/home/me/.claude/settings.json" then
+              return { cleanupPeriodDays = 7 }
+            end
+          end,
+        })
+      )
     )
   end)
 
@@ -154,35 +174,62 @@ h.describe("validity.check — kiro-cli", function()
   local path = "/home/me/.kiro/sessions/cli/u-1.jsonl"
 
   h.it("valid when the transcript exists", function()
-    h.eq("valid", V.check(entry, env({ file_mtime = function(p)
-      return p == path and 1 or nil
-    end })))
+    h.eq(
+      "valid",
+      V.check(
+        entry,
+        env({
+          file_mtime = function(p)
+            return p == path and 1 or nil
+          end,
+        })
+      )
+    )
   end)
 
   h.it("gone when the transcript is missing", function()
-    h.eq("gone", V.check(entry, env({ file_mtime = function()
-      return nil
-    end })))
+    h.eq(
+      "gone",
+      V.check(
+        entry,
+        env({
+          file_mtime = function()
+            return nil
+          end,
+        })
+      )
+    )
   end)
 
   h.it("never stale, however old (kiro prunes by disk budget, not age)", function()
-    h.eq("valid", V.check(entry, env({ file_mtime = function()
-      return 1 -- ~1000 days old
-    end })))
+    h.eq(
+      "valid",
+      V.check(
+        entry,
+        env({
+          file_mtime = function()
+            return 1 -- ~1000 days old
+          end,
+        })
+      )
+    )
   end)
 end)
 
 h.describe("validity.check_all", function()
   h.it("mixes providers, one verdict per entry", function()
-    local verdicts = V.check_all({
-      { session_id = "c1", provider = "claude-code", cwd = "/tmp/p" },
-      { session_id = "k1", provider = "kiro-cli", cwd = "/a" },
-      { session_id = "k2", provider = "kiro-cli", cwd = "/b" },
-    }, env({
-      file_mtime = function(p)
-        return p == "/home/me/.kiro/sessions/cli/k1.jsonl" and 1000 * DAY or nil
-      end,
-    }))
+    local verdicts = V.check_all(
+      {
+        { session_id = "c1", provider = "claude-code", cwd = "/tmp/p" },
+        { session_id = "k1", provider = "kiro-cli", cwd = "/a" },
+        { session_id = "k2", provider = "kiro-cli", cwd = "/b" },
+      },
+      env({
+        file_mtime = function(p)
+          return p == "/home/me/.kiro/sessions/cli/k1.jsonl" and 1000 * DAY or nil
+        end,
+      })
+    )
     h.eq("gone", verdicts.c1)
     h.eq("valid", verdicts.k1)
     h.eq("gone", verdicts.k2)
