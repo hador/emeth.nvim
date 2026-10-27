@@ -64,7 +64,6 @@ function M.resolve(path)
         candidates[#candidates + 1] = vim.fn.fnamemodify(dir .. "/" .. path, ":p")
       end
     end
-    candidates[#candidates + 1] = vim.fn.fnamemodify(path, ":p")
   end
   for _, c in ipairs(candidates) do
     if vim.fn.filereadable(c) == 1 then
@@ -89,25 +88,30 @@ end
 ---@field focus? boolean        move focus to the target window (default false)
 ---@field win? integer          explicit target window; else the source window
 
---- Open `path` in the source (code) window — never in the chat.
----@param opts emeth.target.OpenOpts
----@return integer|nil win, string abs
-function M.open(opts)
-  local abs = vim.fn.fnamemodify(opts.path, ":p")
-  local win = opts.win or util.find_source_win()
+---The window a path or buffer should land in: `explicit` if given, else the
+---source (code) window. With no code window (chat zoomed, or the only pane),
+---peel one off. The new split inherits window-local options from the current
+---(chat) window -- including `winfixbuf` -- so clear it before editing, or
+---the edit errors.
+---@param explicit? integer
+---@return integer win
+local function target_win(explicit)
+  local win = explicit or util.find_source_win()
   if not win or not api.nvim_win_is_valid(win) then
-    -- No code window (chat is zoomed or the only pane): peel one off. The new
-    -- split inherits window-local options from the current (chat) window —
-    -- including `winfixbuf` — so clear it before editing, or the edit errors.
     vim.cmd("leftabove vsplit")
     win = api.nvim_get_current_win()
     pcall(api.nvim_set_option_value, "winfixbuf", false, { win = win })
   end
+  return win
+end
 
-  api.nvim_win_call(win, function()
-    vim.cmd("edit " .. vim.fn.fnameescape(abs))
-  end)
-
+---Put the cursor on `opts.line` (centered) in `win`. With `opts.focus`, move
+---there now; otherwise stay hands-off -- show it next door without yanking
+---the cursor out of the chat, scheduled so placement lands after the
+---edit/buffer switch settles.
+---@param win integer
+---@param opts { line?: integer, focus?: boolean }
+local function land(win, opts)
   local function place()
     if not api.nvim_win_is_valid(win) then
       return
@@ -119,16 +123,24 @@ function M.open(opts)
       end)
     end
   end
-
   if opts.focus then
     api.nvim_set_current_win(win)
     place()
   else
-    -- Hands-off: show it next door without yanking the cursor out of the chat.
-    -- Scheduled so cursor placement lands after the edit settles.
     vim.schedule(place)
   end
+end
 
+--- Open `path` in the source (code) window — never in the chat.
+---@param opts emeth.target.OpenOpts
+---@return integer|nil win, string abs
+function M.open(opts)
+  local abs = vim.fn.fnamemodify(opts.path, ":p")
+  local win = target_win(opts.win)
+  api.nvim_win_call(win, function()
+    vim.cmd("edit " .. vim.fn.fnameescape(abs))
+  end)
+  land(win, opts)
   return win, abs
 end
 
@@ -149,34 +161,9 @@ function M.send_buf(buf, opts)
   if not api.nvim_buf_is_valid(buf) then
     return
   end
-  local win = opts.win or util.find_source_win()
-  if not win or not api.nvim_win_is_valid(win) then
-    vim.cmd("leftabove vsplit")
-    win = api.nvim_get_current_win()
-    pcall(api.nvim_set_option_value, "winfixbuf", false, { win = win })
-  end
-
+  local win = target_win(opts.win)
   api.nvim_win_set_buf(win, buf)
-
-  local function place()
-    if not api.nvim_win_is_valid(win) then
-      return
-    end
-    if opts.line then
-      pcall(api.nvim_win_set_cursor, win, { opts.line, 0 })
-      api.nvim_win_call(win, function()
-        vim.cmd("normal! zz")
-      end)
-    end
-  end
-
-  if opts.focus then
-    api.nvim_set_current_win(win)
-    place()
-  else
-    vim.schedule(place)
-  end
-
+  land(win, opts)
   return win
 end
 
