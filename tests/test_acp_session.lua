@@ -433,3 +433,49 @@ h.describe("Session cwd binding", function()
     h.eq("/orig/project", s.cwd, "the fork stays bound to that cwd")
   end)
 end)
+
+h.describe("Session connect_and_load failure stage", function()
+  h.it("reports 'connect' when the agent fails to start", function()
+    local s = Session:new("test")
+    s.client.connect = function(_, cb)
+      cb({ code = -32603, message = "Failed to start the ACP agent" })
+    end
+    local got_err, got_stage
+    s:connect_and_load("sess-1", nil, function(err, stage)
+      got_err, got_stage = err, stage
+    end)
+    h.is_true(got_err ~= nil)
+    h.eq("connect", got_stage, "a launch failure must not read as an unknown session")
+  end)
+
+  h.it("reports 'load' when the agent rejects the id", function()
+    local s = Session:new("test")
+    s.client.connect = function(_, cb)
+      cb(nil)
+    end
+    s.client.load_session = function(_, _id, _cwd, _mcp, _opts, cb)
+      cb(nil, { code = -32603, message = "Session not found" })
+    end
+    local got_stage
+    s:connect_and_load("sess-1", nil, function(_, stage)
+      got_stage = stage
+    end)
+    h.eq("load", got_stage)
+  end)
+
+  h.it("reports no stage on success", function()
+    local s = Session:new("test")
+    s.client.connect = function(_, cb)
+      cb(nil)
+    end
+    s.client.load_session = function(_, _id, _cwd, _mcp, _opts, cb)
+      cb({}, nil)
+    end
+    local got_err, got_stage = "unset", "unset"
+    s:connect_and_load("sess-1", nil, function(err, stage)
+      got_err, got_stage = err, stage
+    end)
+    h.is_nil(got_err)
+    h.is_nil(got_stage)
+  end)
+end)
