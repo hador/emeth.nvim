@@ -143,6 +143,49 @@ function M.handlers(ctx)
     set_card_state(record)
   end
 
+  -- A subagent spawned with no visible Agent/Task tool_call (a background one,
+  -- say) is announced only by subagent_update; its child calls name a launch
+  -- message that has no card. Synthesize a stand-in card from the announcement
+  -- so the work has somewhere to nest instead of spilling onto the main
+  -- transcript. Registered in the tool map under `tool_id` so children that name
+  -- it as their parent resolve to it.
+  ---@param record { title?: string, description?: string }
+  ---@param tool_id string
+  ---@return string uuid
+  local function create_subagent_card(stream, record, tool_id)
+    -- Since claude-acp ~0.95 the Agent/Task launch tool_call is hidden, so the
+    -- enriched `description ⊳ subagent_type` title never arrives as a tool_call
+    -- and EVERY subagent lands here, not just background ones. The
+    -- `subagent_update` announcement is then the only label source: its
+    -- `description` is the human task summary, its `title` the subagent_type.
+    -- Prefer the description and reproduce the old enrichment when both exist,
+    -- so the card reads "claude-acp version delta ⊳ general-purpose" rather than
+    -- a bare, indistinguishable "general-purpose".
+    local label = record.description or record.title or "subagent"
+    if record.description and record.title and record.description ~= record.title then
+      label = record.description .. " ⊳ " .. record.title
+    end
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = label,
+      id = tool_id,
+      input = {},
+      status = "pending",
+    }, { tool_call = { toolCallId = tool_id, title = label } })
+    stream.tool_map[tool_id] = msg.uuid
+    -- Close the in-flight text/thought blocks, exactly as a top-level tool_call
+    -- does (see the `tool_call` handler). A visible Agent/Task launch used to do
+    -- this for us; now that claude-acp hides it, nothing else resets these, so
+    -- every later assistant message would keep extending the pre-spawn block and
+    -- the card would be stranded below a growing wall of prose. Resetting here
+    -- anchors the card at the spawn point: prose before it stays above, prose
+    -- after it starts a fresh message below.
+    stream.assistant_uuid = nil
+    stream.thinking_uuid = nil
+    view:add_message(msg)
+    return msg.uuid
+  end
+
   function handlers.user_message_chunk(update)
     if update.content and update.content.type == "text" then
       -- A provider transform may stamp the agent-side message id (kiro sets it
@@ -481,6 +524,15 @@ function M.handlers(ctx)
     local record = stream.subagents[child] or {}
     stream.subagents[child] = record
     record.session_id = child
+    -- Kept for a card we may have to synthesize (a subagent spawned with no
+    -- visible Agent/Task tool_call, e.g. a background one): the announcement is
+    -- the only source of a human label for it.
+    if type(update.title) == "string" and update.title ~= "" then
+      record.title = update.title
+    end
+    if type(update.description) == "string" and update.description ~= "" then
+      record.description = update.description
+    end
     -- Advertised `capabilities.cancel` lets the card stop just this child. A
     -- concrete capabilities object replaces the set; omitted leaves it. A
     -- finished child clears it (null), which disables the card's cancel.
@@ -520,19 +572,20 @@ function M.handlers(ctx)
       return
     end
     local trigger_id = type(update.messageId) == "string" and update.messageId or nil
-    local trigger_uuid = trigger_id and stream.tool_map[trigger_id]
-    if not trigger_uuid then
+    if not trigger_id then
       return
     end
-    -- Each run folds under the call that triggered it: the spawning Agent call
-    -- for the launch, the SendMessage call for a resume. handlers.tool_call
-    -- re-parents the run's child calls to this, so a resumed subagent continues
-    -- inline under the SendMessage instead of back up at the original card.
-    record.nest_tool_id = trigger_id
-    -- The state-glyph binding is permanent -- the launch owns it -- so the
-    -- subagent's status stays put even as its work moves down into a resume
-    -- fold, and a resume's later `idle` can't strand the original card.
+    local trigger_uuid = stream.tool_map[trigger_id]
     if not record.parent_uuid then
+      -- The launch: bind the subagent's card. The trigger is the spawning
+      -- Agent/Task call; when it has no card (a subagent spawned without a
+      -- visible tool_call, e.g. a background one) synthesize one so the work
+      -- nests rather than spilling onto the main transcript. The binding is
+      -- permanent, so state stays put even as later runs move the work.
+      if not trigger_uuid then
+        trigger_uuid = create_subagent_card(stream, record, trigger_id)
+      end
+      record.nest_tool_id = trigger_id
       bind_parent(record, trigger_uuid)
       local prompt = text_of(update.content)
       if prompt ~= "" then
@@ -540,6 +593,12 @@ function M.handlers(ctx)
           m.metadata.subagent_prompt = prompt
         end)
       end
+    elseif trigger_uuid then
+      -- A resume whose trigger has a real card (the SendMessage call): fold this
+      -- run's work under it so it continues inline. A background resume with no
+      -- such card keeps nesting under the launch card rather than opening an
+      -- empty fold.
+      record.nest_tool_id = trigger_id
     end
   end
 
