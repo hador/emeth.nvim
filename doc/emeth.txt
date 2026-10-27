@@ -84,7 +84,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
       tool_succeeded = "✓",
       tool_failed = "✗",
     },
-    default_provider = nil,       -- required if multiple providers
+    default_provider = nil,       -- nil: :Emeth asks which provider
     resume_last_session = false,  -- auto-resume last session on open
     auto_add_current_file = true, -- add current buffer as context
     slow_connect_ms = 10000,      -- nudge if connect exceeds this (0 disables)
@@ -116,8 +116,8 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
                                                       *emeth-default_provider*
 `default_provider` ~
   Name of the provider to connect to when `:Emeth` is called without an
-  argument. Without it, `:Emeth` needs an explicit provider (the built-in
-  providers are always configured, so there is never just one).
+  argument. When unset, `:Emeth` asks which configured provider to use (those
+  whose command isn't on PATH are marked); cancelling the pick does nothing.
 
                                                   *emeth-auto_add_current_file*
 `auto_add_current_file` ~
