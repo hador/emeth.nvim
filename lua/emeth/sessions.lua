@@ -1,4 +1,6 @@
---- Local session index — tracks session IDs for agents that don't support session/list.
+--- Local session index: every session emeth has used, across all directories,
+--- with the cwd it ran in. The source for resume and the session pickers (the
+--- agent's own `session/list` is per-cwd and needs a live connection).
 
 local M = {}
 

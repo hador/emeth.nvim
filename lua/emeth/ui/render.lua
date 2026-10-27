@@ -40,6 +40,8 @@ function M.get_tool_purpose(item, msg)
     if type(t) ~= "table" then
       return nil
     end
+    -- `__tool_use_purpose` is the Amazon Q / kiro tool-input convention;
+    -- `description` is claude's (Bash, Task).
     local v = t.__tool_use_purpose or t.description
     return (type(v) == "string" and v ~= "" and v:find("\n") == nil) and v or nil
   end
@@ -283,7 +285,10 @@ end
 ---The diffs a tool call carries, in render order: the tool's own edit input
 ---(`input.old_str/new_str`, else `rawInput.oldString/newString`, labelled with
 ---the input path) and then every ACP `diff` content block (labelled with its
----own `path`). One scan that the expand default, the diff body and the header's
+---own `path`). The input shapes are other agents' edit tools (`old_str` is the
+---kiro/Q str_replace shape, `oldString` a camelCase variant); claude sends its
+---edits as `diff` content, and none of the 337 local logs (all claude) carry
+---either input shape, so they are kept for agents not exercised here. One scan that the expand default, the diff body and the header's
 ---path de-dup all read, so they can't disagree about what counts as a diff.
 ---@return { old: string, new: string, path?: string }[]
 local function diff_sources(item, tc)

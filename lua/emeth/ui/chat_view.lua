@@ -440,15 +440,6 @@ function ChatView:clear_prompt_keys(owner)
   end
 end
 
----The message under the cursor plus the cursor's 1-based line offset within it.
----
----Lets a caller act on a specific *line* of a multi-line message (e.g. picking
----the option the cursor sits on) without knowing where that message was laid
----out. Returns nil when the cursor isn't in the result window or is on a row no
----message owns (blank separators between messages).
----
----Only meaningful while the result buffer is the current one — it reads the
----cursor from the current window, matching the buffer-local keymaps that call it.
 ---@class chat_ui.MessageAction
 ---@field key string
 ---@field hint? string
@@ -524,6 +515,15 @@ function ChatView:remove_action(key)
   end
 end
 
+---The message under the cursor plus the cursor's 1-based line offset within it.
+---
+---Lets a caller act on a specific *line* of a multi-line message (e.g. picking
+---the option the cursor sits on) without knowing where that message was laid
+---out. Returns nil when the cursor isn't in the result window or is on a row no
+---message owns (blank separators between messages).
+---
+---Only meaningful while the result buffer is the current one — it reads the
+---cursor from the current window, matching the buffer-local keymaps that call it.
 ---@return chat_ui.Message|nil msg, integer|nil offset
 function ChatView:cursor_message_line()
   if vim.api.nvim_get_current_buf() ~= self.result_buf then
