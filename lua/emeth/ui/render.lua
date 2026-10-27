@@ -162,39 +162,17 @@ local function diff_to_lines(old_str, new_str, path)
   return lines
 end
 
----@param tool_id string
----@param messages chat_ui.Message[]
----@return chat_ui.ContentItem|nil
-local function find_tool_result(tool_id, messages)
-  for i = #messages, 1, -1 do
-    local msg = messages[i]
-    for _, item in ipairs(msg.content) do
-      if item.type == "tool_result" and item.tool_use_id == tool_id then
-        return item
-      end
-    end
-  end
-  return nil
-end
-
 ---@param item chat_ui.ContentItem
----@param result chat_ui.ContentItem|nil
 ---@return string icon, string hl_group
-local function tool_status(item, result)
+local function tool_status(item)
   local icons = get_icons()
-  if not result then
-    local s = item.status or "pending"
-    if s == "completed" then
-      return icons.tool_succeeded, HL.TOOL_SUCCEEDED
-    elseif s == "failed" or s == "cancelled" then
-      return icons.tool_failed, HL.TOOL_FAILED
-    else
-      return icons.tool_generating, HL.TOOL_CALLING
-    end
-  elseif result.is_error then
+  local s = item.status or "pending"
+  if s == "completed" then
+    return icons.tool_succeeded, HL.TOOL_SUCCEEDED
+  elseif s == "failed" or s == "cancelled" then
     return icons.tool_failed, HL.TOOL_FAILED
   end
-  return icons.tool_succeeded, HL.TOOL_SUCCEEDED
+  return icons.tool_generating, HL.TOOL_CALLING
 end
 
 ---Extract the most descriptive string param from a table for display.
@@ -400,12 +378,9 @@ end
 
 ---@param item chat_ui.ContentItem
 ---@param msg chat_ui.Message
----@param messages chat_ui.Message[]
----@param tool_results? table<string, chat_ui.ContentItem>
 ---@return chat_ui.Line[]
-local function render_tool_use(item, msg, messages, tool_results)
-  local result = tool_results and tool_results[item.id] or find_tool_result(item.id, messages)
-  local status_icon, status_hl = tool_status(item, result)
+local function render_tool_use(item, msg)
+  local status_icon, status_hl = tool_status(item)
   -- A subagent's spawning call outlives its own tool result: the Agent call can
   -- read "completed" while the subagent is still working. Drive the icon from
   -- the subagent's live state instead, so the card isn't a green tick mid-run.
@@ -552,9 +527,6 @@ local function render_tool_use(item, msg, messages, tool_results)
         end
       end
     end
-    if result and type(result.content) == "string" then
-      outputs[#outputs + 1] = result.content
-    end
 
     if #outputs > 0 then
       -- Only worth a divider when there's something above it to divide from.
@@ -688,10 +660,8 @@ local function is_subagent_card(msg)
 end
 
 ---@param msg chat_ui.Message
----@param messages chat_ui.Message[]
----@param tool_results? table<string, chat_ui.ContentItem>
 ---@return chat_ui.Line[]
-local function render_assistant_message(msg, messages, tool_results)
+local function render_assistant_message(msg)
   local lines = {}
   for _, item in ipairs(msg.content) do
     if item.type == "text" then
@@ -701,7 +671,7 @@ local function render_assistant_message(msg, messages, tool_results)
       lines[#lines + 1] = Line:new({ { "" } })
     elseif item.type == "tool_use" then
       local from = #lines + 1
-      vim.list_extend(lines, render_tool_use(item, msg, messages, tool_results))
+      vim.list_extend(lines, render_tool_use(item, msg))
       lines[#lines + 1] = Line:new({ { "" } })
       -- Tint the spawn card (and the blank under it) so it reads as one region
       -- with the nested calls that follow -- each of those is its own child
@@ -713,7 +683,6 @@ local function render_assistant_message(msg, messages, tool_results)
         end
       end
     end
-    -- tool_result is rendered as part of tool_use, skip
   end
   -- A subagent's nested calls: indent so they read as part of the parent, and
   -- carry the same band (every line, blanks included) so the whole group is one
@@ -740,14 +709,13 @@ end
 
 --- Render a single message to Line[]
 ---@param msg chat_ui.Message
----@param messages chat_ui.Message[]
----@param tool_results? table<string, chat_ui.ContentItem>
+---@param messages? chat_ui.Message[]  the transcript, to tell the opening turn apart
 ---@return chat_ui.Line[]
-function M.render_message(msg, messages, tool_results)
+function M.render_message(msg, messages)
   if msg.role == "user" then
     return render_user_message(msg, messages and messages[1] == msg)
   elseif msg.role == "assistant" then
-    return render_assistant_message(msg, messages, tool_results)
+    return render_assistant_message(msg)
   elseif msg.role == "system" then
     return render_system_message(msg)
   end
