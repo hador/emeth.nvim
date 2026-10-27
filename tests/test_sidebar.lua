@@ -171,3 +171,56 @@ h.describe("close/reopen does not stack buffer autocmds", function()
     sb:close()
   end)
 end)
+
+h.describe("mappings.switch_window", function()
+  ---Open a sidebar with `switch` as mappings.switch_window; return the view.
+  local function open_with(switch)
+    vim.o.columns = 200
+    vim.o.lines = 50
+    local config = vim.deepcopy(require("emeth").config)
+    config.mappings.switch_window = switch
+    local view = ChatView:new({ config = config })
+    -- The chat buffers are reused by name, so maps an earlier sidebar bound are
+    -- still on them; start from none so the assertions see only this config.
+    for _, buf in ipairs({ view.result_buf, view.input_buf }) do
+      for _, mode in ipairs({ "n", "i" }) do
+        for _, lhs in ipairs({ "<Tab>", "<S-Tab>" }) do
+          pcall(vim.api.nvim_buf_del_keymap, buf, mode, lhs)
+        end
+      end
+    end
+    local sb = Sidebar:new(config)
+    sb:open(view)
+    return sb, view
+  end
+  local function bound(buf, mode, lhs)
+    for _, km in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+      if km.lhs == lhs then
+        return true
+      end
+    end
+    return false
+  end
+
+  h.it("binds the default <Tab>/<S-Tab> in normal and insert mode", function()
+    local sb, view = open_with(require("emeth").config.mappings.switch_window)
+    for _, mode in ipairs({ "n", "i" }) do
+      h.is_true(bound(view.input_buf, mode, "<Tab>"), mode .. " <Tab>")
+      h.is_true(bound(view.result_buf, mode, "<S-Tab>"), mode .. " <S-Tab>")
+    end
+    sb:close()
+  end)
+
+  h.it("honours a remapped key and a disabled mode, leaving <Tab> free", function()
+    local sb, view = open_with({ normal = "<C-j>", insert = false })
+    local got = {
+      remapped = bound(view.result_buf, "n", "<C-J>") or bound(view.result_buf, "n", "<C-j>"),
+      tab = bound(view.result_buf, "n", "<Tab>"),
+      insert_tab = bound(view.input_buf, "i", "<Tab>"),
+    }
+    sb:close() -- before asserting, so a failure can't leak an open sidebar
+    h.is_true(got.remapped, "remapped key bound")
+    h.is_true(not got.tab, "<Tab> must not be hardcoded")
+    h.is_true(not got.insert_tab, "insert mode disabled")
+  end)
+end)

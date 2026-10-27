@@ -41,7 +41,8 @@ local defaults = {
   mappings = {
     submit = { insert = "<C-s>", normal = "<CR>" },
     close = { normal = { "q", "<Esc>" } },
-    switch_window = { normal = "<Tab>" },
+    -- Hop between the result and input windows (a key or a list per mode).
+    switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
     -- Open the file path under the cursor in the source window (not the chat),
     -- moving focus there. Honors a trailing :LINE(:COL) suffix.
     open_file = { normal = { "gf", "gd" } },
