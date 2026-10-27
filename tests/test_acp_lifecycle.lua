@@ -1073,7 +1073,7 @@ h.describe("acp integration: lifecycle options reach every load path", function(
   ---Capture the opts a load path forwards to the session.
   ---@return table|nil opts, boolean called
   local function capture_load(dir, fn)
-    local session, _, integration = make_setup()
+    local session, view, integration = make_setup()
     local seen, called = nil, false
     session.load = function(_, _session_id, opts, cb)
       called = true
@@ -1088,7 +1088,13 @@ h.describe("acp integration: lifecycle options reach every load path", function(
       end
     end
     session.connect_and_load = session.load
-    integration.add_root(dir)
+    -- Add the root the way a user does: the @workspace mention's prompt.
+    local orig_input = vim.ui.input
+    vim.ui.input = function(_, on_confirm)
+      on_confirm(dir)
+    end
+    view._mention_handlers.workspace.handler()
+    vim.ui.input = orig_input
     fn(integration)
     flush()
     return seen, called

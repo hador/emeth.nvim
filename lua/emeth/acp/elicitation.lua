@@ -33,7 +33,6 @@ local M = {}
 ---@field description? string
 ---@field required boolean
 ---@field options? acp.ElicitationOption[]  for select / multi_select
----@field default? any
 ---@field integer? boolean    number fields that must round to an integer
 ---@field meta? table         the property's `_meta`, for provider hooks
 ---@field custom_key? string  a sibling free-text field whose answer substitutes
@@ -187,7 +186,6 @@ function M.parse(schema)
         title = str(prop.title),
         description = str(prop.description),
         required = required[key] or false,
-        default = nz(prop.default),
         meta = nz(prop._meta),
       }
     end

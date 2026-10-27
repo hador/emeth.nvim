@@ -463,7 +463,6 @@ function M.handlers(ctx)
 
   function handlers.session_info_update(update)
     if update.title then
-      view._session_title = update.title
       if session.session_id then
         -- A fork shares its parent's history, so the title the agent derives
         -- (the conversation's first message) is the parent's. Persisting it

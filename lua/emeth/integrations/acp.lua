@@ -61,7 +61,7 @@ function M.setup_integration(view, session)
   ---@field awaiting_input? string  answer key the input box is currently claimed for
   ---@field prompt_uuid? string
 
-  local roots = Roots.attach(view)
+  local roots = Roots.attach()
   local pending_reloads = {} ---@type table<string, { line?: integer, follow: boolean }>  -- path → reload record
   -- Abs path emeth last navigated the source window to on a file write. Lets
   -- `flush_reloads` tell "the pane is still on the file I put there" from "the
@@ -234,7 +234,6 @@ function M.setup_integration(view, session)
 
   ---@class acp.LifecycleOpts
   ---@field clear? boolean
-  ---@field save? boolean
   ---@field touch? boolean
   ---@field kind? "new"|"load"
 
@@ -505,7 +504,6 @@ function M.setup_integration(view, session)
     local exts = session.extensions or {}
     local msg = Message:new("user", text, {
       selected_files = vim.deepcopy(selected_files),
-      provider = session.provider_name,
       model = exts.model_id,
       mode = exts.mode_id,
       badges = Winbar.get_badges(),
@@ -1598,29 +1596,11 @@ function M.setup_integration(view, session)
 
     add_file = add_file,
 
-    remove_file = function(path)
-      path = vim.fn.fnamemodify(path, ":p")
-      for i, f in ipairs(selected_files) do
-        if f == path then
-          table.remove(selected_files, i)
-          refresh_file_display()
-          return
-        end
-      end
-    end,
-
     ---Re-assert what the winbar caches. It is only written on transitions, so one
     ---that missed a change would otherwise stay wrong for the rest of the turn.
     resync_winbar = function()
       Winbar.set_left(Winbar.fmt.plain(session.provider_name))
       set_activity(activity)
-    end,
-
-    add_root = function(dir)
-      roots:add(dir)
-    end,
-    remove_root = function(idx_or_path)
-      roots:remove(idx_or_path)
     end,
 
     ---Register a function that mutates session/update payloads in place

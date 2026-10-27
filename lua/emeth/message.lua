@@ -13,7 +13,6 @@ local _uuid_counter = 0
 ---@field failure_reason? "cancelled"|"denied"|"error"
 
 ---@class chat_ui.MessageMetadata
----@field provider? string
 ---@field model? string
 ---@field selected_files? string[]
 ---@field tool_call? table

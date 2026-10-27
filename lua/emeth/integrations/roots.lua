@@ -2,9 +2,9 @@
 --- capability into a small per-session feature with `@workspace`/`@roots`
 --- @mention handlers, a winbar badge, and persistence.
 ---
---- The generic ACP integration calls `M.attach(view)` once per session and
---- gets back a small object with the API it needs:
----   - `:add(dir)` / `:remove(idx_or_path)` — programmatic mutators
+--- The generic ACP integration calls `M.attach()` once per session and gets
+--- back a small object with the API it needs:
+---   - `:add(dir)` / `:remove(path)` — mutators behind the two mentions
 ---   - `:snapshot()` — copy of current roots, for `lifecycle_opts()`
 ---   - `:hydrate_from(entry)` — restore from a `Sessions.get(...)` record
 ---   - `:save_field()` — value to stash on `Sessions.save(...)`
@@ -17,7 +17,7 @@ local M = {}
 
 ---@class emeth.RootsHandle
 ---@field add fun(self, dir: string)
----@field remove fun(self, idx_or_path: number|string)
+---@field remove fun(self, path: string)
 ---@field snapshot fun(self): string[]
 ---@field hydrate_from fun(self, entry: table|nil)
 ---@field save_field fun(self): string[]|nil  value for Sessions.save's `additional_directories`
@@ -26,9 +26,8 @@ local M = {}
 
 ---Create a roots handle scoped to one session/integration. State is held in
 ---the closure; nothing leaks to module level.
----@param view chat_ui.ChatView
 ---@return emeth.RootsHandle
-function M.attach(view)
+function M.attach()
   local roots = {} ---@type string[]
 
   local function refresh_badge()
@@ -56,25 +55,17 @@ function M.attach(view)
     end
   end
 
-  ---@param idx_or_path number|string
-  local function remove(idx_or_path)
-    if type(idx_or_path) == "number" then
-      table.remove(roots, idx_or_path)
-    else
-      local path = vim.fn.fnamemodify(idx_or_path, ":p"):gsub("/$", "")
-      for i, r in ipairs(roots) do
-        if r == path then
-          table.remove(roots, i)
-          break
-        end
+  ---@param path string
+  local function remove(path)
+    path = vim.fn.fnamemodify(path, ":p"):gsub("/$", "")
+    for i, r in ipairs(roots) do
+      if r == path then
+        table.remove(roots, i)
+        break
       end
     end
     refresh_badge()
   end
-
-  -- Suppress unused warning on `view`; reserved for future use (e.g. surfacing
-  -- a buffer-rooted picker).
-  local _ = view
 
   ---@type emeth.RootsHandle
   return {
@@ -82,8 +73,8 @@ function M.attach(view)
       add(dir)
     end,
 
-    remove = function(_, idx_or_path)
-      remove(idx_or_path)
+    remove = function(_, path)
+      remove(path)
     end,
 
     snapshot = function(_)
@@ -111,19 +102,11 @@ function M.attach(view)
                 self:add(vim.fn.expand(dir))
               end
             end
-            if vim.ui.input then
-              vim.ui.input({
-                prompt = "Add workspace root: ",
-                completion = "dir",
-                default = vim.fn.getcwd(),
-              }, with_dir)
-            else
-              with_dir(vim.fn.input({
-                prompt = "Add workspace root: ",
-                completion = "dir",
-                default = vim.fn.getcwd(),
-              }))
-            end
+            vim.ui.input({
+              prompt = "Add workspace root: ",
+              completion = "dir",
+              default = vim.fn.getcwd(),
+            }, with_dir)
           end,
         },
         roots = {

@@ -35,7 +35,6 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _ns_input number
 ---@field _scroll boolean
 ---@field _context_files string[]
----@field _session_title? string
 ---@field _pastes table<integer, { text: string, placeholder: string, mark: integer }>
 ---@field _paste_ns integer
 ---@field _paste_seq integer
