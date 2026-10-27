@@ -280,61 +280,36 @@ local function tool_display(item, msg)
   return label, param, hidden, withheld
 end
 
----Detect whether a tool call contains diff content.
----@return boolean
-local function has_diff_content(item, tc)
-  if item.input and item.input.old_str and item.input.new_str then
-    return true
+---The diffs a tool call carries, in render order: the tool's own edit input
+---(`input.old_str/new_str`, else `rawInput.oldString/newString`, labelled with
+---the input path) and then every ACP `diff` content block (labelled with its
+---own `path`). One scan that the expand default, the diff body and the header's
+---path de-dup all read, so they can't disagree about what counts as a diff.
+---@return { old: string, new: string, path?: string }[]
+local function diff_sources(item, tc)
+  local sources = {}
+  local input, raw = item.input, tc and tc.rawInput
+  local path = (input and input.path) or (raw and raw.path)
+  if input and input.old_str and input.new_str then
+    sources[#sources + 1] = { old = input.old_str, new = input.new_str, path = path }
+  elseif raw and raw.oldString and raw.newString then
+    sources[#sources + 1] = { old = raw.oldString, new = raw.newString, path = path }
   end
-  if tc and tc.rawInput and tc.rawInput.oldString and tc.rawInput.newString then
-    return true
-  end
-  if tc and tc.content then
-    for _, c in ipairs(tc.content) do
-      if c.type == "diff" and c.oldText and c.newText then
-        return true
-      end
+  for _, c in ipairs(tc and tc.content or {}) do
+    if c.type == "diff" and c.oldText and c.newText then
+      sources[#sources + 1] = { old = c.oldText, new = c.newText, path = c.path }
     end
   end
-  return false
+  return sources
 end
 
----Every file named on a fence line inside this tool's rendered diff. Content
----diffs carry their own `path`, which is where the fence label usually comes
----from — `rawInput.path` is often absent, so looking only there misses it.
----@return table<string, true>
-local function diff_paths(item, tc)
-  local paths = {}
-  local p = (item.input and item.input.path) or (tc and tc.rawInput and tc.rawInput.path)
-  if p then
-    paths[p] = true
-  end
-  if tc and tc.content then
-    for _, c in ipairs(tc.content) do
-      if c.type == "diff" and c.path then
-        paths[c.path] = true
-      end
-    end
-  end
-  return paths
-end
-
----Collect all diff Line[] from a tool call's various input sources.
+---Rendered diff Line[] for `diff_sources` output.
+---@param sources { old: string, new: string, path?: string }[]
 ---@return chat_ui.Line[]
-local function collect_diffs(item, tc)
+local function collect_diffs(sources)
   local lines = {}
-  local path = (item.input and item.input.path) or (tc and tc.rawInput and tc.rawInput.path)
-  if item.input and item.input.old_str and item.input.new_str then
-    vim.list_extend(lines, diff_to_lines(item.input.old_str, item.input.new_str, path))
-  elseif tc and tc.rawInput and tc.rawInput.oldString and tc.rawInput.newString then
-    vim.list_extend(lines, diff_to_lines(tc.rawInput.oldString, tc.rawInput.newString, path))
-  end
-  if tc and tc.content then
-    for _, c in ipairs(tc.content) do
-      if c.type == "diff" and c.oldText and c.newText then
-        vim.list_extend(lines, diff_to_lines(c.oldText, c.newText, c.path))
-      end
-    end
+  for _, src in ipairs(sources) do
+    vim.list_extend(lines, diff_to_lines(src.old, src.new, src.path))
   end
   return lines
 end
@@ -355,11 +330,11 @@ local function expanded_for(item, msg, diff_lines)
   if msg.metadata._expanded ~= nil then
     return msg.metadata._expanded == true
   end
-  local tc = msg.metadata.tool_call
-  if not has_diff_content(item, tc) then
+  local sources = diff_sources(item, msg.metadata.tool_call)
+  if #sources == 0 then
     return false
   end
-  diff_lines = diff_lines or collect_diffs(item, tc)
+  diff_lines = diff_lines or collect_diffs(sources)
   return #diff_lines <= get_limits().diff_collapse_lines
 end
 
@@ -432,14 +407,20 @@ local function render_tool_use(item, msg)
     end
   end
 
-  if has_diff_content(item, tc) then
+  local sources = diff_sources(item, tc)
+  if #sources > 0 then
     -- ── Heavy box style for diffs ──
-    local diff_lines = collect_diffs(item, tc)
+    local diff_lines = collect_diffs(sources)
     local expanded = expanded_for(item, msg, diff_lines)
     -- The fence line names the file. Repeating it as the header's param says the
     -- same path twice on one row (the title usually already carries it, relative)
     -- and a third time on the fence.
-    local paths = diff_paths(item, tc)
+    local paths = {} ---@type table<string, true>
+    for _, src in ipairs(sources) do
+      if src.path then
+        paths[src.path] = true
+      end
+    end
     if tool_param and paths[tool_param] then
       tool_param = nil
     end
