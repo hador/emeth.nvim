@@ -33,7 +33,6 @@ end
 ---@field id_counter number
 ---@field transport acp.ACPTransport
 ---@field state acp.ConnectionState
----@field reconnect_count number
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -81,7 +80,6 @@ function ACPClient:new(config)
     transport = nil,
     config = config or {},
     state = "disconnected",
-    reconnect_count = 0,
   }, { __index = self })
   -- Provider-supplied client capability extensions ride on `clientCapabilities._meta`
   -- (e.g. kiro-cli needs `_meta.kiro.openExternalUrl = true` advertised at
@@ -126,12 +124,7 @@ function ACPClient:_close_debug_log()
 end
 
 function ACPClient:_setup_transport()
-  local transport_type = self.config.transport_type or "stdio"
-  if transport_type == "stdio" then
-    self.transport = self:_create_stdio_transport()
-  else
-    error("Unsupported transport type: " .. transport_type)
-  end
+  self.transport = self:_create_stdio_transport()
 end
 
 ---@param state acp.ConnectionState
@@ -241,14 +234,6 @@ function ACPClient:_create_stdio_transport()
       if transport_self.process then
         transport_self.process:close()
         transport_self.process = nil
-      end
-      if self.config.reconnect and self.reconnect_count < (self.config.max_reconnect_attempts or 3) then
-        self.reconnect_count = self.reconnect_count + 1
-        vim.defer_fn(function()
-          if self.state == "disconnected" then
-            self:connect(function() end)
-          end
-        end, 2000)
       end
     end)
 
@@ -455,7 +440,7 @@ function ACPClient:_handle_incoming(message_id, method, params)
   else
     if self.config.handlers and self.config.handlers.on_notification then
       vim.schedule(function()
-        self.config.handlers.on_notification(method, params, message_id)
+        self.config.handlers.on_notification(method, params)
       end)
     end
   end
@@ -627,7 +612,6 @@ function ACPClient:stop()
   end
   self.transport:stop()
   self:_close_debug_log()
-  self.reconnect_count = 0
 end
 
 ---@param callback fun(err: acp.ACPError|nil)
@@ -688,22 +672,6 @@ end
 ---@param callback fun(result: table|nil, err: acp.ACPError|nil)
 function ACPClient:request(method, params, callback)
   self:_send_request(method, params or {}, callback or function() end)
-end
-
----Answer an agent→client request with a result. Pairs with the `on_request`
----hook, whose `respond`/`respond_error` closures call these.
----@param id number
----@param result table|string|nil
-function ACPClient:respond(id, result)
-  self:_send_result(id, result)
-end
-
----Answer an agent→client request with an error.
----@param id number
----@param message string
----@param code? number
-function ACPClient:respond_error(id, message, code)
-  self:_send_error(id, message, code)
 end
 
 ---@param method_id string
@@ -799,34 +767,6 @@ function ACPClient:load_session(session_id, cwd, mcp_servers, opts_or_cb, maybe_
     params._meta = opts.meta
   end
   self:_send_request("session/load", params, callback)
-end
-
----@param cwd? string
----@param cursor? string
----@param callback fun(sessions: acp.SessionInfo[]|nil, next_cursor: string|nil, err: acp.ACPError|nil)
-function ACPClient:list_sessions(cwd, cursor, callback)
-  callback = callback or function() end
-  if
-    not self.agent_capabilities
-    or not (self.agent_capabilities.sessionCapabilities and self.agent_capabilities.sessionCapabilities.list)
-  then
-    callback(nil, nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support listing sessions"))
-    return
-  end
-  local params = {}
-  if cwd then
-    params.cwd = cwd
-  end
-  if cursor then
-    params.cursor = cursor
-  end
-  self:_send_request("session/list", params, function(result, err)
-    if err then
-      callback(nil, nil, err)
-    else
-      callback(result and result.sessions or {}, result and result.nextCursor, nil)
-    end
-  end)
 end
 
 ---@param session_id string
@@ -935,55 +875,5 @@ function ACPClient:set_config_option(session_id, config_id, value, callback)
   end
   self:_send_request("session/set_config_option", params, callback)
 end
-
--- Content helpers
-
----@param text string
----@param annotations table?
----@return acp.TextContent
-local function create_text_content(text, annotations)
-  return { type = "text", text = text, annotations = annotations }
-end
-
----@param uri string
----@param name string
----@param description string?
----@param mime_type string?
----@param size number?
----@param title string?
----@param annotations table?
----@return acp.ResourceLinkContent
-local function create_resource_link_content(uri, name, description, mime_type, size, title, annotations)
-  return {
-    type = "resource_link",
-    uri = uri,
-    name = name,
-    description = description,
-    mimeType = mime_type,
-    size = size,
-    title = title,
-    annotations = annotations,
-  }
-end
-
----@param data string
----@param mime_type string
----@param uri string?
----@param annotations table?
----@return acp.ImageContent
-local function create_image_content(data, mime_type, uri, annotations)
-  return { type = "image", data = data, mimeType = mime_type, uri = uri, annotations = annotations }
-end
-
----@param session_id string
----@param text string
----@param callback fun(result: table|nil, err: acp.ACPError|nil)
-function ACPClient:send_text_prompt(session_id, text, callback)
-  self:send_prompt(session_id, { create_text_content(text) }, callback)
-end
-
-ACPClient.create_text_content = create_text_content
-ACPClient.create_resource_link_content = create_resource_link_content
-ACPClient.create_image_content = create_image_content
 
 return ACPClient

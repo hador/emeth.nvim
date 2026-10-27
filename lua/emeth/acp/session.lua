@@ -44,7 +44,7 @@ end
 
 -- ── Event emitter ──────────────────────────────────────────────
 
----@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"permission"|"elicitation"
+---@alias acp.SessionEvent "update"|"notification"|"file_written"|"permission"|"elicitation"
 
 ---Register a listener for a session event.
 ---@param event acp.SessionEvent
@@ -118,7 +118,6 @@ function Session:new(provider_name)
 
   ---@type acp.ClientConfig
   local client_config = {
-    transport_type = "stdio",
     command = provider.command,
     args = provider.args,
     env = env,
@@ -129,11 +128,8 @@ function Session:new(provider_name)
       on_session_update = function(update, update_session_id)
         session:_emit("update", update, update_session_id)
       end,
-      on_error = function(err)
-        session:_emit("error", err)
-      end,
-      on_notification = function(method, params, message_id)
-        session:_emit("notification", method, params, message_id)
+      on_notification = function(method, params)
+        session:_emit("notification", method, params)
       end,
       -- Agent→client request nobody built-in handles. Dispatch to a provider
       -- extension's registered request handler; return truthy to claim it (the
@@ -501,15 +497,6 @@ function Session:set_config_option(config_id, value, cb)
   end)
 end
 
----List previous sessions from the agent. Requires sessionCapabilities.list.
----@param cb fun(sessions: acp.SessionInfo[]|nil, err: acp.ACPError|nil)
-function Session:list_sessions(cb)
-  local cwd = vim.fn.getcwd()
-  self.client:list_sessions(cwd, nil, function(sessions, _, err)
-    cb(sessions, err)
-  end)
-end
-
 ---Load a previous session by ID.
 ---@param session_id string
 ---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
@@ -550,11 +537,6 @@ end
 ---@return boolean
 function Session:is_connected()
   return self._state == "ready"
-end
-
----@return string
-function Session:get_state()
-  return self._state
 end
 
 return Session
