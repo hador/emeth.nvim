@@ -33,7 +33,7 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 - Subagent tool calls folded under the task that spawned them
 - The agent can ask you questions, answered inline without stealing focus
 - Steering: redirect a running turn instead of cancelling it
-- Winbar with spinner, context usage %, compaction indicator, goal status
+- Winbar with spinner, context usage %, compaction indicator
 - File context mentions: `@file`, `@buffers`, `@files`
 - Prompt templates via `/prompts` (local `.md` files + MCP server prompts)
 - Session history: list, load, resume previous conversations

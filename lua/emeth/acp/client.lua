@@ -661,9 +661,9 @@ function ACPClient:initialize(callback)
     self.protocol_version = result.protocolVersion
     self.agent_capabilities = result.agentCapabilities
     -- Extension capabilities that aren't part of `agentCapabilities` ride on the
-    -- InitializeResponse's own `_meta` (claude-acp advertises steering, goal and
-    -- its AIR capabilities there, while `agentCapabilities._meta` carries only
-    -- `claudeCode`). Keep it so feature probes can consult it.
+    -- InitializeResponse's own `_meta` (claude-acp advertises steering there,
+    -- while `agentCapabilities._meta` carries only `claudeCode`). Keep it so
+    -- feature probes can consult it.
     self.agent_meta = type(result._meta) == "table" and result._meta or nil
     self.auth_methods = result.authMethods or {}
     local auth_method = self.config.auth_method
