@@ -702,6 +702,34 @@ h.describe("ACPClient create_session", function()
     h.is_nil(decoded.params.additionalDirectories)
   end)
 
+  h.it("drops roots on load and fork too, warning once per client", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { loadSession = true, sessionCapabilities = { fork = {} } }
+    -- Let warnings scheduled by earlier tests' clients fire before counting.
+    vim.wait(50, function()
+      return false
+    end)
+    local warnings = 0
+    local orig = vim.notify
+    vim.notify = function(msg)
+      if type(msg) == "string" and msg:find("workspace roots ignored", 1, true) then
+        warnings = warnings + 1
+      end
+    end
+    local opts = { additionalDirectories = { "/a" } }
+    c:create_session("/cwd", {}, opts, function() end)
+    c:load_session("s1", "/cwd", {}, opts, function() end)
+    c:fork_session("s1", "/cwd", {}, opts, function() end)
+    vim.wait(50, function()
+      return false
+    end)
+    vim.notify = orig
+    for i = 1, 3 do
+      h.is_nil(vim.json.decode(sent[i]).params.additionalDirectories)
+    end
+    h.eq(1, warnings, "one warning per client, not one per session request")
+  end)
+
   h.it("strips additionalDirectories when agent_capabilities is nil", function()
     local c, sent = make_client()
     c.agent_capabilities = nil

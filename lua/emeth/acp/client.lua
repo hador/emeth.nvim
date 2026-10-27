@@ -33,6 +33,7 @@ end
 ---@field id_counter number
 ---@field transport acp.ACPTransport
 ---@field state acp.ConnectionState
+---@field _warned_no_roots? boolean  the "roots ignored" warning already shown
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -682,27 +683,33 @@ function ACPClient:authenticate(method_id, callback)
   end)
 end
 
----@param cwd string
----@param mcp_servers table[]?
----@param opts_or_cb table|fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
----@param maybe_cb? fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
-function ACPClient:create_session(cwd, mcp_servers, opts_or_cb, maybe_cb)
-  -- Backward-compatible: 3rd arg may be a callback (no opts).
-  local opts, callback
+---Split the `(opts_or_cb, maybe_cb)` tail the session methods accept: the
+---opts table may be omitted, leaving the callback in its place.
+---@return table|nil opts, function callback
+local function split_opts(opts_or_cb, maybe_cb)
   if type(opts_or_cb) == "function" then
-    opts, callback = nil, opts_or_cb
-  else
-    opts, callback = opts_or_cb, maybe_cb
+    return nil, opts_or_cb
   end
-  callback = callback or function() end
-  local params = { cwd = cwd, mcpServers = mcp_servers or {} }
-  if opts and opts.additionalDirectories and #opts.additionalDirectories > 0 then
-    local supported = self.agent_capabilities
-      and self.agent_capabilities.sessionCapabilities
-      and self.agent_capabilities.sessionCapabilities.additionalDirectories
-    if supported then
-      params.additionalDirectories = opts.additionalDirectories
-    else
+  return opts_or_cb, maybe_cb or function() end
+end
+
+---Build the params shared by session/new, session/load and session/fork:
+---`base` plus `additionalDirectories` and `_meta` from opts. Roots go out only
+---when the agent advertises `sessionCapabilities.additionalDirectories`;
+---otherwise they're dropped with one warning per client (not one per session),
+---so the user learns their @workspace roots aren't reaching this agent.
+---@param base table
+---@param opts table|nil  { additionalDirectories?, meta? }
+---@return table params
+function ACPClient:_session_params(base, opts)
+  local params = base
+  local dirs = opts and opts.additionalDirectories
+  if dirs and #dirs > 0 then
+    local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
+    if sc and sc.additionalDirectories then
+      params.additionalDirectories = dirs
+    elseif not self._warned_no_roots then
+      self._warned_no_roots = true
       vim.schedule(function()
         vim.notify(
           "[emeth-acp] Agent does not advertise additionalDirectories capability — workspace roots ignored",
@@ -714,6 +721,16 @@ function ACPClient:create_session(cwd, mcp_servers, opts_or_cb, maybe_cb)
   if opts and opts.meta and next(opts.meta) ~= nil then
     params._meta = opts.meta
   end
+  return params
+end
+
+---@param cwd string
+---@param mcp_servers table[]?
+---@param opts_or_cb table|fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
+---@param maybe_cb? fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
+function ACPClient:create_session(cwd, mcp_servers, opts_or_cb, maybe_cb)
+  local opts, callback = split_opts(opts_or_cb, maybe_cb)
+  local params = self:_session_params({ cwd = cwd, mcpServers = mcp_servers or {} }, opts)
   self:_send_request("session/new", params, function(result, err)
     if err then
       vim.schedule(function()
@@ -736,32 +753,12 @@ end
 ---@param opts_or_cb table|fun(result: table|nil, err: acp.ACPError|nil)
 ---@param maybe_cb? fun(result: table|nil, err: acp.ACPError|nil)
 function ACPClient:load_session(session_id, cwd, mcp_servers, opts_or_cb, maybe_cb)
-  local opts, callback
-  if type(opts_or_cb) == "function" then
-    opts, callback = nil, opts_or_cb
-  else
-    opts, callback = opts_or_cb, maybe_cb
-  end
-  callback = callback or function() end
+  local opts, callback = split_opts(opts_or_cb, maybe_cb)
   if not self.agent_capabilities or not self.agent_capabilities.loadSession then
     callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support loading sessions"))
     return
   end
-  local params = {
-    sessionId = session_id,
-    cwd = cwd,
-    mcpServers = mcp_servers or {},
-  }
-  if opts and opts.additionalDirectories and #opts.additionalDirectories > 0 then
-    local supported = self.agent_capabilities.sessionCapabilities
-      and self.agent_capabilities.sessionCapabilities.additionalDirectories
-    if supported then
-      params.additionalDirectories = opts.additionalDirectories
-    end
-  end
-  if opts and opts.meta and next(opts.meta) ~= nil then
-    params._meta = opts.meta
-  end
+  local params = self:_session_params({ sessionId = session_id, cwd = cwd, mcpServers = mcp_servers or {} }, opts)
   self:_send_request("session/load", params, callback)
 end
 
@@ -823,25 +820,13 @@ end
 ---@param opts_or_cb table|fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
 ---@param maybe_cb? fun(session_id: string|nil, err: acp.ACPError|nil, result: table|nil)
 function ACPClient:fork_session(session_id, cwd, mcp_servers, opts_or_cb, maybe_cb)
-  local opts, callback
-  if type(opts_or_cb) == "function" then
-    opts, callback = nil, opts_or_cb
-  else
-    opts, callback = opts_or_cb, maybe_cb
-  end
-  callback = callback or function() end
+  local opts, callback = split_opts(opts_or_cb, maybe_cb)
   local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
   if not (sc and sc.fork) then
     callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support forking sessions"))
     return
   end
-  local params = { sessionId = session_id, cwd = cwd, mcpServers = mcp_servers or {} }
-  if opts and opts.additionalDirectories and #opts.additionalDirectories > 0 and sc.additionalDirectories then
-    params.additionalDirectories = opts.additionalDirectories
-  end
-  if opts and opts.meta and next(opts.meta) ~= nil then
-    params._meta = opts.meta
-  end
+  local params = self:_session_params({ sessionId = session_id, cwd = cwd, mcpServers = mcp_servers or {} }, opts)
   self:_send_request("session/fork", params, function(result, err)
     if err then
       callback(nil, err)
