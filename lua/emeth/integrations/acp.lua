@@ -6,7 +6,6 @@
 ---   setup(session, view) → cleanup           streaming events / @mentions / state
 ---   build_session_meta(emeth_config) → meta  `_meta` payload for session/new+load
 ---   format_mode(mode_id) → render_desc       { badge?, tag?, tag_kind? }
----   extract_session_info(result, extensions) populate non-spec session info
 ---
 --- Extensions may also register two in-place transforms during `setup`, via
 --- `integration.set_transform_update` and `set_transform_elicitation`.
