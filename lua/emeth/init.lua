@@ -169,7 +169,7 @@ function M.setup(opts)
   require("emeth.commands").register_builtins()
 end
 
----Resolve which provider to use: explicit arg > config default > single configured > error.
+---Resolve which provider to use: explicit arg > config default > error.
 ---@param provider? string
 ---@return string|nil
 local function resolve_provider(provider)
@@ -178,10 +178,6 @@ local function resolve_provider(provider)
   end
   if M.config.default_provider then
     return M.config.default_provider
-  end
-  local names = vim.tbl_keys(require("emeth.acp").config.providers)
-  if #names == 1 then
-    return names[1]
   end
   vim.notify(
     "[emeth] Multiple providers configured. Specify one with :Emeth <provider> or set default_provider.",
@@ -439,11 +435,6 @@ function M.send_selection()
   assert(_view):append_fenced({ "From " .. fname .. ":" }, lines)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   M.open()
-end
-
----@return chat_ui.ChatView|nil
-function M.get_view()
-  return _view
 end
 
 ---@return chat_ui.SidebarLayout|nil

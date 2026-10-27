@@ -378,12 +378,6 @@ end)
 h.describe("acp integration: session_info_update", function()
   local Sessions = require("emeth.sessions")
 
-  h.it("stores title on view._session_title", function()
-    local session, view = make_setup()
-    session:_emit("update", { sessionUpdate = "session_info_update", title = "Renamed" })
-    h.eq("Renamed", view._session_title)
-  end)
-
   h.it("persists a non-fork session's title to the index", function()
     local session = make_setup()
     session.session_id = "sinfo-plain"

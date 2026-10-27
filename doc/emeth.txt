@@ -99,8 +99,8 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
                                                       *emeth-default_provider*
 `default_provider` ~
   Name of the provider to connect to when `:Emeth` is called without an
-  argument. Required when multiple providers are configured. If only one
-  provider is configured, it is used automatically.
+  argument. Without it, `:Emeth` needs an explicit provider (the built-in
+  providers are always configured, so there is never just one).
 
                                                   *emeth-auto_add_current_file*
 `auto_add_current_file` ~
