@@ -189,17 +189,13 @@ function ChatView:new(opts)
         return
       end
 
-      if msg.content then
-        for _, item in ipairs(msg.content) do
-          if item.type == "tool_use" then
-            -- Toggle away from what's on screen, not from `_expanded` itself:
-            -- a small diff renders expanded while still nil, so flipping the
-            -- raw field would leave it expanded and make K look broken.
-            msg.metadata._expanded = not Render.is_expanded(msg)
-            invalidate_msg(msg)
-            return
-          end
-        end
+      if Render.tool_use(msg) then
+        -- Toggle away from what's on screen, not from `_expanded` itself:
+        -- a small diff renders expanded while still nil, so flipping the
+        -- raw field would leave it expanded and make K look broken.
+        msg.metadata._expanded = not Render.is_expanded(msg)
+        invalidate_msg(msg)
+        return
       end
     end,
   })
@@ -228,11 +224,7 @@ function ChatView:new(opts)
   ---@param cursor_row number  1-based buffer row currently under the cursor
   ---@return number  1-based buffer row to anchor the hint on
   local function primary_row_for(msg, cursor_row)
-    -- Walk back to the message's first row.
-    local first = cursor_row
-    while first > 1 and view._line_to_msg[first - 1] == msg do
-      first = first - 1
-    end
+    local first = view:_first_row(msg, cursor_row)
     -- Walk forward to the message's last row.
     local last = cursor_row
     local total = api.nvim_buf_line_count(result_buf)
@@ -273,14 +265,7 @@ function ChatView:new(opts)
         hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
       end
     end
-    local has_tool = false
-    for _, item in ipairs(msg.content or {}) do
-      if item.type == "tool_use" then
-        has_tool = true
-        break
-      end
-    end
-    if has_tool then
+    if Render.tool_use(msg) then
       -- What's on screen, as K itself decides: a small diff renders expanded
       -- while `_expanded` is still nil.
       hints[#hints + 1] = "K: " .. (Render.is_expanded(msg) and "collapse" or "expand")
@@ -553,11 +538,19 @@ function ChatView:cursor_message_line()
   if not msg then
     return nil, nil
   end
+  return msg, row - self:_first_row(msg, row) + 1
+end
+
+---The buffer row where `msg` starts, walking back from a row inside it.
+---@param msg chat_ui.Message
+---@param row integer  1-based row known to belong to `msg`
+---@return integer
+function ChatView:_first_row(msg, row)
   local first = row
   while first > 1 and self._line_to_msg[first - 1] == msg do
     first = first - 1
   end
-  return msg, row - first + 1
+  return first
 end
 
 function ChatView:_schedule_render()
