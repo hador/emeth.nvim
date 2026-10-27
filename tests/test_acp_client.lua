@@ -144,7 +144,7 @@ h.describe("ACPClient _handle_message", function()
   h.it("routes notification to _handle_incoming", function()
     local c = make_client()
     local called = false
-    c._handle_incoming = function(_, msg_id, method, params)
+    c._handle_incoming = function(_, _msg_id, method, params)
       called = true
       h.eq("test/event", method)
       h.eq({ foo = 1 }, params)
@@ -808,3 +808,5 @@ h.describe("ACPClient load_session", function()
     h.eq({ provider = { foo = 1 } }, decoded.params._meta)
   end)
 end)
+
+vim.notify = _orig_notify

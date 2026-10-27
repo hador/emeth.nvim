@@ -2,9 +2,6 @@
 
 local h = require("tests.helpers")
 
--- An earlier test (test_render) replaces package.loaded["emeth"] with a stub
--- and never restores it. Force a clean reload so we get the real module.
-package.loaded["emeth"] = nil
 require("emeth").setup({})
 
 local ChatView = require("emeth.ui.chat_view")
@@ -159,11 +156,10 @@ h.describe("close/reopen does not stack buffer autocmds", function()
   end
 
   h.it("keeps one copy of each view and sidebar autocmd", function()
+    for _ = 1, 2 do
+      make_open_sidebar():close()
+    end
     local sb, view = make_open_sidebar()
-    sb:close()
-    sb, view = make_open_sidebar()
-    sb:close()
-    sb, view = make_open_sidebar()
     h.eq(1, count(view.result_buf, "CursorMoved"), "contextual-help hint")
     h.eq(1, count(view.input_buf, "InsertCharPre"), "slash-command intercept")
     -- TextChangedI: the view's mention trigger plus the sidebar's prompt sign.

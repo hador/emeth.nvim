@@ -12,7 +12,7 @@ bench:
 
 lint:
 	stylua --check lua/ plugin/ tests/
-	luacheck lua/ plugin/
+	luacheck lua/ plugin/ tests/
 
 typecheck:
 	lua-language-server --check . --checklevel=Warning
