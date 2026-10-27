@@ -113,6 +113,106 @@ h.describe("acp integration: cancel during auto-resumed streaming", function()
   end)
 end)
 
+-- claude-acp 0.97: Claude Code starts turns of its own with no prompt open (to
+-- answer a background-task notification). The update-driven flip above arms
+-- "generating" for them, but there is no prompt response to settle it -- the
+-- winbar stuck on "generating". The turn's result usage_update (the only one
+-- carrying `cost`) is the end marker.
+h.describe("acp integration: unsolicited turn end", function()
+  local function chunk(session, text)
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = text } })
+  end
+  local function result_usage(session)
+    session:_emit("update", {
+      sessionUpdate = "usage_update",
+      used = 10,
+      size = 100,
+      cost = { amount = 0.27, currency = "USD" },
+    })
+  end
+  ---Record winbar states for one test; the module-level stub swallows them.
+  local function spy_state()
+    local states = {}
+    local prev = Winbar.set_state
+    Winbar.set_state = function(s)
+      states[#states + 1] = s
+    end
+    return states, function()
+      Winbar.set_state = prev
+    end
+  end
+
+  h.it("returns to ready on the unsolicited turn's result usage", function()
+    local session = make_setup()
+    local cancelled = false
+    session.cancel = function()
+      cancelled = true
+    end
+    local states, undo = spy_state()
+    chunk(session, "Background task completed")
+    flush()
+    h.eq("generating", states[#states])
+    result_usage(session)
+    flush()
+    undo()
+    h.eq("ready", states[#states], "the turn's result must settle the winbar")
+    press("<C-c>")
+    h.is_true(not cancelled, "nothing is in flight once the turn has ended")
+  end)
+
+  h.it("a usage_update without cost does not end it", function()
+    local session = make_setup()
+    local cancelled = false
+    session.cancel = function()
+      cancelled = true
+    end
+    chunk(session, "working")
+    session:_emit("update", { sessionUpdate = "usage_update", used = 10, size = 100 })
+    flush()
+    press("<C-c>")
+    h.is_true(cancelled, "a mid-turn usage_update must leave the turn cancellable")
+  end)
+
+  h.it("leaves a prompted turn to its response", function()
+    local session, view = make_setup()
+    local captured
+    session.client.send_prompt = function(_, _sid, _prompt, cb)
+      captured = cb
+    end
+    local states, undo = spy_state()
+    view.on_submit("do a thing")
+    chunk(session, "done")
+    -- claude sends the result usage just BEFORE the prompt response.
+    result_usage(session)
+    flush()
+    h.eq("generating", states[#states], "the in-flight prompt owns settling")
+    captured({ stopReason = "end_turn" }, nil)
+    flush()
+    undo()
+    h.eq("ready", states[#states])
+  end)
+
+  h.it("after Ctrl+C, the result re-arms the next unsolicited turn", function()
+    local session = make_setup()
+    local cancel_count = 0
+    session.cancel = function()
+      cancel_count = cancel_count + 1
+    end
+    chunk(session, "first autonomous turn")
+    flush()
+    press("<C-c>")
+    h.eq(1, cancel_count)
+    -- The cancelled cycle still ends at its result...
+    result_usage(session)
+    flush()
+    -- ...so a later unsolicited turn arms cancel again instead of being absorbed.
+    chunk(session, "second autonomous turn")
+    flush()
+    press("<C-c>")
+    h.eq(2, cancel_count, "the next unsolicited turn must be cancellable")
+  end)
+end)
+
 h.describe("acp integration: slow-connect nudge", function()
   h.it("posts a nudge if the handshake is still pending after the threshold", function()
     local emeth = require("emeth")
