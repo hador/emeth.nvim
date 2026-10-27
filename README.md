@@ -180,10 +180,8 @@ require("emeth").setup({
 | `:EmethZoom` | Grow the sidebar to fill the screen, and back |
 | `:EmethClose` | Close sidebar and disconnect |
 | `:EmethHistory` | Pick and resume a previous session, from any directory |
-| `:EmethResume [id]` | Resume a session by id (no id: same as `:EmethHistory`) |
-| `:EmethCancel` | Cancel current AI request (or abort a stuck connection) |
 
-`:EmethResume` and `:EmethCancel` exist only while a session is up.
+To cancel a running request (or abort a stuck connection), press `<C-c>` in either chat window.
 
 ### Lua API
 
