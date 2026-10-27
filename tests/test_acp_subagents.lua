@@ -155,13 +155,17 @@ h.describe("acp integration: subagent tool nesting", function()
     h.eq("completed", view.messages[2].content[1].status)
   end)
 
-  h.it("drops the subagent's handback tool", function()
+  -- claude-acp turns a completed handback into session_messages and exposes
+  -- the tool call only when it failed, on purpose; that failure must show.
+  h.it("shows a handback tool call the agent exposed, like any child call", function()
     local session, view = make_setup()
     spawn(session)
     emit(session, child_call("t1", "a"), CHILD)
-    emit(session, child_call("hb", "SubagentHandback", "SubagentHandback"), CHILD)
-    h.eq(2, #view.messages, "the handback is plumbing, not a nested call")
-    h.eq(1, view.messages[1].metadata.subagent_children)
+    local hb = child_call("hb", "SubagentHandback", "SubagentHandback")
+    hb.status = "failed"
+    emit(session, hb, CHILD)
+    h.eq(3, #view.messages, "the exposed (failed) handback nests under the card")
+    h.eq(2, view.messages[1].metadata.subagent_children)
   end)
 end)
 
