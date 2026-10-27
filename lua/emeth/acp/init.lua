@@ -4,11 +4,6 @@ local Session = require("emeth.acp.session")
 ---@field debug boolean
 ---@field auto_approve_tools boolean
 ---@field providers table<string, acp.ProviderConfig>
----@field on_update? fun(update: table) Fallback: session update (prefer session:on("update"))
----@field on_error? fun(err: table) Fallback: error (prefer session:on("error"))
----@field on_notification? fun(method: string, params: table, message_id: number|nil) Fallback
----@field on_file_written? fun(path: string, first_changed: number|nil) Fallback
----@field on_state_change? fun(state: acp.ConnectionState, old_state: acp.ConnectionState) Fallback
 
 ---@class acp.ProviderConfig
 ---@field command string
@@ -63,11 +58,6 @@ local defaults = {
       capabilities_meta = { kiro = { openExternalUrl = true } },
     },
   },
-  on_update = nil,
-  on_error = nil,
-  on_notification = nil,
-  on_file_written = nil,
-  on_state_change = nil,
 }
 
 M.config = vim.deepcopy(defaults)

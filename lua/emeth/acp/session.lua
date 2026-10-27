@@ -44,7 +44,7 @@ end
 
 -- ── Event emitter ──────────────────────────────────────────────
 
----@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"state_change"|"permission"|"elicitation"
+---@alias acp.SessionEvent "update"|"error"|"notification"|"file_written"|"permission"|"elicitation"
 
 ---Register a listener for a session event.
 ---@param event acp.SessionEvent
@@ -70,37 +70,24 @@ function Session:off(event, fn)
   end
 end
 
----Whether anything would observe `event` — a session listener or the global
----config fallback. Mirrors `_emit`'s two sources. Needed for events that answer
----a blocking agent request: with no observer the agent would wait forever, so
----the caller has to synthesize a refusal instead of emitting into the void.
+---Whether any listener would observe `event`. Needed for events that answer a
+---blocking agent request: with no observer the agent would wait forever, so the
+---caller has to synthesize a refusal instead of emitting into the void.
 ---@param event acp.SessionEvent
 ---@return boolean
 ---@private
 function Session:_has_listener(event)
   local list = self._listeners[event]
-  if list and #list > 0 then
-    return true
-  end
-  return require("emeth.acp").config["on_" .. event] ~= nil
+  return list ~= nil and #list > 0
 end
 
----Emit an event to session listeners, then fall back to global config callback.
+---Emit an event to the session's listeners.
 ---@param event acp.SessionEvent
 ---@param ... any
 ---@private
 function Session:_emit(event, ...)
-  local list = self._listeners[event]
-  if list then
-    for _, fn in ipairs(list) do
-      fn(...)
-    end
-  end
-  -- Fallback: global config callbacks for standalone emeth_acp usage
-  local config = require("emeth.acp").config
-  local key = "on_" .. event
-  if config[key] then
-    config[key](...)
+  for _, fn in ipairs(self._listeners[event] or {}) do
+    fn(...)
   end
 end
 
@@ -220,9 +207,6 @@ function Session:new(provider_name)
         end)
       end,
     },
-    on_state_change = function(new_state, old_state)
-      session:_emit("state_change", new_state, old_state)
-    end,
   }
 
   session = setmetatable({

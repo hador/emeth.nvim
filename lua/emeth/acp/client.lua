@@ -136,11 +136,7 @@ end
 
 ---@param state acp.ConnectionState
 function ACPClient:_set_state(state)
-  local old_state = self.state
   self.state = state
-  if self.config.on_state_change then
-    self.config.on_state_change(state, old_state)
-  end
 end
 
 ---@param code number
