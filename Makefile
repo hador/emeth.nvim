@@ -11,7 +11,7 @@ bench:
 	nvim --headless -u tests/minimal_init.lua -c "lua require('emeth').setup({}); require('tests.bench').run()" -c "qa!"
 
 lint:
-	stylua --check lua/ plugin/
+	stylua --check lua/ plugin/ tests/
 	luacheck lua/ plugin/
 
 typecheck:

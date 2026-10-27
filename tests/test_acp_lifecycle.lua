@@ -425,11 +425,23 @@ h.describe("acp integration: buffer reload focus", function()
     vim.fn.bufload(edited_buf)
 
     -- A subagent (its own child session) rewrites `edited` on disk.
-    session:_emit("update", { sessionUpdate = "subagent_update", sessionId = "child-1", state = { state = "running" } }, "sess-1")
+    session:_emit(
+      "update",
+      { sessionUpdate = "subagent_update", sessionId = "child-1", state = { state = "running" } },
+      "sess-1"
+    )
     vim.fn.writefile({ "edited v2 by subagent" }, edited)
     local diff = { { type = "diff", path = edited } }
-    session:_emit("update", { sessionUpdate = "tool_call", toolCallId = "w1", status = "pending", content = diff }, "child-1")
-    session:_emit("update", { sessionUpdate = "tool_call_update", toolCallId = "w1", status = "completed", content = diff }, "child-1")
+    session:_emit(
+      "update",
+      { sessionUpdate = "tool_call", toolCallId = "w1", status = "pending", content = diff },
+      "child-1"
+    )
+    session:_emit(
+      "update",
+      { sessionUpdate = "tool_call_update", toolCallId = "w1", status = "completed", content = diff },
+      "child-1"
+    )
 
     -- Reload in place: the hidden buffer picks up the new on-disk content.
     local reloaded = vim.wait(5000, function()
@@ -437,7 +449,11 @@ h.describe("acp integration: buffer reload focus", function()
     end, 20)
     h.is_true(reloaded, "a subagent's write reloads an already-open buffer")
     -- No follow: the source window stays on what the user was viewing.
-    h.eq(abs_viewing, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)), "the subagent must not steer the source window")
+    h.eq(
+      abs_viewing,
+      vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(source_win)),
+      "the subagent must not steer the source window"
+    )
 
     vim.cmd("only")
     pcall(vim.api.nvim_buf_delete, emeth_buf, { force = true })

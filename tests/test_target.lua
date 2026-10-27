@@ -96,10 +96,7 @@ h.describe("Target.open", function()
     -- /tmp -> /private/tmp symlink), so a raw :p comparison would mismatch.
     h.eq(vim.fn.resolve(vim.fn.fnamemodify(tmp, ":p")), vim.fn.resolve(vim.fn.fnamemodify(opened, ":p")))
     -- Chat result buffer is untouched.
-    h.is_true(
-      api.nvim_win_get_buf(sb.result_win) == view.result_buf,
-      "result window must still show the chat buffer"
-    )
+    h.is_true(api.nvim_win_get_buf(sb.result_win) == view.result_buf, "result window must still show the chat buffer")
     -- focus = true moved us to the source window.
     h.eq(src_win, api.nvim_get_current_win(), "focus should move to the source window")
 

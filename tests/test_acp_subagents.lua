@@ -290,7 +290,11 @@ h.describe("acp integration: subagent sessions", function()
   -- label the card with the subagent_type, never regress to a bare "subagent".
   h.it("falls back to the subagent_type when the announcement has no description", function()
     local session, view = make_setup()
-    emit(session, { sessionUpdate = "subagent_update", sessionId = CHILD, title = "general-purpose", state = { state = "running" } }, MAIN)
+    emit(
+      session,
+      { sessionUpdate = "subagent_update", sessionId = CHILD, title = "general-purpose", state = { state = "running" } },
+      MAIN
+    )
     emit(session, launch_message(CHILD, "no-such-call", "dig in"), CHILD)
     h.eq("general-purpose", view.messages[1].metadata.tool_call.title)
   end)
@@ -307,7 +311,11 @@ h.describe("acp integration: subagent sessions", function()
     emit(session, state_update(CHILD, "idle"), MAIN)
     -- Main agent resumes the subagent: a SendMessage tool call on the main
     -- session, then a session_message on the child naming that call.
-    emit(session, { sessionUpdate = "tool_call", toolCallId = "sendmsg-1", title = "SendMessage", status = "completed" }, MAIN)
+    emit(
+      session,
+      { sessionUpdate = "tool_call", toolCallId = "sendmsg-1", title = "SendMessage", status = "completed" },
+      MAIN
+    )
     emit(session, launch_message(CHILD, "sendmsg-1", "keep going"), CHILD)
     emit(session, state_update(CHILD, "running"), MAIN)
     emit(session, state_update(CHILD, "idle"), MAIN)

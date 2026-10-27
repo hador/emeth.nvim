@@ -821,13 +821,17 @@ h.describe("ChatView:add_action", function()
 
     -- An active prompt claiming R answers it; the action must not fire.
     local claimed = false
-    view._prompt_key_owners =
-      { { owner = "p", keys = {
-        R = function()
-          claimed = true
-          return true
-        end,
-      } } }
+    view._prompt_key_owners = {
+      {
+        owner = "p",
+        keys = {
+          R = function()
+            claimed = true
+            return true
+          end,
+        },
+      },
+    }
     cb()
     h.is_true(claimed)
     h.eq(0, #ran, "deferred to the active prompt")
@@ -850,13 +854,17 @@ h.describe("ChatView:add_action", function()
     end
     h.is_true(after ~= nil, "R stays bound after remove_action")
     claimed = false
-    view._prompt_key_owners =
-      { { owner = "p", keys = {
-        R = function()
-          claimed = true
-          return true
-        end,
-      } } }
+    view._prompt_key_owners = {
+      {
+        owner = "p",
+        keys = {
+          R = function()
+            claimed = true
+            return true
+          end,
+        },
+      },
+    }
     after()
     h.is_true(claimed, "a prompt still receives R")
     view._prompt_key_owners = {}
