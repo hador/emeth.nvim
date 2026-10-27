@@ -338,15 +338,25 @@ local function expanded_for(item, msg, diff_lines)
   return #diff_lines <= get_limits().diff_collapse_lines
 end
 
+---A message's tool call item, if it is one (a tool message carries one).
+---@param msg chat_ui.Message
+---@return chat_ui.ContentItem|nil
+function M.tool_use(msg)
+  for _, item in ipairs(msg.content or {}) do
+    if item.type == "tool_use" then
+      return item
+    end
+  end
+end
+
 ---The expand state `K` should toggle away from — the renderer owns the per-kind
 ---default, so the keymap can't just flip `_expanded` and assume it started false.
 ---@param msg chat_ui.Message
 ---@return boolean
 function M.is_expanded(msg)
-  for _, item in ipairs(msg.content or {}) do
-    if item.type == "tool_use" then
-      return expanded_for(item, msg)
-    end
+  local item = M.tool_use(msg)
+  if item then
+    return expanded_for(item, msg)
   end
   return msg.metadata._expanded == true
 end
