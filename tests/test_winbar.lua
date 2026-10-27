@@ -168,7 +168,6 @@ h.describe("Winbar badges", function()
       end
     end
     h.is_true(found, "expected 'ctx 42%' in badges, got: " .. vim.inspect(Winbar.get_badges()))
-    h.eq(42, Winbar.get_context())
     Winbar.detach()
   end)
 end)

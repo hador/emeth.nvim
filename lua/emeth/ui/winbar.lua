@@ -26,9 +26,6 @@ local right_raw = "" ---@type string
 local left_plain = "" ---@type string
 local right_plain = "" ---@type string
 
---- Numeric context percentage (preserved for message metadata).
-local context_pct = nil ---@type number|nil
-
 --- Fungible badges: provider-defined key→text pairs snapshotted into message metadata.
 local badges = {} ---@type table<string, string>
 
@@ -337,7 +334,6 @@ function M.detach()
   left_plain = ""
   right_raw = ""
   right_plain = ""
-  context_pct = nil
   badges = {}
   mode_tag = nil
   state = "ready"
@@ -397,7 +393,6 @@ end
 --- Equivalent to set_right(Winbar.fmt.gradient(pct)).
 ---@param pct number 0-100
 function M.set_context(pct)
-  context_pct = pct
   local raw, plain = M.fmt.gradient(pct)
   M.set_right(raw .. " ", plain .. " ")
   M.set_badge("ctx", string.format("ctx %.0f%%", pct))
@@ -408,19 +403,9 @@ function M.get_state()
   return state
 end
 
----@return number|nil
-function M.get_context()
-  return context_pct
-end
-
 ---@return string
 function M.get_left()
   return left_plain
-end
-
----@return string
-function M.get_right()
-  return right_plain
 end
 
 --- Set a named badge. Badges are snapshotted into message metadata at send time.

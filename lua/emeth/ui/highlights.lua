@@ -2,7 +2,6 @@ local M = {}
 
 -- Highlight group name constants
 M.USER = "EmethUser"
-M.ASSISTANT = "EmethAssistant"
 M.THINKING = "EmethThinking"
 M.TOOL_CALLING = "EmethToolCalling"
 M.TOOL_SUCCEEDED = "EmethToolSucceeded"
@@ -11,11 +10,8 @@ M.DIFF_ADDED = "EmethDiffAdded"
 M.DIFF_REMOVED = "EmethDiffRemoved"
 M.DIFF_CONTEXT = "EmethDiffContext"
 M.MUTED = "EmethMuted"
-M.INPUT = "EmethInput"
-M.INPUT_CURSOR_LINE = "EmethInputCursorLine"
 M.PROMPT_SIGN = "EmethPromptSign"
 M.WIN_SEPARATOR = "EmethWinSeparator"
-M.HORIZ_SEP = "EmethHorizSep"
 M.TOOL_PARAM = "EmethToolParam"
 M.SUBAGENT_NEST = "EmethSubagentNest"
 
@@ -27,15 +23,12 @@ function M.setup()
   local sep_fg = border_fg and string.format("#%06x", border_fg) or "#5c6370"
 
   set(0, M.USER, { default = true, link = "Title" })
-  set(0, M.ASSISTANT, { default = true, link = "Normal" })
   set(0, M.THINKING, { default = true, link = "Comment" })
   set(0, M.TOOL_CALLING, { default = true, link = "DiagnosticWarn" })
   set(0, M.TOOL_SUCCEEDED, { default = true, link = "DiagnosticOk" })
   set(0, M.TOOL_FAILED, { default = true, link = "DiagnosticError" })
   set(0, M.TOOL_PARAM, { default = true, link = "Special" })
   set(0, M.MUTED, { default = true, link = "Comment" })
-  set(0, M.INPUT, { default = true, link = "NormalFloat" })
-  set(0, M.INPUT_CURSOR_LINE, { default = true, link = "CursorLine" })
 
   -- Diff backgrounds: faint wash of green/red into the float background
   local function blend(a, b, t)
@@ -67,7 +60,6 @@ function M.setup()
   local prompt_fg = info_fg and string.format("#%06x", info_fg) or "#61afef"
   set(0, M.PROMPT_SIGN, { default = true, fg = prompt_fg, bg = nf.bg, bold = true })
   set(0, M.WIN_SEPARATOR, { fg = nf.bg, bg = nf.bg })
-  set(0, M.HORIZ_SEP, { fg = sep_fg, bg = nf.bg and nf_bg or nil })
   -- Prevent treesitter markdown from rendering ~text~ as strikethrough in chat
   set(0, "@markup.strikethrough.markdown_inline.emeth", { strikethrough = false })
 end

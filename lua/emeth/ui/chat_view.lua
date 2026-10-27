@@ -32,7 +32,6 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _config chat_ui.Config
 ---@field _augroup integer  owns the view's buffer-local autocmds; cleared per view
 ---@field _ns_id number
----@field _ns_input number
 ---@field _scroll boolean
 ---@field _context_files string[]
 ---@field _pastes table<integer, { text: string, placeholder: string, mark: integer }>
@@ -93,7 +92,6 @@ function ChatView:new(opts)
     integration = nil,
     _config = opts.config,
     _ns_id = api.nvim_create_namespace("emeth_render"),
-    _ns_input = api.nvim_create_namespace("emeth_input_ctx"),
     _scroll = true,
     _context_files = {},
     _line_to_msg = {},
@@ -787,7 +785,6 @@ function ChatView:_setup_input()
     end
     api.nvim_buf_set_lines(buf, 0, -1, false, {})
     self:_clear_pastes()
-    self:set_context_files(self._context_files)
 
     local cmd_name, cmd_args = text:match("^/(%S+)%s*(.*)")
     if cmd_name then
@@ -954,7 +951,6 @@ function ChatView:_setup_input()
               -- Provider-driven picker, or fire-and-forget: execute directly.
               api.nvim_buf_set_lines(buf, 0, -1, false, {})
               self:_clear_pastes()
-              self:set_context_files(self._context_files)
               cmd.execute("", { view = self, integration = self.integration })
             else
               -- Default: pre-fill `/cmd ` (and the hint as a real-text
@@ -1258,7 +1254,6 @@ function ChatView:prefill_command(name, hint)
   local line = has_hint and (prefix .. hint) or prefix
   api.nvim_buf_set_lines(buf, 0, -1, false, { line })
   self:_clear_pastes()
-  self:set_context_files(self._context_files)
 
   local cursor_col = #prefix
   if not has_hint then

@@ -808,7 +808,7 @@ end)
 
 h.describe("render: steered marker", function()
   h.it("shows in the user header when the message cut into a running turn", function()
-    local msg = Message:new("user", "use tabs", { steered = true })
+    local msg = Message:new("user", "use tabs", { steer_state = "steered" })
     local header = tostring(Render.render_message(msg, { msg })[2])
     h.is_true(header:find("steered", 1, true) ~= nil, "header was: " .. header)
   end)
@@ -822,7 +822,7 @@ h.describe("render: steered marker", function()
   -- Visible without K: it explains why a user message appears mid-stream, which
   -- is no use if you have to know to go looking for it.
   h.it("is visible without expanding details", function()
-    local msg = Message:new("user", "use tabs", { steered = true, model = "opus" })
+    local msg = Message:new("user", "use tabs", { steer_state = "steered", model = "opus" })
     h.eq(false, msg._show_details == true)
     local text = table.concat(
       vim.tbl_map(tostring, Render.render_message(msg, { msg })),
