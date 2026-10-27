@@ -2,9 +2,13 @@
 ---
 --- The picker's only signal used to be `isdirectory(cwd)`. That catches a deleted
 --- workspace but not a session the *provider* has forgotten: claude prunes idle
---- transcripts, kiro drops conversations. Resuming either hands the agent an id it
---- no longer knows. This module answers the real question per provider, read-only,
---- with no live agent connection — the same way the built-in resume pickers do it.
+--- transcripts, kiro sweeps its store against a disk budget. Resuming either hands
+--- the agent an id it no longer knows. This module answers the real question per
+--- provider, read-only, with no live agent connection — the same way the built-in
+--- resume pickers do it.
+---
+--- Both claude-code and kiro-cli (v3 engine) keep one `<id>.jsonl` transcript per
+--- session, so validity is a single `fs_stat` of a provider-resolved path.
 ---
 --- Three verdicts:
 ---   "valid" — resumable now.
@@ -13,10 +17,8 @@
 ---             the retention window). Shown, dimmed — not yet removed.
 ---   "gone"  — not resumable; nothing to load.
 ---
---- Dispatch is by `entry.provider`. Unknown providers fall back to the directory
---- check (the historical behaviour), and any check that can't reach its store
---- (missing `sqlite3`, unreadable db) is lenient — it returns "valid" rather than
---- nuke an entry over a tooling gap.
+--- Dispatch is by `entry.provider`. Providers without a known transcript location
+--- fall back to the directory check (the historical behaviour).
 
 local M = {}
 
@@ -39,27 +41,52 @@ function M.claude_transcript_path(cwd, session_id, home)
   return ("%s/.claude/projects/%s/%s.jsonl"):format(home, M.sanitize_cwd(cwd), session_id)
 end
 
+---Per-provider transcript location. Claude keys its store by working dir, so an
+---entry without one has no transcript; kiro's store is global (`$KIRO_HOME`,
+---default `~/.kiro`, then `sessions/cli/`), so cwd doesn't matter.
+---@type table<string, fun(entry: table, home: string): string|nil>
+local TRANSCRIPT = {
+  ["claude-code"] = function(entry, home)
+    local cwd = entry.cwd or ""
+    if cwd == "" then
+      return nil
+    end
+    return M.claude_transcript_path(cwd, entry.session_id, home)
+  end,
+  ["kiro-cli"] = function(entry, home)
+    local kiro_home = vim.env.KIRO_HOME
+    if not kiro_home or kiro_home == "" then
+      kiro_home = home .. "/.kiro"
+    end
+    return ("%s/sessions/cli/%s.jsonl"):format(kiro_home, entry.session_id)
+  end,
+}
+
+---Absolute path of the transcript backing a session, or nil when the provider
+---has no known per-session file (or the entry can't have one).
+---@param entry table  { provider, cwd, session_id }
+---@param home string
+---@return string|nil
+function M.transcript_path(entry, home)
+  local resolve = TRANSCRIPT[entry.provider]
+  return resolve and resolve(entry, home) or nil
+end
+
 ---On-disk size, in bytes, of the transcript backing a session -- or nil when
----there is no cheap single-file answer. Only claude-code stores a per-session
----file we can stat in one syscall; kiro's history lives in a shared sqlite db,
----so it returns nil (the picker simply omits a size for those rows). The
----subagent sidecar files under `<id>/subagents/` are deliberately not counted:
----the main transcript dominates and this keeps the picker's per-row cost to a
----single `fs_stat`. Note this is raw disk footprint -- most of a claude
----transcript is api-request logging, not rendered conversation.
+---there is no per-session file to stat. Sidecar files (e.g. claude's
+---`<id>/subagents/`) are deliberately not counted: the main transcript dominates
+---and this keeps the picker's per-row cost to a single `fs_stat`. Note this is
+---raw disk footprint -- most of a claude transcript is api-request logging, not
+---rendered conversation.
 ---@param entry table  { provider, cwd, session_id }
 ---@param home? string  defaults to the real home dir
 ---@return integer|nil bytes
 function M.transcript_size(entry, home)
-  if entry.provider ~= "claude-code" then
+  local path = M.transcript_path(entry, home or vim.fn.expand("~"))
+  if not path then
     return nil
   end
-  local cwd = entry.cwd or ""
-  if cwd == "" then
-    return nil
-  end
-  home = home or vim.fn.expand("~")
-  local st = vim.uv.fs_stat(M.claude_transcript_path(cwd, entry.session_id, home))
+  local st = vim.uv.fs_stat(path)
   return st and st.size or nil
 end
 
@@ -86,71 +113,10 @@ function M.claude_retention_days(cwd, home, read_json)
   return days
 end
 
----Default macOS/Linux locations for the kiro-cli session store.
----@param home string
----@return string[]
-local function kiro_db_candidates(home)
-  return {
-    home .. "/Library/Application Support/kiro-cli/data.sqlite3", -- macOS
-    home .. "/.local/share/kiro-cli/data.sqlite3", -- XDG / Linux
-  }
-end
-
----One sqlite round-trip for a whole batch of kiro ids: returns the set of ids
----that have a row, or nil when the store can't be reached (so callers stay
----lenient). Factored out so both the single and batched checks share it.
----@param ids string[]
----@param home string
----@return table<string, true>|nil
-local function kiro_present_set(ids, home)
-  if #ids == 0 then
-    return {}
-  end
-  if vim.fn.executable("sqlite3") ~= 1 then
-    return nil
-  end
-  local quoted = {}
-  for _, id in ipairs(ids) do
-    -- UUIDs only; anything else is skipped rather than interpolated into SQL.
-    if id:match("^[%w%-]+$") then
-      quoted[#quoted + 1] = "'" .. id .. "'"
-    end
-  end
-  if #quoted == 0 then
-    return {}
-  end
-  local db
-  for _, c in ipairs(kiro_db_candidates(home)) do
-    if vim.fn.filereadable(c) == 1 then
-      db = c
-      break
-    end
-  end
-  if not db then
-    return nil
-  end
-  local sql = ("SELECT conversation_id FROM conversations_v2 WHERE conversation_id IN (%s);"):format(
-    table.concat(quoted, ",")
-  )
-  local out = vim.fn.system({ "sqlite3", db, sql })
-  if vim.v.shell_error ~= 0 then
-    return nil
-  end
-  local present = {}
-  for line in vim.gsplit(out, "\n", { plain = true }) do
-    line = vim.trim(line)
-    if line ~= "" then
-      present[line] = true
-    end
-  end
-  return present
-end
-
 ---Build the injectable environment with real defaults. Tests pass their own.
----@return table env  { now, home, file_mtime, read_json, kiro_present, kiro_present_set }
+---@return table env  { now, home, file_mtime, read_json }
 function M.default_env()
   return {
-    kiro_present_set = kiro_present_set,
     now = os.time(),
     home = vim.fn.expand("~"),
     file_mtime = function(path)
@@ -166,83 +132,46 @@ function M.default_env()
       end)
       return ok and type(data) == "table" and data or nil
     end,
-    -- nil = couldn't determine (tooling/db absent); true/false = definite answer.
-    kiro_present = function(session_id, home)
-      local set = kiro_present_set({ session_id }, home)
-      if set == nil then
-        return nil
-      end
-      return set[session_id] == true
-    end,
   }
 end
 
 ---@param entry table  { session_id, provider, cwd, ... }
----@param env? table   injectable; defaults to real filesystem/clock/sqlite
+---@param env? table   injectable; defaults to the real filesystem and clock
 ---@return "valid"|"stale"|"gone"
 function M.check(entry, env)
   env = env or M.default_env()
   local cwd = entry.cwd or ""
 
+  if not TRANSCRIPT[entry.provider] then
+    -- Fallback (gemini/codex/goose/unknown): the historical directory check.
+    return vim.fn.isdirectory(cwd) == 1 and "valid" or "gone"
+  end
+
+  local path = M.transcript_path(entry, env.home)
+  local mtime = path and env.file_mtime(path)
+  if not mtime then
+    return "gone"
+  end
+
+  -- Only claude prunes by age, so only claude can be predicted "stale". kiro's
+  -- sweep is disk-budget driven and can't be anticipated from one file.
   if entry.provider == "claude-code" then
-    -- A missing working dir can't host a transcript; treat as gone up front so a
-    -- deleted workspace reads the same regardless of provider.
-    if cwd == "" then
-      return "gone"
-    end
-    local path = M.claude_transcript_path(cwd, entry.session_id, env.home)
-    local mtime = env.file_mtime(path)
-    if not mtime then
-      return "gone"
-    end
     local days = M.claude_retention_days(cwd, env.home, env.read_json)
     local age_days = (env.now - mtime) / 86400
     return age_days >= days and "stale" or "valid"
   end
-
-  if entry.provider == "kiro-cli" then
-    local present = env.kiro_present(entry.session_id, env.home)
-    if present == nil then
-      return "valid" -- couldn't check — don't prune over a tooling gap
-    end
-    return present and "valid" or "gone"
-  end
-
-  -- Fallback (gemini/codex/goose/unknown): the historical directory check.
-  return vim.fn.isdirectory(cwd) == 1 and "valid" or "gone"
+  return "valid"
 end
 
----Verdicts for a whole index in one pass, keyed by session_id. Identical in
----meaning to calling `check` per entry, but kiro's rows are fetched with a single
----batched sqlite query rather than one shell-out per session — the picker builds
----this over the entire index on every open.
+---Verdicts for a whole index in one pass, keyed by session_id.
 ---@param entries table[]
 ---@param env? table
 ---@return table<string, "valid"|"stale"|"gone">
 function M.check_all(entries, env)
   env = env or M.default_env()
-
-  local kiro_ids = {}
-  for _, e in ipairs(entries) do
-    if e.provider == "kiro-cli" then
-      kiro_ids[#kiro_ids + 1] = e.session_id
-    end
-  end
-  -- Not the `and/or` idiom: a nil return (store unreachable) must survive as nil
-  -- so the loop below can stay lenient, not collapse to an empty set ⇒ all gone.
-  local kiro_set = {}
-  if #kiro_ids > 0 then
-    kiro_set = env.kiro_present_set(kiro_ids, env.home)
-  end
-
   local verdicts = {}
   for _, e in ipairs(entries) do
-    if e.provider == "kiro-cli" then
-      -- nil set = store unreachable; stay lenient rather than prune.
-      verdicts[e.session_id] = (kiro_set == nil or kiro_set[e.session_id]) and "valid" or "gone"
-    else
-      verdicts[e.session_id] = M.check(e, env)
-    end
+    verdicts[e.session_id] = M.check(e, env)
   end
   return verdicts
 end
