@@ -208,6 +208,19 @@ local function ensure_sidebar_open()
   end
 end
 
+---Open the sidebar and bring up a fresh session + integration for `provider`,
+---registered as the active one. Shared by connect and resume, which differ
+---only in what they ask the integration to do next.
+---@param provider string
+---@return table integration
+local function start_integration(provider)
+  ensure_sidebar_open()
+  local session = require("emeth.acp").create_session(provider)
+  local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
+  M._set_integration(integration, provider)
+  return integration
+end
+
 ---Forget a session the agent could not load. Its id is in our index but not in
 ---the agent's store (created and abandoned before we recorded on first prompt, or
 ---aged out of the agent's own retention), and it will fail identically forever.
@@ -232,11 +245,7 @@ local function connect(provider, opts)
   local origin_buf = vim.api.nvim_get_current_buf()
   local origin_file = vim.api.nvim_buf_get_name(origin_buf)
 
-  ensure_sidebar_open()
-
-  local session = require("emeth.acp").create_session(provider)
-  local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
-  M._set_integration(integration, provider)
+  local integration = start_integration(provider)
 
   if M.config.auto_add_current_file and origin_file ~= "" and vim.fn.filereadable(origin_file) == 1 then
     integration.add_file(origin_file)
@@ -355,10 +364,7 @@ function M.resume(session_id, provider)
     return
   end
 
-  ensure_sidebar_open()
-  local session = require("emeth.acp").create_session(resolved)
-  local integration = require("emeth.integrations.acp").setup_integration(assert(_view), session)
-  M._set_integration(integration, resolved)
+  local integration = start_integration(resolved)
   integration.connect_and_load(session_id, forget_unloadable(session_id))
 end
 
