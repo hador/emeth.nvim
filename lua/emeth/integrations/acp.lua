@@ -1469,14 +1469,20 @@ function M.setup_integration(view, session)
 
     connect_and_load = function(session_id, cb)
       roots:hydrate_from(Sessions.get(session_id))
+      -- Carried past lifecycle (which forwards only `err`) so the caller can
+      -- tell a failed agent start from an unknown session id.
+      local failed_stage
       lifecycle({ touch = true, kind = "load" }, function(opts, done)
-        session:connect_and_load(session_id, opts, function(err)
+        session:connect_and_load(session_id, opts, function(err, stage)
+          failed_stage = stage
           if not err then
             announce_session("Connected to " .. session.provider_name .. ".")
           end
           done(err)
         end)
-      end, cb)
+      end, cb and function(err)
+        cb(err, failed_stage)
+      end)
     end,
 
     new_session = function()

@@ -1245,6 +1245,19 @@ h.describe("acp integration: a failed load reports its error to the caller", fun
     h.is_true(type(seen) == "table", "callback got: " .. vim.inspect(seen))
   end)
 
+  h.it("forwards which stage of connect_and_load failed", function()
+    local session, _, integration = make_setup()
+    session.connect_and_load = function(_, _id, _opts, cb)
+      cb({ code = -32603, message = "Failed to start the ACP agent" }, "connect")
+    end
+    local stage
+    integration.connect_and_load("ok-id", function(_, s)
+      stage = s
+    end)
+    flush()
+    h.eq("connect", stage, "callers rely on this to keep a session whose agent merely failed to start")
+  end)
+
   h.it("does not report an error on a successful load", function()
     local session, _, integration = make_setup()
     session.load = function(_, _id, _opts, cb)

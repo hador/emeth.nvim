@@ -215,6 +215,22 @@ local function ensure_sidebar_open()
   end
 end
 
+---Forget a session the agent could not load. Its id is in our index but not in
+---the agent's store (created and abandoned before we recorded on first prompt, or
+---aged out of the agent's own retention), and it will fail identically forever.
+---Only a failed *load* evicts: when the agent itself failed to start (`stage ==
+---"connect"`, e.g. npx offline), the session is fine and must survive the retry.
+---Defined ahead of `connect`, whose auto-resume uses it.
+---@param session_id string
+---@return fun(err: any, stage?: "connect"|"load")
+local function forget_unloadable(session_id)
+  return function(err, stage)
+    if err and stage ~= "connect" then
+      require("emeth.sessions").remove(session_id)
+    end
+  end
+end
+
 ---Connect to a provider, setting up the integration and session.
 ---@param provider string
 ---@param opts? { fresh?: boolean }
@@ -239,7 +255,7 @@ local function connect(provider, opts)
     local last = Sessions.list(vim.fn.getcwd(), provider)[1]
     if last then
       resumed = true
-      integration.connect_and_load(last.session_id)
+      integration.connect_and_load(last.session_id, forget_unloadable(last.session_id))
     end
   end
   if not resumed then
@@ -312,19 +328,6 @@ function M.zoom()
     _sidebar:toggle_zoom()
   else
     vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
-  end
-end
-
----Forget a session the agent could not load. Its id is in our index but not in
----the agent's store (created and abandoned before we recorded on first prompt, or
----aged out of the agent's own retention), and it will fail identically forever.
----@param session_id string
----@return fun(err: any)
-local function forget_unloadable(session_id)
-  return function(err)
-    if err then
-      require("emeth.sessions").remove(session_id)
-    end
   end
 end
 

@@ -343,7 +343,7 @@ end
 -- ── Lifecycle ──────────────────────────────────────────────────
 
 ---Normalize the (opts, cb) pair where opts may be the callback (back-compat).
----@return table|nil opts, fun(err: acp.ACPError|nil) cb
+---@return table|nil opts, fun(err: acp.ACPError|nil, ...: any) cb
 local function norm_args(opts, cb)
   if type(opts) == "function" then
     return nil, opts
@@ -539,14 +539,20 @@ function Session:load(session_id, opts, cb)
   end)
 end
 
----Connect and immediately load a session, skipping session/new.
+---Connect and immediately load a session, skipping session/new. The callback's
+---second argument names the step that failed, so a caller can tell "the agent
+---did not start" (`"connect"`) from "the agent does not know this id" (`"load"`).
 ---@param session_id string
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
----@param cb? fun(err: acp.ACPError|nil)
+---@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil, stage?: "connect"|"load")
+---@param cb? fun(err: acp.ACPError|nil, stage?: "connect"|"load")
 function Session:connect_and_load(session_id, opts, cb)
   opts, cb = norm_args(opts, cb)
-  self:_connect_then(cb, function()
-    self:load(session_id, opts, cb)
+  self:_connect_then(function(err)
+    cb(err, "connect")
+  end, function()
+    self:load(session_id, opts, function(err)
+      cb(err, err and "load" or nil)
+    end)
   end)
 end
 
