@@ -72,7 +72,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     },
     mappings = {
       submit = { insert = "<C-s>", normal = "<CR>" },
-      close = { normal = { "q", "<Esc>" } },
+      close = { normal = "q" },  -- hide (session keeps running)
       switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
       open_file = { normal = { "gf", "gd" } },
       zoom = { normal = "<leader>ez" },
@@ -233,9 +233,9 @@ Input buffer:
   `<Tab>` `<S-Tab>`  Both  Switch between input and result
   `za` / `zo`    Normal   Unfold the folded paste under the cursor
   `<leader>ez`   Normal   Zoom the sidebar
-  `q` / `<Esc>`  Normal   Close sidebar
+  `q`          Normal   Hide the sidebar (|:EmethClose| disconnects)
 
-<C-c>, <Tab>/<S-Tab>, <leader>ez and q/<Esc> work in the result buffer too.
+<C-c>, <Tab>/<S-Tab>, <leader>ez and q work in the result buffer too.
 
 Result buffer. These act on the message under the cursor:
 

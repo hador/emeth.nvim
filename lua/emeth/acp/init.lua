@@ -25,7 +25,7 @@ local defaults = {
   providers = {
     ["claude-code"] = {
       command = "npx",
-      args = { "-y", "-g", "@agentclientprotocol/claude-agent-acp" },
+      args = { "-y", "@agentclientprotocol/claude-agent-acp" },
       pass_env = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_MODEL_CONFIG" },
       -- Without it claude-acp reports a subagent as one opaque tool call and
       -- sends none of its work. With it, each subagent runs as a child
@@ -43,7 +43,7 @@ local defaults = {
     },
     ["codex"] = {
       command = "npx",
-      args = { "-y", "-g", "@zed-industries/codex-acp" },
+      args = { "-y", "@zed-industries/codex-acp" },
       pass_env = { "OPENAI_API_KEY" },
     },
     ["kiro-cli"] = {

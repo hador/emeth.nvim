@@ -40,7 +40,9 @@ local defaults = {
   },
   mappings = {
     submit = { insert = "<C-s>", normal = "<CR>" },
-    close = { normal = { "q", "<Esc>" } },
+    -- Hides the sidebar (the session keeps running). Just `q`: <Esc> in normal
+    -- mode is a reflex key, too easy to hit while meaning nothing.
+    close = { normal = "q" },
     -- Hop between the result and input windows (a key or a list per mode).
     switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
     -- Open the file path under the cursor in the source window (not the chat),
