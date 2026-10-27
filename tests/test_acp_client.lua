@@ -657,6 +657,33 @@ h.describe("ACPClient _handle_write_text_file", function()
     local decoded = vim.json.decode(sent[1])
     h.eq(ACPClient.ERROR_CODES.METHOD_NOT_FOUND, decoded.error.code)
   end)
+
+  ---Run a write through a handler that reports `err`, return the decoded reply.
+  local function write_reply(err)
+    local c, sent = make_client({
+      on_write_file = function(_, _, cb)
+        cb(err)
+      end,
+    })
+    c:_handle_write_text_file(7, { sessionId = "s1", path = "/a", content = "x" })
+    vim.wait(100, function()
+      return #sent > 0
+    end)
+    return vim.json.decode(sent[1])
+  end
+
+  h.it("answers a successful write with an empty object", function()
+    local decoded = write_reply(nil)
+    h.is_nil(decoded.error)
+    h.eq("table", type(decoded.result), "WriteTextFileResponse is an object, not null")
+  end)
+
+  h.it("answers a failed write with a JSON-RPC error, not a result", function()
+    local decoded = write_reply("E482: Can't open file /a for writing")
+    h.is_nil(decoded.result, "an error string in `result` reads as success")
+    h.eq(ACPClient.ERROR_CODES.INTERNAL_ERROR, decoded.error.code)
+    h.is_true(decoded.error.message:find("E482", 1, true) ~= nil)
+  end)
 end)
 
 -- ── create_session additionalDirectories ──────────────────────

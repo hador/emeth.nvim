@@ -566,8 +566,15 @@ function ACPClient:_handle_write_text_file(message_id, params)
   end
   if self.config.handlers and self.config.handlers.on_write_file then
     vim.schedule(function()
+      -- Spec: success is an (empty) WriteTextFileResponse object; failure is a
+      -- JSON-RPC error. A result carrying the error string would read as a
+      -- successful write to the agent.
       self.config.handlers.on_write_file(params.path, params.content, function(err)
-        self:_send_result(message_id, err == nil and vim.NIL or err)
+        if err == nil then
+          self:_send_result(message_id, vim.empty_dict())
+        else
+          self:_send_error(message_id, tostring(err), self.ERROR_CODES.INTERNAL_ERROR)
+        end
       end)
     end)
   else
