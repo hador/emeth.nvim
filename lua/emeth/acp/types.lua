@@ -4,6 +4,7 @@
 ---@class acp.ClientCapabilities
 ---@field fs acp.FileSystemCapability
 ---@field elicitation? acp.ElicitationCapabilities
+---@field session? { configOptions?: { boolean?: table } }
 
 ---@class acp.FileSystemCapability
 ---@field readTextFile boolean

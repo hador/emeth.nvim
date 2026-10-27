@@ -61,6 +61,16 @@ function ACPClient:new(config)
     capabilities = {
       fs = { readTextFile = true, writeTextFile = true },
       elicitation = { form = vim.empty_dict() },
+      -- Receive boolean config options (e.g. claude-acp 0.97's `ultracode`) as a
+      -- native `type: "boolean"` toggle rather than an `"on"`/`"off"` select.
+      -- `pick_config_option` already handles the boolean type (flips currentValue);
+      -- the agent only emits `type: "boolean"` when this is advertised, so without
+      -- it the same option still works as a select, so advertising is a pure upgrade.
+      -- Like `elicitation.form`, the marker must be an empty *object*: the SDK's
+      -- schema silently drops a `true` here (defaultOnError -> undefined), and the
+      -- agent then falls back to the select without any error.
+      -- RFD: agentclientprotocol.com/rfds/boolean-config-option.
+      session = { configOptions = { boolean = vim.empty_dict() } },
     },
     agent_capabilities = nil,
     agent_meta = nil,

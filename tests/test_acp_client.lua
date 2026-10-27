@@ -632,6 +632,13 @@ h.describe("ACPClient capabilities", function()
     local real = ACPClient:new({ command = "true" })
     h.is_nil(real.capabilities.elicitation.url)
   end)
+
+  -- The marker must be an empty object. claude-acp's SDK schema silently drops
+  -- `boolean = true` (verified live: ultracode then arrives as an on/off select).
+  h.it("advertises boolean config options as an empty object", function()
+    local real = ACPClient:new({ command = "true" })
+    h.eq('{"configOptions":{"boolean":{}}}', vim.json.encode(real.capabilities.session))
+  end)
 end)
 
 -- ── _handle_write_text_file validation ─────────────────────────
