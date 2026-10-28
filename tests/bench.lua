@@ -433,8 +433,7 @@ function M.subagent_child_update_cost(tail)
 end
 
 --- Wall-clock cost of 20 new nested tools under a card (make bench). Each one
---- dirties the card, so everything below it re-renders in memory -- O(tail) --
---- though only the header row reaches the buffer.
+--- re-renders the card alone; the messages below it are only looked up.
 ---@param tail integer
 ---@return number ms
 function M.subagent_spawn_cost(tail)
@@ -486,7 +485,7 @@ function M.run()
     print(string.format("  tail=%-5d  %7.3f ms / 20 updates", t, M.subagent_child_update_cost(t)))
   end
 
-  print("\nnew nested tool under a mid-transcript card — LINEAR vs tail size (re-renders below the card):")
+  print("\nnew nested tool under a mid-transcript card — should be ~FLAT vs tail size:")
   for _, t in ipairs({ 0, 100, 400, 800 }) do
     print(string.format("  tail=%-5d  %7.3f ms / 20 spawns", t, M.subagent_spawn_cost(t)))
   end
