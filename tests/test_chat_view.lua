@@ -888,3 +888,163 @@ h.describe("ChatView:add_action", function()
     h.is_true(not bound(), "and loses it on remove")
   end)
 end)
+
+-- ── incremental render == full render ──────────────────────────
+-- `_render` only redoes what changed; after every step of a seeded random walk
+-- over the integration's operations, text, row owners and highlights must match
+-- a from-scratch render.
+h.describe("ChatView incremental render", function()
+  local Message = require("emeth.message")
+  local Render = require("emeth.ui.render")
+  local api = vim.api
+
+  local function expected(view)
+    local text, owners, marks = {}, {}, {}
+    for _, msg in ipairs(view.messages) do
+      if msg.visible ~= false then
+        for _, line in ipairs(ChatView._expand(Render.render_message(msg, view.messages))) do
+          local row = #text
+          text[row + 1] = tostring(line)
+          owners[row + 1] = msg
+          if line.line_hl then
+            marks[#marks + 1] = ("%d:line:%s"):format(row, line.line_hl)
+          end
+          local col = 0
+          for _, s in ipairs(line.sections) do
+            local hl = type(s[2]) == "function" and s[2]() or s[2]
+            if hl and #s[1] > 0 then
+              marks[#marks + 1] = ("%d:%d-%d:%s"):format(row, col, col + #s[1], hl)
+            end
+            col = col + #s[1]
+          end
+        end
+      end
+    end
+    if #text == 0 then
+      text = { "" }
+    end
+    table.sort(marks)
+    return text, owners, marks
+  end
+
+  local function actual_marks(view)
+    local out = {}
+    for _, m in ipairs(api.nvim_buf_get_extmarks(view.result_buf, view._ns_id, 0, -1, { details = true })) do
+      local row, col, d = m[2], m[3], m[4]
+      if d.line_hl_group then
+        out[#out + 1] = ("%d:line:%s"):format(row, d.line_hl_group)
+      end
+      -- A zero-width highlight paints nothing, wherever it ends up.
+      if d.hl_group and not (d.end_row == row and d.end_col == col) then
+        out[#out + 1] = ("%d:%d-%d:%s"):format(row, col, d.end_col, d.hl_group)
+      end
+    end
+    table.sort(out)
+    return out
+  end
+
+  local function check(view, step)
+    -- The integration's throttle timer flushes deferred updates.
+    view:flush()
+    vim.wait(0)
+    local text, owners, marks = expected(view)
+    h.eq(text, api.nvim_buf_get_lines(view.result_buf, 0, -1, false), "buffer text diverged at step " .. step)
+    for row = 1, #owners do
+      if view._line_to_msg[row] ~= owners[row] then
+        error(("row %d owned by the wrong message at step %d"):format(row, step))
+      end
+    end
+    h.is_nil(view._line_to_msg[#owners + 1], "stale row owner past the end at step " .. step)
+    h.eq(marks, actual_marks(view), "highlights diverged at step " .. step)
+  end
+
+  local function body(rng)
+    local lines = {}
+    for i = 1, rng(1, 5) do
+      lines[i] = ("line %d %s"):format(i, string.rep("w", rng(0, 12)))
+    end
+    return table.concat(lines, "\n")
+  end
+
+  local STATUSES = { "pending", "in_progress", "completed", "failed" }
+
+  local function new_message(rng, id)
+    local kind = rng(1, 3)
+    if kind == 1 then
+      return Message:new("assistant", body(rng))
+    elseif kind == 2 then
+      return Message:new("user", body(rng))
+    end
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      id = "t" .. id,
+      name = "Bash",
+      input = { command = "ls " .. id },
+      status = STATUSES[rng(1, #STATUSES)],
+    }, { tool_call = { title = "ls " .. id, status = "pending", content = {} } })
+    msg.metadata._expanded = rng(0, 1) == 1
+    return msg
+  end
+
+  local function mutate(rng, m)
+    if Render.tool_use(m) then
+      m.content[1].status = STATUSES[rng(1, #STATUSES)]
+      m.metadata.tool_call.content = { { type = "content", content = { text = body(rng) } } }
+      m.metadata._expanded = rng(0, 1) == 1
+    else
+      m.content = { { type = "text", text = body(rng) } }
+    end
+  end
+
+  h.it("matches a full render after every step of a random walk", function()
+    local view = make_view()
+    view:clear()
+    math.randomseed(20261028)
+    local rng = math.random
+    local id = 0
+    for step = 1, 400 do
+      local n = #view.messages
+      local op = n < 3 and 1 or rng(1, 9)
+      if op == 1 then
+        id = id + 1
+        view:add_message(new_message(rng, id))
+      elseif op == 2 or op == 3 then
+        view:update_message(view.messages[rng(1, n)].uuid, function(m)
+          mutate(rng, m)
+        end)
+      elseif op == 4 then
+        id = id + 1
+        local child = new_message(rng, id)
+        child.visible = rng(0, 2) > 0 -- mostly hidden, like a collapsed card's
+        view:insert_message_after(view.messages[rng(1, n)].uuid, child)
+      elseif op == 5 then
+        view:update_message(view.messages[rng(1, n)].uuid, function(m)
+          m.visible = m.visible == false
+        end)
+      elseif op == 6 then
+        -- Flip later messages from an earlier one's update, as a card expanding.
+        local i = rng(1, n)
+        view:update_message(view.messages[i].uuid, function()
+          for j = i + 1, math.min(n, i + 3) do
+            view.messages[j].visible = view.messages[j].visible == false
+          end
+        end)
+      elseif op == 7 then
+        local m = view.messages[rng(1, n)]
+        view:update_message(m.uuid, function(x)
+          mutate(rng, x)
+        end)
+      elseif op == 8 then
+        view:update_message(view.messages[rng(1, n)].uuid, function(m)
+          mutate(rng, m)
+        end, { defer_render = true })
+        if rng(0, 1) == 1 then
+          view:flush()
+        end
+      else
+        view:invalidate()
+      end
+      check(view, step)
+    end
+  end)
+end)

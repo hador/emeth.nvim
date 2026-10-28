@@ -335,21 +335,12 @@ end
 function ChatView:update_message(uuid, msg_or_fn, opts)
   for i, m in ipairs(self.messages) do
     if m.uuid == uuid then
-      local was_hidden = m.visible == false
       if type(msg_or_fn) == "function" then
         msg_or_fn(m)
       else
         self.messages[i] = msg_or_fn
       end
       self._line_cache[uuid] = nil
-      -- A message that was hidden and still is renders no rows, so nothing on
-      -- screen changed. A subagent's nested calls live like this under a
-      -- collapsed card and update constantly; dirtying them re-rendered
-      -- everything below the card for nothing. Expanding the card dirties from
-      -- the card itself, which re-renders its children fresh.
-      if was_hidden and self.messages[i].visible == false then
-        return
-      end
       self._dirty_from = self._dirty_from and math.min(self._dirty_from, i) or i
       if not (opts and opts.defer_render) then
         self:_schedule_render()
@@ -561,6 +552,41 @@ function ChatView:_first_row(msg, row)
   return first
 end
 
+---Split rendered lines with embedded "\n" into one Line per buffer row.
+---@param raw_lines chat_ui.Line[]
+---@return chat_ui.Line[]
+local function expand(raw_lines)
+  local out = {}
+  for _, line in ipairs(raw_lines) do
+    local has_nl = false
+    for _, s in ipairs(line.sections) do
+      if s[1]:find("\n", 1, true) then
+        has_nl = true
+        break
+      end
+    end
+    if not has_nl then
+      out[#out + 1] = line
+    else
+      local rows = { {} }
+      for _, s in ipairs(line.sections) do
+        local parts = vim.split(s[1], "\n", { plain = true })
+        for pi, part in ipairs(parts) do
+          if pi > 1 then
+            rows[#rows + 1] = {}
+          end
+          rows[#rows][#rows[#rows] + 1] = { part, s[2] }
+        end
+      end
+      for _, row in ipairs(rows) do
+        out[#out + 1] = Line:new(row, line.line_hl)
+      end
+    end
+  end
+  return out
+end
+ChatView._expand = expand
+
 function ChatView:_schedule_render()
   if self._render_pending then
     return
@@ -580,38 +606,6 @@ function ChatView:_render()
 
   local dirty_from = self._dirty_from or 1
   self._dirty_from = nil
-
-  -- Expand raw rendered lines (split embedded \n) into final lines
-  local function expand(raw_lines)
-    local out = {}
-    for _, line in ipairs(raw_lines) do
-      local has_nl = false
-      for _, s in ipairs(line.sections) do
-        if s[1]:find("\n", 1, true) then
-          has_nl = true
-          break
-        end
-      end
-      if not has_nl then
-        out[#out + 1] = line
-      else
-        local rows = { {} }
-        for _, s in ipairs(line.sections) do
-          local parts = vim.split(s[1], "\n", { plain = true })
-          for pi, part in ipairs(parts) do
-            if pi > 1 then
-              rows[#rows + 1] = {}
-            end
-            rows[#rows][#rows[#rows] + 1] = { part, s[2] }
-          end
-        end
-        for _, row in ipairs(rows) do
-          out[#out + 1] = Line:new(row, line.line_hl)
-        end
-      end
-    end
-    return out
-  end
 
   -- Prefix (messages before dirty_from) is entirely cache hits: its rendered
   -- lines and its buffer rows are byte-identical to the previous render, so we
