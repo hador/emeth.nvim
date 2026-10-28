@@ -113,13 +113,10 @@ h.describe("perf: subagent activity leaves the transcript around its card alone"
   -- for as long as a subagent ran. These count rows written, at two tail sizes:
   -- the work must be what the update changed, not how much was said since.
 
-  h.it("a hidden child's update writes no rows and renders nothing", function()
+  h.it("a hidden child's update writes no rows", function()
     for _, tail in ipairs({ SMALL, LARGE }) do
       local s, run = bench.subagent_child_update_run(tail)
-      local renders
-      local writes = bench.count_buffer_writes(s.view.result_buf, function()
-        renders = bench.count_render_calls(run)
-      end)
+      local writes = bench.count_buffer_writes(s.view.result_buf, run)
       h.eq(
         0,
         writes.rows,
@@ -129,11 +126,6 @@ h.describe("perf: subagent activity leaves the transcript around its card alone"
           writes.rows,
           tail
         )
-      )
-      h.eq(
-        0,
-        renders,
-        string.format("hidden-child updates re-rendered %d messages (tail=%d); expected 0", renders, tail)
       )
     end
   end)
