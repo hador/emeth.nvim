@@ -39,8 +39,10 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _permanent_keys table<string, true>  prompt keys bound once for the view's life
 ---@field _key_fallback table<string, fun()>  a permanent key's default when nothing claims it
 ---@field _actions? table<string, chat_ui.MessageAction>  provider actions by key
----@field _line_cache table<string, integer>  uuid -> rendered line count
----@field _dirty_from? integer  index of first message needing re-render
+---@field _line_cache table<string, integer>  uuid -> rows it occupies in the buffer
+---@field _dirty table<string, true>  uuid -> re-render on next paint
+---@field _dirty_all? boolean  re-render everything on next paint
+---@field _dirty_from? integer  first message index that may have changed
 ---@field _render_pending? boolean
 local ChatView = {}
 ChatView.__index = ChatView
@@ -91,8 +93,9 @@ function ChatView:new(opts)
     _scroll = true,
     _context_files = {},
     _line_to_msg = {},
-    _line_cache = {}, -- uuid → rendered line count (prefix offset only)
-    _dirty_from = nil, -- index of first dirty message
+    _line_cache = {},
+    _dirty = {},
+    _dirty_from = nil,
     _pastes = {}, -- id → { text, placeholder, mark } for folded large pastes
     _paste_ns = api.nvim_create_namespace("emeth_input_paste"),
     _paste_seq = 0,
@@ -105,10 +108,10 @@ function ChatView:new(opts)
 
   -- Re-render one message in place after K (or any local toggle) changed it.
   local function invalidate_msg(msg)
-    view._line_cache[msg.uuid] = nil
+    view._dirty[msg.uuid] = true
     for i, m in ipairs(view.messages) do
       if m == msg then
-        view._dirty_from = i
+        view._dirty_from = view._dirty_from and math.min(view._dirty_from, i) or i
         break
       end
     end
@@ -339,8 +342,16 @@ function ChatView:update_message(uuid, msg_or_fn, opts)
         msg_or_fn(m)
       else
         self.messages[i] = msg_or_fn
+        -- A replacement with a new uuid inherits the old one's rows.
+        if msg_or_fn.uuid ~= uuid then
+          self._line_cache[msg_or_fn.uuid] = self._line_cache[uuid]
+          self._line_cache[uuid] = nil
+          uuid = msg_or_fn.uuid
+        end
       end
-      self._line_cache[uuid] = nil
+      -- Dirty even when hidden: it renders nothing, but its update may have
+      -- shown others (a hidden nested card expanding its children).
+      self._dirty[uuid] = true
       self._dirty_from = self._dirty_from and math.min(self._dirty_from, i) or i
       if not (opts and opts.defer_render) then
         self:_schedule_render()
@@ -361,12 +372,13 @@ end
 function ChatView:clear()
   self.messages = {}
   self._line_cache = {}
+  self._dirty = {}
   self._dirty_from = nil
   self:_render()
 end
 
 function ChatView:invalidate()
-  self._line_cache = {}
+  self._dirty_all = true
   self._dirty_from = 1
   self:_schedule_render()
 end
@@ -605,97 +617,108 @@ function ChatView:_render()
   end
 
   local dirty_from = self._dirty_from or 1
-  self._dirty_from = nil
+  local dirty_all = self._dirty_all
+  local dirty = self._dirty
+  self._dirty_from, self._dirty_all, self._dirty = nil, nil, {}
+  local cache = self._line_cache
+  local owners = self._line_to_msg
+  local ns = self._ns_id
 
-  -- Prefix (messages before dirty_from) is entirely cache hits: its rendered
-  -- lines and its buffer rows are byte-identical to the previous render, so we
-  -- neither re-materialize them nor rewrite their buffer lines. We only need
-  -- the prefix line COUNT (where the tail starts) and we keep the prefix's
-  -- existing _line_to_msg entries untouched. Counting instead of rebuilding is
-  -- ~20x cheaper and, crucially, keeps a streaming update O(tail) rather than
-  -- O(whole transcript) -- the latter made long sessions render quadratically.
-  local prefix_count = 0
-  for i = 1, dirty_from - 1 do
-    local msg = self.messages[i]
-    if msg and msg.visible ~= false then
-      local cached = self._line_cache[msg.uuid]
-      if cached then
-        prefix_count = prefix_count + cached
-      end
+  -- Only dirty (or not yet shown) messages re-render, and only rows that differ
+  -- are written: a replaced row loses every extmark on it even if its text is
+  -- unchanged, which stripped render-markdown's decorations below a busy card.
+  local modifiable = false
+  ---Make rows [row, row + n_old) read `texts`, writing only rows that differ.
+  local function write(row, n_old, texts)
+    local old = n_old > 0 and api.nvim_buf_get_lines(buf, row, row + n_old, false) or {}
+    local n_new = #texts
+    local head = 0
+    while head < n_old and head < n_new and old[head + 1] == texts[head + 1] do
+      head = head + 1
     end
-  end
-  -- Drop any stale line->msg entries at/after the tail start; the tail loop
-  -- below repopulates the rows it actually produces, and anything past the new
-  -- end (e.g. after a message shrank) must not linger.
-  local old_max = self._line_to_msg_max or 0
-  for j = prefix_count + 1, old_max do
-    self._line_to_msg[j] = nil
+    local foot = 0
+    while foot < n_old - head and foot < n_new - head and old[n_old - foot] == texts[n_new - foot] do
+      foot = foot + 1
+    end
+    if head == n_old - foot and head == n_new - foot then
+      return
+    end
+    if not modifiable then
+      api.nvim_set_option_value("modifiable", true, { buf = buf })
+      modifiable = true
+    end
+    api.nvim_buf_set_lines(buf, row + head, row + n_old - foot, false, vim.list_slice(texts, head + 1, n_new - foot))
   end
 
-  -- Render dirty messages
-  local tail_lines = {}
-  local tail_text = {}
+  -- Messages before dirty_from are untouched; only their row counts matter.
+  local row = 0
+  for i = 1, dirty_from - 1 do
+    row = row + (cache[self.messages[i].uuid] or 0)
+  end
+
+  -- Visit every message from dirty_from on (a lookup when clean): expanding a
+  -- card flips its children's `visible` without dirtying them.
+  local shifted = false -- a row count changed above; owners below must move
   for i = dirty_from, #self.messages do
     local msg = self.messages[i]
-    if msg and msg.visible ~= false then
-      local raw = Render.render_message(msg, self.messages)
-      local expanded = expand(raw)
+    local uuid = msg.uuid
+    local n_old = cache[uuid]
+    if msg.visible == false then
+      if n_old then
+        api.nvim_buf_clear_namespace(buf, ns, row, row + n_old)
+        write(row, n_old, {})
+        cache[uuid] = nil
+        shifted = true
+      end
+    elseif n_old and not dirty_all and not dirty[uuid] then
+      if shifted then
+        for j = row + 1, row + n_old do
+          owners[j] = msg
+        end
+      end
+      row = row + n_old
+    else
+      local lines = expand(Render.render_message(msg, self.messages))
       local texts = {}
-      for _, line in ipairs(expanded) do
-        texts[#texts + 1] = tostring(line)
+      for k, line in ipairs(lines) do
+        texts[k] = tostring(line)
       end
-      -- Cache only the rendered line COUNT: the prefix loop above needs nothing
-      -- else (the tail always re-renders fresh via render_message), and holding
-      -- the Line[]/text[] for every message was the dominant resident-memory
-      -- cost in long sessions -- hundreds of arrays retained but never reread.
-      self._line_cache[msg.uuid] = #expanded
-      local base = prefix_count + #tail_lines
-      vim.list_extend(tail_lines, expanded)
-      vim.list_extend(tail_text, texts)
-      for j = base + 1, prefix_count + #tail_lines do
-        self._line_to_msg[j] = msg
+      -- Clear first, or a deletion collapses them onto the next message's row.
+      if n_old then
+        api.nvim_buf_clear_namespace(buf, ns, row, row + n_old)
       end
+      write(row, n_old or 0, texts)
+      for k, line in ipairs(lines) do
+        line:set_highlights(ns, buf, row + k - 1)
+        owners[row + k] = msg
+      end
+      if #lines ~= (n_old or 0) then
+        shifted = true
+      end
+      -- Count only: keeping every Line[] dominated memory in long sessions.
+      cache[uuid] = #lines
+      row = row + #lines
     end
   end
 
-  -- Highest line index we've populated in _line_to_msg; the next render trims
-  -- any entries beyond its own end so a shrunk transcript leaves no stragglers.
-  self._line_to_msg_max = prefix_count + #tail_lines
-
-  -- Write only the rows that differ from what the buffer already holds. The
-  -- tail re-renders from the first dirty message down, but most of it is
-  -- usually unchanged -- everything the main session wrote below a subagent
-  -- card whose tool count just ticked. A replaced row loses every extmark on
-  -- it even when its new text is identical, so rewriting the whole tail stripped
-  -- other plugins' decorations (render-markdown's) off all of it on every update.
-  local start_line = prefix_count
-  local old_text = api.nvim_buf_get_lines(buf, start_line, -1, false)
-  local n_old, n_new = #old_text, #tail_text
-  local head = 0
-  while head < n_old and head < n_new and old_text[head + 1] == tail_text[head + 1] do
-    head = head + 1
+  -- Rows past the last message: the initial empty line, or a cleared view's.
+  local total = api.nvim_buf_line_count(buf)
+  if total > row and not (row == 0 and total == 1 and api.nvim_buf_get_lines(buf, 0, 1, false)[1] == "") then
+    api.nvim_buf_clear_namespace(buf, ns, row, -1)
+    if not modifiable then
+      api.nvim_set_option_value("modifiable", true, { buf = buf })
+      modifiable = true
+    end
+    api.nvim_buf_set_lines(buf, row, -1, false, {})
   end
-  local foot = 0
-  while foot < n_old - head and foot < n_new - head and old_text[n_old - foot] == tail_text[n_new - foot] do
-    foot = foot + 1
-  end
-  if head < n_old - foot or head < n_new - foot then
-    api.nvim_set_option_value("modifiable", true, { buf = buf })
-    api.nvim_buf_set_lines(
-      buf,
-      start_line + head,
-      start_line + n_old - foot,
-      false,
-      vim.list_slice(tail_text, head + 1, n_new - foot)
-    )
+  if modifiable then
     api.nvim_set_option_value("modifiable", false, { buf = buf })
   end
 
-  -- Highlights: only on the changed region
-  api.nvim_buf_clear_namespace(buf, self._ns_id, start_line, -1)
-  for i, line in ipairs(tail_lines) do
-    line:set_highlights(self._ns_id, buf, start_line + i - 1)
+  for j = row + 1, self._line_to_msg_max or 0 do
+    owners[j] = nil
   end
+  self._line_to_msg_max = row
 
   if self._scroll then
     vim.schedule(function()

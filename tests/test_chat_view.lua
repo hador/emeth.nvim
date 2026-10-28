@@ -335,9 +335,9 @@ h.describe("ChatView:update_message defer_render + flush", function()
 
     -- Model is current immediately...
     h.eq("start more", view:get_message(m.uuid):text())
-    -- ...but no render was scheduled and the cache entry was dropped (dirty).
+    -- ...but no render was scheduled, and the message is marked dirty.
     h.is_true(not view._render_pending, "deferred update must not schedule a render")
-    h.is_nil(view._line_cache[m.uuid], "deferred update should still mark the message dirty")
+    h.is_true(view._dirty[m.uuid], "deferred update should still mark the message dirty")
   end)
 
   h.it("flush schedules the pending render", function()
