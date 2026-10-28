@@ -104,3 +104,83 @@ h.describe("perf: a streaming tool body renders linearly (default collapsed)", f
     )
   end)
 end)
+
+h.describe("perf: subagent activity leaves the transcript around its card alone", function()
+  -- A subagent card sits at its spawn point, mid-transcript, while the main
+  -- session keeps writing below it. Rewriting buffer rows strips every extmark on
+  -- them -- render-markdown's decorations included -- even when the new text is
+  -- byte-identical, so the text below the card flipped between formatted and raw
+  -- for as long as a subagent ran. These count rows written, at two tail sizes:
+  -- the work must be what the update changed, not how much was said since.
+
+  h.it("a hidden child's update writes no rows and renders nothing", function()
+    for _, tail in ipairs({ SMALL, LARGE }) do
+      local s, run = bench.subagent_child_update_run(tail)
+      local renders
+      local writes = bench.count_buffer_writes(s.view.result_buf, function()
+        renders = bench.count_render_calls(run)
+      end)
+      h.eq(
+        0,
+        writes.rows,
+        string.format(
+          "20 updates to hidden children wrote %d rows below a card with %d messages after it; "
+            .. "expected 0 -- nothing on screen changed.",
+          writes.rows,
+          tail
+        )
+      )
+      h.eq(
+        0,
+        renders,
+        string.format("hidden-child updates re-rendered %d messages (tail=%d); expected 0", renders, tail)
+      )
+    end
+  end)
+
+  h.it("a new nested tool rewrites only the card's header row", function()
+    for _, tail in ipairs({ SMALL, LARGE }) do
+      local s, run = bench.subagent_spawn_run(tail)
+      local writes = bench.count_buffer_writes(s.view.result_buf, run)
+      h.eq(
+        20,
+        writes.rows,
+        string.format(
+          "20 new nested tools wrote %d rows with %d messages after the card; expected 20 "
+            .. "(the '⊳ N tools' header, once each).",
+          writes.rows,
+          tail
+        )
+      )
+    end
+  end)
+
+  h.it("a re-render that changes nothing writes nothing", function()
+    local s = bench.subagent_scenario(SMALL)
+    local writes = bench.count_buffer_writes(s.view.result_buf, function()
+      s.view:invalidate()
+      vim.wait(0)
+    end)
+    h.eq(0, writes.rows, string.format("an identical full re-render wrote %d rows; expected 0", writes.rows))
+  end)
+
+  h.it("decorations below the card survive subagent activity", function()
+    -- What render-markdown does: a ranged extmark on a line well below the card.
+    local s = bench.subagent_scenario(SMALL)
+    local buf = s.view.result_buf
+    local ns = vim.api.nvim_create_namespace("emeth_test_decor")
+    local row = vim.api.nvim_buf_line_count(buf) - 5
+    local id = vim.api.nvim_buf_set_extmark(buf, ns, row, 0, { end_row = row, end_col = 4 })
+    local before = vim.api.nvim_buf_get_extmark_by_id(buf, ns, id, { details = true })
+    s.update(s.children[1], 1)
+    vim.wait(0)
+    s.spawn()
+    vim.wait(0)
+    local after = vim.api.nvim_buf_get_extmark_by_id(buf, ns, id, { details = true })
+    h.eq(before[1], after[1], "decoration moved off its row")
+    h.eq(before[2], after[2], "decoration moved off its column")
+    h.eq(before[3].end_row, after[3].end_row, "decoration's range collapsed (end_row)")
+    h.eq(before[3].end_col, after[3].end_col, "decoration's range collapsed (end_col)")
+    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  end)
+end)

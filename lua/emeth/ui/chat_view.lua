@@ -313,8 +313,11 @@ function ChatView:insert_message_after(after_uuid, msg)
   for i, m in ipairs(self.messages) do
     if m.uuid == after_uuid then
       table.insert(self.messages, i + 1, msg)
-      self._dirty_from = self._dirty_from and math.min(self._dirty_from, i + 1) or i + 1
-      self:_schedule_render()
+      -- A hidden message adds no rows (see update_message).
+      if msg.visible ~= false then
+        self._dirty_from = self._dirty_from and math.min(self._dirty_from, i + 1) or i + 1
+        self:_schedule_render()
+      end
       return
     end
   end
@@ -332,12 +335,21 @@ end
 function ChatView:update_message(uuid, msg_or_fn, opts)
   for i, m in ipairs(self.messages) do
     if m.uuid == uuid then
+      local was_hidden = m.visible == false
       if type(msg_or_fn) == "function" then
         msg_or_fn(m)
       else
         self.messages[i] = msg_or_fn
       end
       self._line_cache[uuid] = nil
+      -- A message that was hidden and still is renders no rows, so nothing on
+      -- screen changed. A subagent's nested calls live like this under a
+      -- collapsed card and update constantly; dirtying them re-rendered
+      -- everything below the card for nothing. Expanding the card dirties from
+      -- the card itself, which re-renders its children fresh.
+      if was_hidden and self.messages[i].visible == false then
+        return
+      end
       self._dirty_from = self._dirty_from and math.min(self._dirty_from, i) or i
       if not (opts and opts.defer_render) then
         self:_schedule_render()
@@ -656,11 +668,34 @@ function ChatView:_render()
   -- any entries beyond its own end so a shrunk transcript leaves no stragglers.
   self._line_to_msg_max = prefix_count + #tail_lines
 
-  -- Partial buffer update: only replace from prefix end onward
+  -- Write only the rows that differ from what the buffer already holds. The
+  -- tail re-renders from the first dirty message down, but most of it is
+  -- usually unchanged -- everything the main session wrote below a subagent
+  -- card whose tool count just ticked. A replaced row loses every extmark on
+  -- it even when its new text is identical, so rewriting the whole tail stripped
+  -- other plugins' decorations (render-markdown's) off all of it on every update.
   local start_line = prefix_count
-  api.nvim_set_option_value("modifiable", true, { buf = buf })
-  api.nvim_buf_set_lines(buf, start_line, -1, false, tail_text)
-  api.nvim_set_option_value("modifiable", false, { buf = buf })
+  local old_text = api.nvim_buf_get_lines(buf, start_line, -1, false)
+  local n_old, n_new = #old_text, #tail_text
+  local head = 0
+  while head < n_old and head < n_new and old_text[head + 1] == tail_text[head + 1] do
+    head = head + 1
+  end
+  local foot = 0
+  while foot < n_old - head and foot < n_new - head and old_text[n_old - foot] == tail_text[n_new - foot] do
+    foot = foot + 1
+  end
+  if head < n_old - foot or head < n_new - foot then
+    api.nvim_set_option_value("modifiable", true, { buf = buf })
+    api.nvim_buf_set_lines(
+      buf,
+      start_line + head,
+      start_line + n_old - foot,
+      false,
+      vim.list_slice(tail_text, head + 1, n_new - foot)
+    )
+    api.nvim_set_option_value("modifiable", false, { buf = buf })
+  end
 
   -- Highlights: only on the changed region
   api.nvim_buf_clear_namespace(buf, self._ns_id, start_line, -1)
