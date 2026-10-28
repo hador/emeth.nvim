@@ -290,6 +290,158 @@ function M.streaming_tool_growth_throttled(n_lines, coalesce)
   return M.time(run, 3)
 end
 
+-- ── buffer-write counting ──────────────────────────────────────
+--- Count the `nvim_buf_set_lines` calls on `buf` while running `fn`, and the
+--- rows they wrote. Rows written is what matters to every extmark in the
+--- buffer: a replaced row loses the marks on it, even when its new text is
+--- byte-identical -- which is how a no-op re-render used to strip
+--- render-markdown's decorations off everything below a subagent card.
+---@param buf integer
+---@param fn fun()
+---@return { calls: integer, rows: integer }
+function M.count_buffer_writes(buf, fn)
+  local stats = { calls = 0, rows = 0 }
+  local orig = vim.api.nvim_buf_set_lines
+  vim.api.nvim_buf_set_lines = function(b, start, stop, strict, replacement)
+    if b == buf or (b == 0 and vim.api.nvim_get_current_buf() == buf) then
+      stats.calls = stats.calls + 1
+      stats.rows = stats.rows + #replacement
+    end
+    return orig(b, start, stop, strict, replacement)
+  end
+  local ok, err = pcall(fn)
+  vim.api.nvim_buf_set_lines = orig
+  if not ok then
+    error(err)
+  end
+  return stats
+end
+
+--- Paint whatever is pending, the way the integration does: an update schedules
+--- its own render (vim.schedule), and only when it dirtied something. Draining
+--- the queue rather than calling `_render` directly keeps an update that
+--- correctly dirties nothing from being force-painted by the bench itself.
+local function paint()
+  vim.wait(0)
+end
+
+-- ── subagent cards ─────────────────────────────────────────────
+-- A subagent's spawning call sits mid-transcript (at the spawn point) while the
+-- main session keeps writing below it, and its nested calls arrive as hidden
+-- children directly under it. These mirror the mutations
+-- integrations/acp_updates.lua makes for a nested tool_call (count the child on
+-- the parent, insert it hidden after the previous child) and a nested
+-- tool_call_update (mutate the hidden child).
+
+local CARD_ID = "toolu_card"
+
+---A collapsed subagent card with `n_children` hidden children, `prefix`
+---paragraphs above it and `tail` paragraphs written below it since the spawn.
+---@param tail integer
+---@param n_children? integer
+---@return { view: chat_ui.ChatView, card: chat_ui.Message, children: chat_ui.Message[], spawn: fun(): chat_ui.Message, update: fun(child: chat_ui.Message, i: integer) }
+function M.subagent_scenario(tail, n_children)
+  local v = fresh_view()
+  for _ = 1, 3 do
+    v:add_message(Message:new("assistant", PARAGRAPH))
+  end
+  local card = Message:new("assistant", {
+    type = "tool_use",
+    id = CARD_ID,
+    name = "Agent",
+    input = { description = "probe the render path" },
+    status = "in_progress",
+  }, {
+    tool_call = { title = "probe the render path", status = "in_progress" },
+    subagent_state = "running",
+    subagent_children = 0,
+  })
+  v:add_message(card)
+  local s = { view = v, card = card, children = {} }
+
+  function s.spawn()
+    local n = #s.children + 1
+    local child = Message:new("assistant", {
+      type = "tool_use",
+      id = "toolu_child_" .. n,
+      name = "Bash",
+      input = { command = "ls " .. n },
+      status = "pending",
+    }, { tool_call = { title = "ls " .. n, status = "pending" }, parent_tool_call_id = CARD_ID })
+    child.visible = card.metadata._expanded == true
+    local after = card.metadata.last_child_uuid or card.uuid
+    v:update_message(card.uuid, function(m)
+      m.metadata.subagent_children = (m.metadata.subagent_children or 0) + 1
+      m.metadata.last_child_uuid = child.uuid
+    end)
+    v:insert_message_after(after, child)
+    s.children[n] = child
+    return child
+  end
+
+  function s.update(child, i)
+    v:update_message(child.uuid, function(m)
+      m.content[1].status = "in_progress"
+      m.metadata.tool_call.status = "in_progress"
+      m.metadata.tool_call.content = { { type = "content", content = { text = "out " .. i } } }
+    end)
+  end
+
+  for _ = 1, n_children or 2 do
+    s.spawn()
+  end
+  for _ = 1, tail do
+    v:add_message(Message:new("assistant", PARAGRAPH))
+  end
+  paint()
+  return s
+end
+
+--- 20 nested tool_call_updates on a collapsed card's hidden children.
+---@param tail integer
+---@return { view: chat_ui.ChatView }, fun()
+function M.subagent_child_update_run(tail)
+  local s = M.subagent_scenario(tail)
+  return s,
+    function()
+      for i = 1, 20 do
+        s.update(s.children[(i % #s.children) + 1], i)
+        paint()
+      end
+    end
+end
+
+--- 20 new nested tool_calls: each bumps the card's "⊳ N tools" count.
+---@param tail integer
+---@return { view: chat_ui.ChatView }, fun()
+function M.subagent_spawn_run(tail)
+  local s = M.subagent_scenario(tail)
+  return s, function()
+    for _ = 1, 20 do
+      s.spawn()
+      paint()
+    end
+  end
+end
+
+--- Wall-clock cost of 20 hidden-child updates under a card (make bench).
+---@param tail integer
+---@return number ms
+function M.subagent_child_update_cost(tail)
+  local _, run = M.subagent_child_update_run(tail)
+  return M.time(run, 3)
+end
+
+--- Wall-clock cost of 20 new nested tools under a card (make bench). Each one
+--- dirties the card, so everything below it re-renders in memory -- O(tail) --
+--- though only the header row reaches the buffer.
+---@param tail integer
+---@return number ms
+function M.subagent_spawn_cost(tail)
+  local _, run = M.subagent_spawn_run(tail)
+  return M.time(run, 3)
+end
+
 -- ── runner (make bench) ────────────────────────────────────────
 function M.run()
   print("emeth render benchmarks (median ms)\n")
@@ -327,6 +479,16 @@ function M.run()
   print("\nstreaming tool body growth (expanded, throttled ~1 render/10 chunks) — the fix:")
   for _, n in ipairs({ 100, 400, 800 }) do
     print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_tool_growth_throttled(n, 10)))
+  end
+
+  print("\nsubagent child updates under a mid-transcript card — should be FLAT vs tail size:")
+  for _, t in ipairs({ 0, 100, 400, 800 }) do
+    print(string.format("  tail=%-5d  %7.3f ms / 20 updates", t, M.subagent_child_update_cost(t)))
+  end
+
+  print("\nnew nested tool under a mid-transcript card — LINEAR vs tail size (re-renders below the card):")
+  for _, t in ipairs({ 0, 100, 400, 800 }) do
+    print(string.format("  tail=%-5d  %7.3f ms / 20 spawns", t, M.subagent_spawn_cost(t)))
   end
 end
 

@@ -208,3 +208,72 @@ h.describe("Winbar state resync", function()
     Winbar.detach()
   end)
 end)
+
+h.describe("Winbar spinner repaint cost", function()
+  -- The spinner re-renders every 80ms for as long as a prompt is in flight. An
+  -- `nvim_set_hl` call repaints every visible line of every window even when the
+  -- value is unchanged, so an uncached call per tick turns the spinner into a
+  -- full-screen redraw 12x a second.
+  local function attach_pair()
+    local function float(row)
+      local buf = vim.api.nvim_create_buf(false, true)
+      return vim.api.nvim_open_win(buf, false, {
+        relative = "editor",
+        row = row,
+        col = 0,
+        width = 60,
+        height = 3,
+        style = "minimal",
+      })
+    end
+    local rwin, iwin = float(0), float(5)
+    Winbar.attach(rwin, iwin)
+    return rwin, iwin
+  end
+
+  ---Separator highlight writes made while running `fn`.
+  local function sep_hl_calls(fn)
+    local calls = 0
+    local orig = vim.api.nvim_set_hl
+    vim.api.nvim_set_hl = function(ns, name, val)
+      if name:find("^EmethSep") then
+        calls = calls + 1
+      end
+      return orig(ns, name, val)
+    end
+    local ok, err = pcall(fn)
+    vim.api.nvim_set_hl = orig
+    assert(ok, err)
+    return calls
+  end
+
+  h.it("an unchanged repaint rewrites no separator highlights", function()
+    local rwin, iwin = attach_pair()
+    Winbar.set_mode_tag("plan", "info")
+    Winbar.set_state("generating")
+    local calls = sep_hl_calls(function()
+      for _ = 1, 10 do
+        Winbar.set_left(Winbar.fmt.plain("provider")) -- re-renders, as a spinner tick does
+      end
+    end)
+    Winbar.detach()
+    vim.api.nvim_win_close(rwin, true)
+    vim.api.nvim_win_close(iwin, true)
+    h.eq(0, calls, string.format("10 unchanged repaints made %d separator nvim_set_hl calls; expected 0", calls))
+  end)
+
+  h.it("a colorscheme change re-applies the separator highlights", function()
+    -- `:colorscheme` clears every group, so a cache that outlived it would leave
+    -- the separator unhighlighted until its colors happened to change.
+    local rwin, iwin = attach_pair()
+    Winbar.set_state("generating")
+    local calls = sep_hl_calls(function()
+      vim.api.nvim_exec_autocmds("ColorScheme", {})
+      Winbar.set_left(Winbar.fmt.plain("provider"))
+    end)
+    Winbar.detach()
+    vim.api.nvim_win_close(rwin, true)
+    vim.api.nvim_win_close(iwin, true)
+    h.is_true(calls >= 2, string.format("expected the separator groups re-set after ColorScheme, got %d calls", calls))
+  end)
+end)

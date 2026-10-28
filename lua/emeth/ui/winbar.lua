@@ -234,10 +234,12 @@ local function render()
     end
   end
 
-  api.nvim_set_hl(0, "EmethSepLine", { fg = sep_fg, bg = bg })
-  api.nvim_set_hl(0, "EmethSepLabel", { fg = label_hl, bg = bg, bold = true })
+  -- Through the cache: this runs on every spinner tick, and an nvim_set_hl call
+  -- repaints every visible line even when the value is unchanged.
+  set_hl("EmethSepLine", { fg = sep_fg, bg = bg })
+  set_hl("EmethSepLabel", { fg = label_hl, bg = bg, bold = true })
   if mode_hl then
-    api.nvim_set_hl(0, "EmethSepMode", { fg = mode_hl, bg = bg, bold = true, italic = true })
+    set_hl("EmethSepMode", { fg = mode_hl, bg = bg, bold = true, italic = true })
   end
 
   local win_w = api.nvim_win_get_width(input_win)
@@ -305,6 +307,17 @@ function M.attach(win, iwin)
         return
       end
       render()
+    end,
+  })
+  -- `:colorscheme` clears every highlight group, so the cache no longer says
+  -- what is set; forget it and repaint.
+  api.nvim_create_autocmd("ColorScheme", {
+    group = resize_augroup,
+    callback = function()
+      hl_cache = {}
+      if result_win or input_win then
+        render()
+      end
     end,
   })
 end
