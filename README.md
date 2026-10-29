@@ -47,7 +47,7 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 ## Requirements
 
 - Neovim ≥ 0.10
-- At least one ACP-compatible agent CLI (claude-code, gemini-cli, goose, codex, kiro-cli)
+- At least one ACP-compatible agent CLI (claude-code, gemini-cli, goose, codex, kiro-cli, opencode)
 - Optional: [snacks.nvim] — not required, but recommended. emeth drives its picker directly when present, which unlocks a lot: the session-history picker (`:EmethHistory`) becomes wide and columned with a preview pane, validity badges, a footer hint bar, and per-row actions (rename / forget / delete / sync). Other `vim.ui.select` prompts also pick up snacks' styling. Without it everything still works — pickers fall back to plain `vim.ui.select` (resume only).
 
 ## Installation
@@ -159,6 +159,7 @@ require("emeth").setup({
       ["goose"]       = { command = "goose", args = { "acp" } },
       ["codex"]       = { command = "npx", args = { "-y", "@zed-industries/codex-acp" } },
       ["kiro-cli"]    = { command = "kiro-cli", args = { "acp", "--agent-engine=v3", "--auth-method=cli" } },
+      ["opencode"]    = { command = "opencode", args = { "acp" } },
     },
   },
 })

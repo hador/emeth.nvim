@@ -58,6 +58,10 @@ local defaults = {
       -- `_kiro/openExternalUrl` request handler.
       capabilities_meta = { kiro = { openExternalUrl = true } },
     },
+    ["opencode"] = {
+      command = "opencode",
+      args = { "acp" },
+    },
   },
 }
 
