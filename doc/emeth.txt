@@ -106,7 +106,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
           command = "kiro-cli",
           args = { "acp", "--agent-engine=v3", "--auth-method=cli" },
         },
-        -- also claude-code, gemini-cli, goose, codex; each takes
+        -- also claude-code, gemini-cli, goose, codex, opencode; each takes
         -- command, args, env, pass_env, auth_method
       },
     },
