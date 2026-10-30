@@ -1,5 +1,6 @@
 local h = require("tests.helpers")
 local OpenCode = require("emeth.integrations.opencode")
+local Elicit = require("emeth.acp.elicitation")
 local transform = OpenCode._transform_update
 
 local function reset()
@@ -281,20 +282,116 @@ h.describe("opencode transform_update (pass-through)", function()
   end)
 end)
 
+-- ── transform_elicitation ────────────────────────────────────────
+-- opencode's `question` tool arrives as `q<N>` (a select) + `q<N>_custom`
+-- (free text) pairs. Folding the companion in asks the user once.
+
+local function question_schema(n)
+  local properties = {}
+  for i = 0, n - 1 do
+    properties["q" .. i] = {
+      type = "string",
+      title = "Q" .. i,
+      description = "question " .. i,
+      oneOf = {
+        { const = "a" .. i, title = "Option A", description = "does a" },
+        { const = "b" .. i, title = "Option B", description = "does b" },
+      },
+    }
+    properties["q" .. i .. "_custom"] = {
+      type = "string",
+      title = "Q" .. i .. " (other)",
+      description = "Type your own answer",
+    }
+  end
+  return { type = "object", properties = properties, required = {} }
+end
+
+h.describe("opencode transform_elicitation", function()
+  h.it("folds each qN_custom companion into its question", function()
+    local fields = OpenCode._transform_elicitation(Elicit.parse(question_schema(3)))
+    h.eq(3, #fields, "companions are folded away, not rendered as own prompts")
+    h.eq("q0", fields[1].key)
+    h.eq("q0_custom", fields[1].custom_key)
+    h.eq("q2", fields[3].key)
+    h.eq("q2_custom", fields[3].custom_key)
+  end)
+
+  h.it("orders q<N> numerically, not lexicographically", function()
+    local fields = OpenCode._transform_elicitation(Elicit.parse(question_schema(12)))
+    local keys = {}
+    for _, f in ipairs(fields) do
+      keys[#keys + 1] = f.key
+    end
+    h.eq("q0", keys[1])
+    h.eq("q2", keys[3])
+    h.eq("q11", keys[12])
+    h.eq(12, #keys)
+  end)
+
+  h.it("is idempotent", function()
+    local fields = OpenCode._transform_elicitation(Elicit.parse(question_schema(2)))
+    local re = OpenCode._transform_elicitation(fields)
+    h.eq(2, #re)
+    h.eq("q0_custom", re[1].custom_key, "a second pass must not undo the fold")
+    h.eq("q1_custom", re[2].custom_key)
+  end)
+
+  h.it("routes a typed answer under the companion's own key", function()
+    local fields = OpenCode._transform_elicitation(Elicit.parse(question_schema(1)))
+    h.eq({ q0_custom = "wsl only" }, Elicit.to_content(fields, { q0_custom = "wsl only" }))
+    h.eq({ q0 = "a0", q0_custom = "override" }, Elicit.to_content(fields, { q0 = "a0", q0_custom = "override" }))
+  end)
+
+  h.it("does not fold when the base field has no options", function()
+    local fields = OpenCode._transform_elicitation(Elicit.parse({
+      type = "object",
+      properties = {
+        note = { type = "string", title = "Note" },
+        note_custom = { type = "string", title = "Note (other)" },
+      },
+    }))
+    h.eq(2, #fields, "two text fields are two real questions")
+    for _, f in ipairs(fields) do
+      h.is_nil(f.custom_key)
+    end
+  end)
+
+  h.it("leaves an unrelated form untouched", function()
+    local fields = OpenCode._transform_elicitation(Elicit.parse({
+      type = "object",
+      properties = { token = { type = "string", title = "Token" }, remember = { type = "boolean" } },
+    }))
+    h.eq(2, #fields)
+    for _, f in ipairs(fields) do
+      h.is_nil(f.custom_key)
+    end
+  end)
+end)
+
 -- ── setup / state ────────────────────────────────────────────────
 
 h.describe("opencode setup", function()
-  h.it("registers the transform and clears it on cleanup", function()
-    local hook
-    local view = { integration = {
-      set_transform_update = function(fn)
-        hook = fn
-      end,
-    } }
+  h.it("registers the update and elicitation transforms, clearing them on cleanup", function()
+    local update_hook
+    local elicit_hook
+    local view = {
+      integration = {
+        set_transform_update = function(fn)
+          update_hook = fn
+        end,
+        set_transform_elicitation = function(fn)
+          elicit_hook = fn
+        end,
+      },
+    }
     local cleanup = OpenCode.setup(nil, view)
-    h.is_true(type(hook) == "function")
+    h.is_true(type(update_hook) == "function")
+    h.is_true(type(elicit_hook) == "function")
+    h.eq(OpenCode._transform_elicitation, elicit_hook)
     cleanup()
-    h.is_nil(hook)
+    h.is_nil(update_hook)
+    h.is_nil(elicit_hook)
   end)
 
   h.it("resets binding state between sessions", function()
