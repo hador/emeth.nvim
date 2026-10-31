@@ -96,6 +96,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     show_title = true,            -- centered winbar title
     tool_header_max_chars = 100,  -- clamp collapsed tool headers
     diff_collapse_lines = 30,     -- longer diffs start folded behind K
+    thinking_collapse_lines = 16, -- longer thoughts start folded behind K
     claude_code = { extra_args = nil },        -- CLI flags for claude
     kiro_cli = { mode = nil, rewind_key = "R" },
     acp = {

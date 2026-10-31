@@ -56,6 +56,52 @@ h.describe("Render", function()
     h.is_true(all:find("let me think") ~= nil, "expected thinking text in output")
   end)
 
+  local function render_text(msg)
+    local out = ""
+    for _, l in ipairs(Render.render_message(msg, {})) do
+      out = out .. tostring(l) .. "\n"
+    end
+    return out
+  end
+
+  local LONG_LINES = {}
+  for i = 1, 20 do
+    LONG_LINES[i] = "pondering " .. i
+  end
+  local LONG_THOUGHT = table.concat(LONG_LINES, "\n")
+
+  h.it("renders a long thought folded with a line count", function()
+    local msg = Message:new("assistant", { type = "thinking", thinking = LONG_THOUGHT })
+    local all = render_text(msg)
+    h.is_true(all:find("pondering 7") == nil, "the body must stay folded")
+    h.is_true(all:find("20 lines") ~= nil, "the folded face promises the count")
+  end)
+
+  h.it("renders a live folded thought with the moving face", function()
+    local msg = Message:new(
+      "assistant",
+      { type = "thinking", thinking = LONG_THOUGHT },
+      { thinking_active = true, thinking_frame = "⠙" }
+    )
+    local all = render_text(msg)
+    h.is_true(all:find("⠙") ~= nil, "the live face shows the spinner frame")
+    h.is_true(all:find("thinking…") ~= nil, "the live face reads as in-progress")
+    h.is_true(all:find("20 lines") ~= nil, "the live face still counts")
+    h.is_true(all:find("pondering 7") == nil, "the body stays folded while live")
+  end)
+
+  h.it("honors an explicit expand on a long thought", function()
+    local msg = Message:new("assistant", { type = "thinking", thinking = LONG_THOUGHT }, { _expanded = true })
+    local all = render_text(msg)
+    h.is_true(all:find("pondering 7") ~= nil, "an expanded long thought shows its body")
+  end)
+
+  h.it("honors an explicit collapse on a short thought", function()
+    local msg = Message:new("assistant", { type = "thinking", thinking = "a brief aside" }, { _expanded = false })
+    local all = render_text(msg)
+    h.is_true(all:find("a brief aside") == nil, "a collapsed short thought hides its body")
+  end)
+
   h.it("renders tool_use with pending status", function()
     local msg = Message:new(
       "assistant",

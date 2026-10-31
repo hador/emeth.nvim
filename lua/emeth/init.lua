@@ -24,6 +24,7 @@
 ---@field slow_connect_ms number
 ---@field tool_header_max_chars number
 ---@field diff_collapse_lines number
+---@field thinking_collapse_lines number
 ---@field claude_code? chat_ui.ClaudeCodeConfig
 ---@field kiro_cli? chat_ui.KiroCliConfig
 
@@ -84,6 +85,12 @@ local defaults = {
   -- Keeps small edit hunks visible (the useful case) while a whole-file write
   -- (empty oldText, so the entire file is one hunk) stays out of the way.
   diff_collapse_lines = 30,
+  -- Thoughts render inline until they exceed this many lines, then fold to a
+  -- one-line "N lines" row behind `K`. Short thoughts (a quick aside) belong
+  -- in the conversation; long rambles (exploring several dead ends) don't.
+  -- Note a thought never shrinks as it streams, so outgrowing the threshold
+  -- mid-thought folds the block away on its own — which is the point.
+  thinking_collapse_lines = 16,
   default_provider = nil,
   auto_add_current_file = true,
   claude_code = {

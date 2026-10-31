@@ -277,3 +277,33 @@ h.describe("Winbar spinner repaint cost", function()
     h.is_true(calls >= 2, string.format("expected the separator groups re-set after ColorScheme, got %d calls", calls))
   end)
 end)
+
+h.describe("Winbar thinking state", function()
+  h.it("renders the thinking spinner label", function()
+    local function float(row)
+      local buf = vim.api.nvim_create_buf(false, true)
+      return vim.api.nvim_open_win(buf, false, {
+        relative = "editor",
+        row = row,
+        col = 0,
+        width = 60,
+        height = 3,
+        style = "minimal",
+      })
+    end
+    local rwin, iwin = float(0), float(5)
+    Winbar.attach(rwin, iwin)
+    Winbar.set_state("thinking")
+    local s = vim.api.nvim_get_option_value("winbar", { win = iwin })
+    Winbar.detach()
+    vim.api.nvim_win_close(rwin, true)
+    vim.api.nvim_win_close(iwin, true)
+    h.is_true(s:find("thinking") ~= nil, "the input separator shows the thinking phase")
+  end)
+
+  h.it("exposes the spinner frames for a shared animation", function()
+    local frames = Winbar.spinner_frames()
+    h.is_true(#frames >= 1, "at least one frame")
+    h.is_true(type(frames[1]) == "string" and frames[1] ~= "", "frames are visible")
+  end)
+end)

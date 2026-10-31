@@ -143,6 +143,7 @@ require("emeth").setup({
   slow_connect_ms = 10000,      -- nudge when a connect takes this long (0 disables)
   tool_header_max_chars = 100,  -- clamp a collapsed tool row's header (K shows the rest)
   diff_collapse_lines = 30,     -- diffs longer than this start folded behind K
+  thinking_collapse_lines = 16, -- thoughts longer than this start folded behind K
   claude_code = {
     extra_args = nil,           -- CLI flags for claude, e.g. { agent = "my-agent" } (see below)
   },
@@ -406,7 +407,7 @@ Everything driven by the ACP protocol is handled generically:
 - **Subagents** — the ACP subagents RFD (`subagent_update`, `session_message`), when the provider config advertises `capabilities = { subagents = vim.empty_dict() }`
 - **Session lifecycle** — `session/load`, `close`, `fork` and `delete` when the agent advertises them
 - **File writes** — buffers auto-reload when the agent writes files
-- **Winbar** — spinner states (`connecting` → `generating` → `ready`) work for all providers. A slow connect (e.g. a launcher running updates before the handshake) can be aborted with `<C-c>`.
+- **Winbar** — spinner states (`connecting` → `thinking` → `generating` → `ready`) work for all providers. A slow connect (e.g. a launcher running updates before the handshake) can be aborted with `<C-c>`.
 
 ### Provider-specific extensions (optional)
 
@@ -571,7 +572,7 @@ The winbar has two fungible segments (left and right) flanking a centered title.
 |----------|-------------|
 | `Winbar.set_left(raw, plain?)` | Set the left segment (raw winbar string, may contain `%#Hl#` escapes) |
 | `Winbar.set_right(raw, plain?)` | Set the right segment |
-| `Winbar.set_state(s)` | Set input separator status: `"connecting"`, `"ready"`, `"generating"`, `"compacting"` |
+| `Winbar.set_state(s)` | Set input separator status: `"connecting"`, `"thinking"`, `"ready"`, `"generating"`, `"compacting"` |
 | `Winbar.set_context(pct)` | Convenience: set right segment to a gradient-colored percentage (0–100) |
 
 #### Badges
