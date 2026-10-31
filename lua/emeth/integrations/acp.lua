@@ -187,14 +187,15 @@ function M.setup_integration(view, session)
   -- generating. `epoch` is the staleness token for async continuations:
   -- capture it when a phase starts, check it before acting; begin() bumps it,
   -- atomically invalidating everything previously in flight.
-  ---@type "idle"|"connecting"|"generating"|"cancelled"
+  ---@type "idle"|"connecting"|"thinking"|"generating"|"cancelled"
   local activity = "idle"
   local epoch = 0
   -- Outstanding `session/prompt` requests. Counted separately from `activity`
   -- because a cancel invalidates the prompt's callback (epoch) without the
   -- request itself being answered yet. Zero means any streaming is unsolicited.
   local prompts_in_flight = 0
-  local WINBAR = { idle = "ready", cancelled = "ready", connecting = "connecting", generating = "generating" }
+  local WINBAR =
+    { idle = "ready", cancelled = "ready", connecting = "connecting", thinking = "thinking", generating = "generating" }
 
   local function set_activity(a)
     activity = a
@@ -211,6 +212,71 @@ function M.setup_integration(view, session)
 
   local function reset_state()
     stream = new_stream()
+  end
+
+  -- ── Thinking pulse ─────────────────────────────────────────────
+  -- While a thought is streaming, its block shows a moving spinner instead of
+  -- the parked 🤔. `stream.thinking_uuid` is the single source of "which block
+  -- is live"; this timer only projects that pointer into message metadata, so
+  -- the renderer can pick the right face. Whatever closes a thought block (a
+  -- text chunk, a tool call, steering, a subagent spawn, a new stream) clears
+  -- the pointer — so "lost the pointer" means "settled", and no shutdown path
+  -- has to remember to unmark the last block itself. Ticks are a cheap no-op
+  -- when nothing is live and nothing is pending; the timer stops on
+  -- disconnect like the winbar's own spinner.
+  local thinking_timer = nil
+  local thinking_pulse = 0
+  local thinking_live = nil ---@type string|nil  uuid last stamped active
+
+  local function unmark_thinking(uuid)
+    view:update_message(uuid, function(msg)
+      msg.metadata.thinking_active = false
+    end)
+  end
+
+  local function thinking_tick()
+    local live = stream.thinking_uuid
+    local active = live and (activity == "thinking" or activity == "generating")
+    if not live or not active then
+      -- Settled or ended: the pointer is gone (a text chunk, a tool call, a
+      -- steer, a subagent, a new turn all clear it) or the turn left. Drop the
+      -- live face from the block that last held it; it keeps its count.
+      if thinking_live then
+        unmark_thinking(thinking_live)
+        thinking_live = nil
+      end
+      return
+    end
+    thinking_pulse = thinking_pulse + 1
+    local frames = Winbar.spinner_frames()
+    local frame = frames[((thinking_pulse - 1) % #frames) + 1]
+    local just_landed = thinking_live ~= live
+    if thinking_live then
+      unmark_thinking(thinking_live)
+    end
+    view:update_message(live, function(msg)
+      if just_landed then
+        msg.metadata.thinking_active = true
+      end
+      msg.metadata.thinking_frame = frame
+    end)
+    thinking_live = live
+  end
+
+  local function start_thinking_pulse()
+    if thinking_timer then
+      return
+    end
+    thinking_timer = vim.uv.new_timer()
+    thinking_timer:start(0, 120, vim.schedule_wrap(thinking_tick))
+  end
+
+  local function stop_thinking_pulse()
+    if thinking_timer then
+      thinking_timer:stop()
+      thinking_timer:close()
+      thinking_timer = nil
+    end
   end
 
   local function refresh_file_display()
@@ -407,7 +473,7 @@ function M.setup_integration(view, session)
       return
     end
 
-    if activity ~= "generating" then
+    if activity ~= "generating" and activity ~= "thinking" then
       return -- idle or already cancelled: nothing in flight
     end
 
@@ -548,7 +614,7 @@ function M.setup_integration(view, session)
     -- in-flight session/prompt still owns settling the activity state, and
     -- bumping the epoch would invalidate its callback, stranding the winbar in
     -- "generating" forever.
-    if session:is_connected() and activity == "generating" and steering_supported() then
+    if session:is_connected() and (activity == "generating" or activity == "thinking") and steering_supported() then
       local strat = assert(steering) -- steering_supported() implies it
       local prompt = build_prompt(text)
       local msg = add_user_message(text)
@@ -601,7 +667,7 @@ function M.setup_integration(view, session)
 
     -- Accept input when the transport is up and nothing of ours is in flight.
     -- "cancelled" is idle-with-tail-suppression, so it accepts input too.
-    if not session:is_connected() or activity == "generating" or activity == "connecting" then
+    if not session:is_connected() or activity == "generating" or activity == "thinking" or activity == "connecting" then
       vim.notify("[emeth] Session not ready", vim.log.levels.WARN)
       restore_input(text)
       return
@@ -673,17 +739,25 @@ function M.setup_integration(view, session)
       return
     end
 
-    -- Update-driven activity transition: streaming content → generating.
-    -- connecting/cancelled absorb updates (stay put); only idle transitions.
-    -- Replayed history (session/load) must not flip us to generating — the
+    -- Update-driven activity transition: streaming content → thinking or
+    -- generating. A thought chunk marks the thinking sub-phase; anything else
+    -- that streams is generating. The two sub-phases trade places freely as
+    -- the agent alternates thinking and producing — the winbar label is where
+    -- the difference shows. connecting/cancelled absorb updates (stay put);
+    -- idle enters on the first streamed update of a turn.
+    -- Replayed history (session/load) must not flip us out of idle — the
     -- transform marks it `update.replay`.
     if
       not from_subagent
       and not AcpUpdates.NON_STREAMING[update.sessionUpdate]
-      and activity == "idle"
       and not update.replay
+      and (activity == "idle" or activity == "thinking" or activity == "generating")
     then
-      set_activity("generating")
+      local target = update.sessionUpdate == "agent_thought_chunk" and "thinking" or "generating"
+      if activity ~= target then
+        set_activity(target)
+      end
+      start_thinking_pulse()
     end
 
     -- ...and the matching exit. An unsolicited turn (claude-acp: one Claude Code
@@ -698,7 +772,7 @@ function M.setup_integration(view, session)
       and update.sessionUpdate == "usage_update"
       and type(update.cost) == "table"
       and prompts_in_flight == 0
-      and (activity == "generating" or activity == "cancelled")
+      and (activity == "generating" or activity == "thinking" or activity == "cancelled")
     then
       set_activity("idle")
     end
@@ -1167,6 +1241,7 @@ function M.setup_integration(view, session)
         Sessions.touch(session.session_id)
       end
       Commands.clear_config()
+      stop_thinking_pulse()
       Winbar.detach()
       reload_debounce.close()
       render_debounce.close()

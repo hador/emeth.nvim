@@ -57,15 +57,17 @@ end
 local LIMITS = {
   tool_header_max_chars = 100,
   diff_collapse_lines = 30,
+  thinking_collapse_lines = 16,
 }
 
----@return { tool_header_max_chars: integer, diff_collapse_lines: integer }
+---@return { tool_header_max_chars: integer, diff_collapse_lines: integer, thinking_collapse_lines: integer }
 local function get_limits()
   local ok, emeth = pcall(require, "emeth")
   local cfg = ok and emeth.config or {}
   return {
     tool_header_max_chars = cfg.tool_header_max_chars or LIMITS.tool_header_max_chars,
     diff_collapse_lines = cfg.diff_collapse_lines or LIMITS.diff_collapse_lines,
+    thinking_collapse_lines = cfg.thinking_collapse_lines or LIMITS.thinking_collapse_lines,
   }
 end
 
@@ -319,6 +321,38 @@ local function collect_diffs(sources)
   return lines
 end
 
+---A thought's body as trimmed display lines, the unit both rendering faces are
+---measured in.
+---@param text string
+---@return string[]
+local function thinking_body(text)
+  local lines = vim.split(text or "", "\n")
+  while #lines > 0 and lines[1] == "" do
+    table.remove(lines, 1)
+  end
+  while #lines > 0 and lines[#lines] == "" do
+    table.remove(lines)
+  end
+  return lines
+end
+
+---Effective expand state for a thought, resolving the default when the user
+---hasn't toggled it.
+---
+---Same shape as `expanded_for` on diffs — a thought defaults to expanded while
+---it's short and to collapsed once it isn't — but a thought never shrinks as it
+---streams, so a block that outgrows the threshold mid-stream folds itself away,
+---exactly the point: the meander disappears, `K` still gets it back.
+---@param item chat_ui.ContentItem
+---@param msg chat_ui.Message
+---@return boolean
+local function expanded_thinking(item, msg)
+  if msg.metadata._expanded ~= nil then
+    return msg.metadata._expanded == true
+  end
+  return #thinking_body(item.thinking or "") <= get_limits().thinking_collapse_lines
+end
+
 ---Effective expand state for a tool call, resolving the default when the user
 ---hasn't toggled it.
 ---
@@ -354,6 +388,18 @@ function M.tool_use(msg)
   end
 end
 
+---A message's thought item, if it is one (an agent's thinking streams as a
+---`thinking` item).
+---@param msg chat_ui.Message
+---@return chat_ui.ContentItem|nil
+function M.thinking_use(msg)
+  for _, item in ipairs(msg.content or {}) do
+    if item.type == "thinking" then
+      return item
+    end
+  end
+end
+
 ---The expand state `K` should toggle away from — the renderer owns the per-kind
 ---default, so the keymap can't just flip `_expanded` and assume it started false.
 ---@param msg chat_ui.Message
@@ -362,6 +408,10 @@ function M.is_expanded(msg)
   local item = M.tool_use(msg)
   if item then
     return expanded_for(item, msg)
+  end
+  item = M.thinking_use(msg)
+  if item then
+    return expanded_thinking(item, msg)
   end
   return msg.metadata._expanded == true
 end
@@ -551,26 +601,36 @@ local function render_tool_use(item, msg)
 end
 
 ---@param item chat_ui.ContentItem
+---@param msg chat_ui.Message
 ---@return chat_ui.Line[]
-local function render_thinking(item)
+local function render_thinking(item, msg)
   local icons = get_icons()
-  local text = item.thinking or ""
-  local text_lines = vim.split(text, "\n")
-  -- Trim empty prefix/suffix
-  while #text_lines > 0 and text_lines[1] == "" do
-    table.remove(text_lines, 1)
-  end
-  while #text_lines > 0 and text_lines[#text_lines] == "" do
-    table.remove(text_lines)
+  local body = thinking_body(item.thinking or "")
+  if expanded_thinking(item, msg) then
+    local lines = {}
+    lines[#lines + 1] = Line:new({ { icons.thinking .. "Thinking:", HL.THINKING } })
+    lines[#lines + 1] = Line:new({ { "" } })
+    for _, l in ipairs(body) do
+      lines[#lines + 1] = Line:new({ { "> " .. l, HL.THINKING } })
+    end
+    return lines
   end
 
-  local lines = {}
-  lines[#lines + 1] = Line:new({ { icons.thinking .. "Thinking:", HL.THINKING } })
-  lines[#lines + 1] = Line:new({ { "" } })
-  for _, l in ipairs(text_lines) do
-    lines[#lines + 1] = Line:new({ { "> " .. l, HL.THINKING } })
+  -- Collapsed face: one line. While live it moves (the pulse's spinner frame
+  -- stands in for the parked 🤔) and promises "keep coming"; once settled it
+  -- promises the count, recoverable with K.
+  local active = msg.metadata.thinking_active == true
+  if #body == 0 then
+    return { Line:new({ { icons.thinking .. "thinking", HL.MUTED } }) }
   end
-  return lines
+  local sections
+  if active then
+    local frame = msg.metadata.thinking_frame or "⠋"
+    sections = { { frame .. " thinking…", HL.THINKING }, { " +" .. #body .. " lines", HL.MUTED } }
+  else
+    sections = { { icons.thinking .. "thinking", HL.THINKING }, { " · " .. #body .. " lines", HL.MUTED } }
+  end
+  return { Line:new(sections) }
 end
 
 ---@param msg chat_ui.Message
@@ -661,7 +721,7 @@ local function render_assistant_message(msg)
     if item.type == "text" then
       vim.list_extend(lines, text_to_lines(item.text or ""))
     elseif item.type == "thinking" then
-      vim.list_extend(lines, render_thinking(item))
+      vim.list_extend(lines, render_thinking(item, msg))
       lines[#lines + 1] = Line:new({ { "" } })
     elseif item.type == "tool_use" then
       local from = #lines + 1

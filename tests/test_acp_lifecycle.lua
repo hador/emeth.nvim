@@ -215,6 +215,88 @@ h.describe("acp integration: unsolicited turn end", function()
   end)
 end)
 
+h.describe("acp integration: thinking phase", function()
+  local function thought(session, text)
+    session:_emit("update", { sessionUpdate = "agent_thought_chunk", content = { type = "text", text = text } })
+  end
+  local function chunk(session, text)
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = text } })
+  end
+  local function result_usage(session)
+    session:_emit(
+      "update",
+      { sessionUpdate = "usage_update", used = 10, size = 100, cost = { amount = 0.27, currency = "USD" } }
+    )
+  end
+
+  h.it("flips the winbar to thinking for a thought, back to generating for text", function()
+    local session = make_setup()
+    local states, undo = spy_state()
+    thought(session, "weighing options")
+    flush()
+    h.eq("thinking", states[#states], "a streamed thought is the thinking sub-phase")
+    chunk(session, "the answer")
+    flush()
+    h.eq("generating", states[#states], "text takes it back to generating")
+    undo()
+  end)
+
+  h.it("settles to ready from thinking", function()
+    local session = make_setup()
+    local states, undo = spy_state()
+    thought(session, "weighing options")
+    result_usage(session)
+    flush()
+    h.eq("ready", states[#states], "a result usage ends a thinking phase too")
+    undo()
+  end)
+
+  h.it("keeps replayed history out of the phase machine", function()
+    local session = make_setup()
+    local states, undo = spy_state()
+    session:_emit(
+      "update",
+      { sessionUpdate = "agent_thought_chunk", replay = true, content = { type = "text", text = "old thought" } }
+    )
+    flush()
+    h.eq(0, #states, "a replayed thought must not flip the winbar out of idle")
+    undo()
+  end)
+
+  h.it("keeps the live face on while streaming, releases it once settled", function()
+    local session, view = make_setup()
+    local cb
+    local prev = vim.uv.new_timer
+    vim.uv.new_timer = function()
+      return {
+        start = function(_, _, _, wrapped)
+          cb = wrapped
+        end,
+        stop = function() end,
+        close = function() end,
+      }
+    end
+    local function restore_timer()
+      vim.uv.new_timer = prev
+    end
+    local ok, err = pcall(function()
+      thought(session, "weighing options")
+      h.is_true(cb ~= nil, "the pulse starts on the first streamed update")
+      cb()
+      flush()
+      h.is_true(view.messages[1].metadata.thinking_active == true, "the live face stays on while the thought is open")
+      chunk(session, "the answer")
+      cb()
+      flush()
+      h.is_true(view.messages[1].metadata.thinking_active == false, "the face is released once the thought settles")
+    end)
+    restore_timer()
+    if not ok then
+      error(err, 0)
+    end
+  end)
+end)
+
 h.describe("acp integration: slow-connect nudge", function()
   h.it("posts a nudge if the handshake is still pending after the threshold", function()
     local emeth = require("emeth")

@@ -243,6 +243,13 @@ function M.handlers(ctx)
         type = "thinking",
         thinking = update.content.text,
       })
+      -- Live thoughts only: a replayed history (session/load replays the same
+      -- chunks with `update.replay`) must come back settled — folded where
+      -- long, no leftover spinner. The tick then keeps the block moving.
+      if not update.replay then
+        msg.metadata.thinking_active = true
+        msg.metadata.thinking_frame = Winbar.spinner_frames()[1]
+      end
       stream.thinking_uuid = msg.uuid
       stream.assistant_uuid = nil
       view:add_message(msg)

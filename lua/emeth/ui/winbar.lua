@@ -15,7 +15,7 @@ local result_win = nil
 ---@type number|nil
 local input_win = nil
 
----@alias EmethWinbarState "connecting"|"ready"|"generating"|"compacting"
+---@alias EmethWinbarState "connecting"|"ready"|"thinking"|"generating"|"compacting"
 local state = "ready" ---@type EmethWinbarState
 
 --- Raw winbar strings (may contain %#Hl# escapes).
@@ -208,6 +208,10 @@ local function render()
     local frame = spinner_frames[(spinner_idx % #spinner_frames) + 1]
     label = " " .. frame .. " generating "
     label_hl = get_hl_color("DiagnosticWarn", "fg", FALLBACK_YELLOW)
+  elseif state == "thinking" then
+    local frame = spinner_frames[(spinner_idx % #spinner_frames) + 1]
+    label = " " .. frame .. " thinking "
+    label_hl = get_hl_color("DiagnosticHint", "fg", FALLBACK_BLUE)
   elseif state == "compacting" then
     local frame = spinner_frames[(spinner_idx % #spinner_frames) + 1]
     label = " " .. frame .. " compacting "
@@ -386,7 +390,7 @@ function M.set_state(s)
     return
   end
   state = s
-  if s == "connecting" or s == "generating" or s == "compacting" then
+  if s == "connecting" or s == "thinking" or s == "generating" or s == "compacting" then
     spinner_idx = 0
     start_timer()
   else
@@ -407,6 +411,14 @@ end
 ---@return EmethWinbarState
 function M.get_state()
   return state
+end
+
+--- Braille spinner frames. Shared so a spinner elsewhere (the transcript's
+--- thinking pulse) reads as the same animation rather than a second,
+--- independent one.
+---@return string[]
+function M.spinner_frames()
+  return spinner_frames
 end
 
 ---@return string

@@ -196,6 +196,14 @@ function ChatView:new(opts)
         invalidate_msg(msg)
         return
       end
+
+      if Render.thinking_use(msg) then
+        -- Same rule as tools: a short thought renders expanded while
+        -- `_expanded` is still nil, so toggle away from what's on screen.
+        msg.metadata._expanded = not Render.is_expanded(msg)
+        invalidate_msg(msg)
+        return
+      end
     end,
   })
 
@@ -264,9 +272,9 @@ function ChatView:new(opts)
         hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
       end
     end
-    if Render.tool_use(msg) then
-      -- What's on screen, as K itself decides: a small diff renders expanded
-      -- while `_expanded` is still nil.
+    if Render.tool_use(msg) or Render.thinking_use(msg) then
+      -- What's on screen, as K itself decides: a small diff or a short
+      -- thought renders expanded while `_expanded` is still nil.
       hints[#hints + 1] = "K: " .. (Render.is_expanded(msg) and "collapse" or "expand")
     elseif msg.metadata and type(msg.metadata.on_expand) == "function" then
       -- A prompt with more to show (e.g. an elicitation's full field list);
