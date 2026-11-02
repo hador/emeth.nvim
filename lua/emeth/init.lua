@@ -22,6 +22,7 @@
 ---@field paste_fold_min_chars number
 ---@field show_title? boolean
 ---@field slow_connect_ms number
+---@field sync_remote_sessions boolean
 ---@field tool_header_max_chars number
 ---@field diff_collapse_lines number
 ---@field thinking_collapse_lines number
@@ -75,6 +76,12 @@ local defaults = {
   -- After this many ms still connecting, post a nudge that the connect is slow
   -- and can be aborted with <C-c>. Set to 0 to disable the nudge.
   slow_connect_ms = 10000,
+  -- After every successful connect or resume, ingest the agent's own
+  -- `session/list` into the local index: it fills in sessions emeth never
+  -- used (the agent still remembers them) and refreshes the titles and cwds
+  -- of the ones we do have. Set to false to keep the index purely local.
+  -- Never spawns an agent for this — it only rides the live connection.
+  sync_remote_sessions = true,
   -- A collapsed tool row should read as one line, but the sidebar wraps and some
   -- agents send the whole command as the tool's title -- an inline script then
   -- costs a hundred-plus screen rows for a row that looks collapsed. Clamp the

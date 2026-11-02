@@ -221,3 +221,96 @@ h.describe("Sessions.list_all", function()
   vim.fn.stdpath = orig
   vim.fn.delete(tmp, "rf")
 end)
+
+h.describe("session_picker.sync_index", function()
+  local Sessions = require("emeth.sessions")
+  local emeth = require("emeth")
+  local tmp = vim.fn.tempname()
+  local orig = vim.fn.stdpath
+  local orig_notify = vim.notify
+  local prev_integration = emeth._integration
+  ---@diagnostic disable-next-line: duplicate-set-field
+  vim.fn.stdpath = function(what)
+    return what == "state" and tmp or orig(what)
+  end
+  vim.fn.mkdir(tmp, "p")
+  local idx = tmp .. "/emeth/sessions.json"
+  local function reset()
+    if vim.fn.filereadable(idx) == 1 then
+      vim.fn.delete(idx)
+    end
+  end
+  local notified = {}
+  ---@diagnostic disable-next-line: duplicate-set-field
+  vim.notify = function(msg)
+    notified[#notified + 1] = tostring(msg)
+  end
+  local function find_msg(needle)
+    for i = #notified, 1, -1 do
+      if notified[i]:find(needle, 1, true) then
+        return notified[i]
+      end
+    end
+    return nil
+  end
+  local function fresh_sync()
+    -- Emulate the live agent: it lists one row the index does not have yet.
+    emeth._integration = {
+      sync_remote_session_list = function(cb)
+        Sessions.import({ { session_id = "syn-pick", cwd = tmp, title = "Synced in" } }, "test")
+        cb({ imported = 1, updated = 1 }, nil)
+      end,
+    }
+  end
+  local function run(state)
+    notified = {}
+    local refreshed = 0
+    P.sync_index(state, {
+      refresh = function()
+        refreshed = refreshed + 1
+      end,
+    })
+    return refreshed
+  end
+
+  h.it("with a live agent: syncs first, prunes the dead, and reports both counts", function()
+    reset()
+    fresh_sync()
+    Sessions.save({ session_id = "dead-one", provider = "test", cwd = tmp .. "/gone-dir" })
+    local refreshed = run({ entries = {}, verdicts = {} })
+    h.is_true(Sessions.get("syn-pick") ~= nil, "the imported row must be in the index")
+    h.is_nil(Sessions.get("dead-one"), "the dead row must be pruned")
+    h.eq(1, refreshed)
+    h.is_true(find_msg("synced 2 from agent") ~= nil, table.concat(notified, " | "))
+    h.is_true(find_msg("pruned 1 dead session") ~= nil, table.concat(notified, " | "))
+  end)
+
+  h.it("without a live agent: prune-only, exactly the offline path", function()
+    reset()
+    emeth._integration = nil
+    Sessions.save({ session_id = "dead-two", provider = "test", cwd = tmp .. "/gone-dir" })
+    local refreshed = run({ entries = {}, verdicts = {} })
+    h.is_nil(Sessions.get("dead-two"))
+    h.eq(1, refreshed)
+    h.is_true(find_msg("pruned 1 dead session") ~= nil, table.concat(notified, " | "))
+    h.is_nil(find_msg("synced"))
+  end)
+
+  h.it("a failed agent list still prunes, but the failure is reported", function()
+    reset()
+    emeth._integration = {
+      sync_remote_session_list = function(cb)
+        cb(nil, { message = "boom" })
+      end,
+    }
+    local refreshed = run({ entries = {}, verdicts = {} })
+    h.eq(1, refreshed)
+    h.is_true(find_msg("agent list failed: boom") ~= nil, table.concat(notified, " | "))
+    h.is_true(find_msg("pruned 0 dead") ~= nil, table.concat(notified, " | "))
+  end)
+
+  emeth._integration = prev_integration
+  vim.notify = orig_notify
+  vim.fn.stdpath = orig
+  vim.fn.delete(tmp, "rf")
+end)

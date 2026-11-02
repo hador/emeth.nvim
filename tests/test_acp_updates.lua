@@ -418,14 +418,28 @@ h.describe("acp integration: session_info_update", function()
     h.eq("My own title", (Sessions.get("sinfo-plain") or {}).title)
   end)
 
-  -- A fork shares its parent's history, so the derived title is the parent's.
-  -- Persisting it would duplicate the parent in the picker (title + ⑂ parent).
-  h.it("does not persist a fork's inherited title", function()
+  -- A fork shares its parent's history, so the title the agent derives is the
+  -- parent's. We decided that is fine: the fork gets the title like any other
+  -- entry, and the lineage stays the ⑂ column's job.
+  h.it("persists a fork's title like any other entry's", function()
     local session = make_setup()
     session.session_id = "sinfo-fork"
     Sessions.save({ session_id = "sinfo-fork", provider = "claude-code", cwd = "/tmp", forked_from = "parent-x" })
     session:_emit("update", { sessionUpdate = "session_info_update", title = "Parent's title" })
-    h.is_nil((Sessions.get("sinfo-fork") or {}).title, "the fork keeps no inherited title")
+    h.eq("Parent's title", (Sessions.get("sinfo-fork") or {}).title)
+    h.eq("parent-x", (Sessions.get("sinfo-fork") or {}).forked_from, "lineage survives the title push")
+  end)
+
+  -- A rename the user made (picker `r`) must never lose to the agent's title,
+  -- whether they arrive as a push like this or via a `session/list` import.
+  h.it("does not overwrite a user rename", function()
+    local session = make_setup()
+    session.session_id = "sinfo-user"
+    Sessions.save({ session_id = "sinfo-user", provider = "claude-code", cwd = "/tmp" })
+    Sessions.update_title("sinfo-user", "My name", "user")
+    session:_emit("update", { sessionUpdate = "session_info_update", title = "Agent title" })
+    h.eq("My name", (Sessions.get("sinfo-user") or {}).title)
+    h.eq("user", (Sessions.get("sinfo-user") or {}).title_source)
   end)
 end)
 

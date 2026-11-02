@@ -88,6 +88,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     resume_last_session = false,  -- auto-resume last session on open
     auto_add_current_file = true, -- add current buffer as context
     slow_connect_ms = 10000,      -- nudge if connect exceeds this (0 disables)
+    sync_remote_sessions = true,  -- refresh the session index from a live agent
     prompt_dirs = {},             -- e.g. { "~/.config/prompts" }
     prompt_edit_before_send = true, -- edit a picked prompt before sending
     fold_pasted_text = true,      -- collapse large pastes to one line
@@ -133,6 +134,16 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   is a time-based nudge only; it reads no output from the agent process. Set
   to 0 to disable.
 
+                                                      *emeth-sync_remote_sessions*
+`sync_remote_sessions` ~
+  When true (default), after every successful connect or resume emeth pulls
+  the agent's own session list (`session/list`) into the local index: it fills
+  in sessions the agent remembers but you never opened here, and refreshes the
+  titles and directories of the ones you have. It only rides the live
+  connection -- it never spawns an agent -- and is skipped when the agent does
+  not advertise the capability. The picker's `S` key also triggers it. Set to
+  false to keep the index purely local.
+
                                                          *emeth-prompt_dirs*
 `prompt_dirs` ~
   List of directories containing `.md` files that the `/prompts` slash
@@ -170,8 +181,10 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   row is badged "stale" (past the provider's retention, about to be pruned)
   or "gone" (no longer resumable). With snacks.nvim the picker also offers,
   in normal mode: `r` rename, `d` forget (drop emeth's entry only), `D`
-  delete (agent and emeth; refused for the active session), `S` prune every
-  "gone" row. Without snacks it falls back to |vim.ui.select|, resume only.
+  delete (agent and emeth; refused for the active session), `S` sync the
+  index with the running agent's own session list (if a chat is live), then
+  prune every "gone" row. Without snacks it falls back to |vim.ui.select|,
+  resume only.
 
 To cancel the current request press <C-c> in either chat window; while the
 sidebar is still "connecting" it aborts the connection instead, so you can

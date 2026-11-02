@@ -283,6 +283,91 @@ function M.setup_integration(view, session)
     view:set_context_files(selected_files)
   end
 
+  -- ── Remote session list ─────────────────────────────────────────
+  -- Pull the agent's own `session/list` into the local index, once per
+  -- successful lifecycle (and on the picker's `S`). Enrichment only: the
+  -- index already holds the sessions the user has used here, and this fills
+  -- in the ones the agent still remembers but emeth never touched, and
+  -- refreshes titles and cwds of the ones we do.
+  --
+  -- Hard rules: it rides the live client only — the client that already ran
+  -- `initialize` this connection (the spec forbids the call before that) —
+  -- and it never spawns one for a different provider. If the capability is
+  -- not advertised it is a silent no-op, and a failed list must never make a
+  -- good session unusable (index-only is always a valid state).
+
+  local list_sync_inflight = false
+  ---Ingest the agent's `session/list`, following `nextCursor` pages until the
+  ---agent stops them (capped: 50 pages / 2000 entries, log + stop beyond).
+  ---@param cb? fun(result?: { imported: integer, updated: integer, truncated?: boolean }, err?: any)
+  local function sync_remote_session_list(cb)
+    cb = cb or function() end
+    local sc = session.client
+      and session.client.agent_capabilities
+      and session.client.agent_capabilities.sessionCapabilities
+    if not (sc and sc.list) then
+      cb(nil)
+      return
+    end
+    if list_sync_inflight then
+      cb(nil) -- one in flight per integration; this one loses
+      return
+    end
+    list_sync_inflight = true
+    local imported, updated, pages, total = 0, 0, 0, 0
+    ---@param err? any
+    local function finish(err, result)
+      list_sync_inflight = false
+      cb(result, err)
+    end
+    ---@param cursor? string
+    local function next_page(cursor)
+      session.client:list_sessions({ cursor = cursor }, function(raw_result, raw_err)
+        if raw_err then
+          -- Automatic path: log only. The manual `S` path reports the same
+          -- failure through its own notify.
+          vim.notify("[emeth] session/list failed: " .. util.fmt_err(raw_err), vim.log.levels.DEBUG)
+          finish(raw_err) -- what already landed stays; the caller may retry
+          return
+        end
+        local result = raw_result or {}
+        pages = pages + 1
+        if pages > 50 then
+          vim.notify("[emeth] session/list exceeded its limit; ingesting what arrived", vim.log.levels.DEBUG)
+          finish(nil, { imported = imported, updated = updated, truncated = true })
+          return
+        end
+        local rows = {}
+        for _, s in ipairs(result.sessions or {}) do
+          total = total + 1
+          if total > 2000 then
+            vim.notify("[emeth] session/list exceeded its limit; ingesting what arrived", vim.log.levels.DEBUG)
+            finish(nil, { imported = imported, updated = updated, truncated = true })
+            return
+          end
+          rows[#rows + 1] = {
+            session_id = s.sessionId,
+            cwd = s.cwd,
+            title = s.title,
+            updated_at = s.updatedAt,
+            -- Import the agent's directories only when it advertised the
+            -- capability; otherwise the index keeps whatever emeth saved.
+            additional_directories = sc.additionalDirectories and s.additionalDirectories or nil,
+          }
+        end
+        local r = Sessions.import(rows, session.provider_name)
+        imported = imported + r.imported
+        updated = updated + r.updated
+        if result.nextCursor then
+          next_page(result.nextCursor)
+        else
+          finish(nil, { imported = imported, updated = updated })
+        end
+      end)
+    end
+    next_page(nil)
+  end
+
   -- ── Lifecycle wrapper ──────────────────────────────────────────
 
   ---@class acp.LifecycleOpts
@@ -338,6 +423,11 @@ function M.setup_integration(view, session)
         else
           if opts.touch and session.session_id then
             Sessions.touch(session.session_id)
+          end
+          if emeth.config.sync_remote_sessions ~= false then
+            -- Enrichment, not a prerequisite: a failed or unsupported list
+            -- leaves the index exactly as it was (see the section above).
+            sync_remote_session_list(function() end)
           end
         end
       end)
@@ -1263,6 +1353,9 @@ function M.setup_integration(view, session)
       Winbar.set_left(Winbar.fmt.plain(session.provider_name))
       set_activity(activity)
     end,
+
+    ---Ingest the agent's `session/list` on demand (the picker's `S` key).
+    sync_remote_session_list = sync_remote_session_list,
   }
   for k, v in pairs(ext_integration) do
     integration[k] = v

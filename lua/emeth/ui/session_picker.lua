@@ -260,6 +260,47 @@ function M.prune_gone(entries, verdicts)
   return kept, removed
 end
 
+---Run the picker's `S`: when a chat is live, first bring the local index up to
+---date with that agent's own list (one live client at a time, so only *that*
+---provider's rows can change), then prune the dead entries from the fresh set,
+---reporting both counts. The prune re-reads the index: the sync may have
+---imported rows the open picker never showed, and rows dropped out-of-band are
+---already off disk. Without a live integration this is exactly the offline
+---path — validity heuristics and prune, nothing else.
+---@param state { entries: table[], verdicts: table<string, "valid"|"stale"|"gone"> }
+---@param picker { refresh: fun(pick: any) }
+function M.sync_index(state, picker)
+  local integration = require("emeth")._integration
+  local function prune(synced)
+    state.entries = Sessions.list_all()
+    state.verdicts = require("emeth.validity").check_all(state.entries)
+    local kept, removed = M.prune_gone(state.entries, state.verdicts)
+    for _, id in ipairs(removed) do
+      Sessions.remove(id)
+    end
+    state.entries = kept
+    picker:refresh()
+    local what = ("pruned %d dead session%s"):format(#removed, #removed == 1 and "" or "s")
+    if synced and synced > 0 then
+      what = ("synced %d from agent, %s"):format(synced, what)
+    end
+    vim.notify(("[emeth] sync: " .. what), vim.log.levels.INFO)
+  end
+  if integration and integration.sync_remote_session_list then
+    integration.sync_remote_session_list(function(result, err)
+      if err then
+        -- Manual path: the failure is worth one line; the automatic one only
+        -- logs (see sync_remote_session_list).
+        local why = (err and err.message) or tostring(err)
+        vim.notify("[emeth] sync: agent list failed: " .. why, vim.log.levels.WARN)
+      end
+      prune(result and (result.imported + result.updated) or 0)
+    end)
+    return
+  end
+  prune(0)
+end
+
 ---Title with a trailing `(N stale, M gone)` summary when any row is not valid.
 ---@param items table[]
 ---@return string
@@ -293,7 +334,6 @@ local ACTION_KEYS = {
 ---@param on_pick fun(entry: table)
 local function pick_snacks(state, on_pick)
   local Snacks = require("snacks")
-  local Validity = require("emeth.validity")
   local align = Snacks.picker.util.align
 
   -- Rebuilt from current state each finder run, so actions show up immediately.
@@ -355,7 +395,7 @@ local function pick_snacks(state, on_pick)
           if not input or input == "" then
             return
           end
-          Sessions.update_title(e.session_id, input)
+          Sessions.update_title(e.session_id, input, "user")
           e.title = input -- same table instance the finder rebuilds from
           picker:refresh()
         end)
@@ -399,17 +439,7 @@ local function pick_snacks(state, on_pick)
         picker:refresh()
       end,
       emeth_sync = function(picker)
-        state.verdicts = Validity.check_all(state.entries)
-        local kept, removed = M.prune_gone(state.entries, state.verdicts)
-        for _, id in ipairs(removed) do
-          Sessions.remove(id)
-        end
-        state.entries = kept
-        picker:refresh()
-        vim.notify(
-          ("[emeth] sync: pruned %d dead session%s"):format(#removed, #removed == 1 and "" or "s"),
-          vim.log.levels.INFO
-        )
+        M.sync_index(state, picker)
       end,
     },
     -- Actions are normal-mode only (the input is insert for type-to-filter). The

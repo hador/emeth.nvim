@@ -344,7 +344,11 @@ end
 ---@param callback fun(result: table|nil, err: acp.ACPError|nil)
 function ACPClient:_send_request(method, params, callback)
   local id = self:_next_id()
-  local message = { jsonrpc = "2.0", id = id, method = method, params = params or {} }
+  local message = { jsonrpc = "2.0", id = id, method = method }
+  -- ACP params are JSON objects and some agents validate strictly; a bare
+  -- empty Lua table encodes as an *array*, so empty params go out as an
+  -- explicit empty object (`vim.empty_dict()` is that encoding).
+  message.params = (type(params) == "table" and next(params)) and params or vim.empty_dict()
   self.callbacks[id] = callback
   local data = vim.json.encode(message)
   self:_debug_log("request: " .. data .. "\n" .. string.rep("=", 80) .. "\n")
@@ -354,7 +358,8 @@ end
 ---@param method string
 ---@param params table?
 function ACPClient:_send_notification(method, params)
-  local message = { jsonrpc = "2.0", method = method, params = params or {} }
+  local message = { jsonrpc = "2.0", method = method }
+  message.params = (type(params) == "table" and next(params)) and params or vim.empty_dict()
   local data = vim.json.encode(message)
   self:_debug_log("notification: " .. data .. "\n" .. string.rep("=", 80) .. "\n")
   self.transport:send(data)
@@ -806,6 +811,26 @@ function ACPClient:delete_session(session_id, callback)
     return
   end
   self:_send_request("session/delete", { sessionId = session_id }, callback)
+end
+
+---List the sessions the agent knows about (discovery only — resuming still
+---requires `session/load`). Standard ACP, gated on `sessionCapabilities.list`.
+---A missing capability is reported through the callback rather than raised or
+---notified, so a caller can distinguish "unsupported" from "failed" and fall
+---back to its local index. `params` are all optional: `cwd` (absolute
+---exact-match filter) and `cursor` (opaque token from a prior `nextCursor`,
+---never parsed or displayed). The response is `{ sessions: acp.SessionInfo[],
+---nextCursor? }`; an absent `nextCursor` ends the listing.
+---@param params? { cwd?: string, cursor?: string }
+---@param callback? fun(result: table|nil, err: acp.ACPError|nil)
+function ACPClient:list_sessions(params, callback)
+  callback = callback or function() end
+  local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
+  if not (sc and sc.list) then
+    callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support listing sessions"))
+    return
+  end
+  self:_send_request("session/list", params or {}, callback)
 end
 
 ---Fork a session into a new one. Standard ACP, gated on

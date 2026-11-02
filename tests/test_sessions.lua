@@ -173,6 +173,94 @@ h.describe("Sessions", function()
   end)
 end)
 
+h.describe("Sessions.import", function()
+  local index_path = function()
+    return tmp_dir .. "/emeth/sessions.json"
+  end
+
+  h.it("imports new sessions with the provider tag and a stamped created_at", function()
+    reset()
+    local r = Sessions.import(
+      { { session_id = "r1", cwd = "/proj", title = "From agent", updated_at = "2026-01-01T10:00:00Z" } },
+      "opencode"
+    )
+    h.eq(1, r.imported)
+    h.eq(0, r.updated)
+    local e = Sessions.get("r1")
+    h.eq("opencode", e.provider)
+    h.eq("/proj", e.cwd)
+    h.eq("From agent", e.title)
+    h.eq("auto", e.title_source)
+    h.eq("2026-01-01T10:00:00Z", e.created_at)
+    h.eq("2026-01-01T10:00:00Z", e.updated_at)
+  end)
+
+  h.it("adopts an agent title over an auto one, but never a user rename", function()
+    reset()
+    Sessions.save({ session_id = "s1", provider = "opencode", cwd = "/tmp" })
+    Sessions.import({ { session_id = "s1", title = "Agent title" } }, "opencode")
+    h.eq("Agent title", Sessions.get("s1").title)
+    Sessions.update_title("s1", "My name", "user")
+    Sessions.import({ { session_id = "s1", title = "Agent again" } }, "opencode")
+    h.eq("My name", Sessions.get("s1").title)
+    h.eq("user", Sessions.get("s1").title_source)
+  end)
+
+  h.it("forks are imported like any other entry; lineage survives", function()
+    reset()
+    Sessions.save({ session_id = "f", provider = "opencode", cwd = "/tmp", forked_from = "p", title = "fork" })
+    Sessions.import({ { session_id = "f", title = "Agent title" } }, "opencode")
+    h.eq("Agent title", Sessions.get("f").title)
+    h.eq("p", Sessions.get("f").forked_from)
+  end)
+
+  h.it("takes the later of local and remote updated_at, stored in Z form", function()
+    reset()
+    Sessions.save({ session_id = "s1", provider = "opencode", cwd = "/tmp" })
+    local raw =
+      '[{"session_id":"s1","provider":"opencode","cwd":"/tmp","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]'
+    vim.fn.writefile({ raw }, index_path())
+    -- older remote: the local (recent) stamp must survive the import
+    local r = Sessions.import({ { session_id = "s1", updated_at = "2025-12-31T23:00:00Z" } }, "opencode")
+    h.eq(0, r.imported)
+    h.eq(1, r.updated)
+    h.eq("2026-01-01T00:00:00Z", Sessions.get("s1").updated_at)
+    -- newer remote in offset form: wins, normalized to Z for stable sorting
+    Sessions.import({ { session_id = "s1", updated_at = "2026-01-01T02:30:00+02:00" } }, "opencode")
+    h.eq("2026-01-01T00:30:00Z", Sessions.get("s1").updated_at)
+  end)
+
+  h.it("scopes identity per provider: the same id from two agents stays two entries", function()
+    reset()
+    Sessions.save({ session_id = "x", provider = "opencode", cwd = "/tmp", title = "local title" })
+    local r = Sessions.import({ { session_id = "x", cwd = "/other", title = "gemini title" } }, "gemini")
+    h.eq(1, r.imported)
+    h.eq(0, r.updated)
+    h.eq("local title", Sessions.get("x").title)
+    local gemini = Sessions.list("/other", "gemini")
+    h.eq(1, #gemini)
+    h.eq("gemini title", gemini[1].title)
+  end)
+
+  h.it("replaces additional_directories wholesale; absent leaves them", function()
+    reset()
+    Sessions.save({ session_id = "s1", provider = "opencode", cwd = "/tmp", additional_directories = { "/a" } })
+    Sessions.import({ { session_id = "s1", additional_directories = { "/a", "/b", "/c" } } }, "opencode")
+    h.eq({ "/a", "/b", "/c" }, Sessions.get("s1").additional_directories)
+    -- a page that omits the field must not wipe what we have
+    Sessions.import({ { session_id = "s1" } }, "opencode")
+    h.eq({ "/a", "/b", "/c" }, Sessions.get("s1").additional_directories)
+  end)
+
+  h.it("skips malformed rows without writing", function()
+    reset()
+    local r = Sessions.import({ { cwd = "/x" }, { session_id = "" }, "junk" }, "opencode")
+    h.eq(0, r.imported)
+    h.eq(0, r.updated)
+    h.is_true(vim.fn.filereadable(index_path()) == 0)
+  end)
+end)
+
 -- A real index contained a record with timestamps and nothing else. `list` hid it
 -- (no `cwd` to match), so anything reading across directories was the first thing
 -- that would reach it and index a nil id.

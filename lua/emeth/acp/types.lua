@@ -22,6 +22,14 @@
 ---@field sessionCapabilities? { list?: table, additionalDirectories?: boolean|table, close?: table, delete?: table, fork?: table, resume?: table }
 ---@field promptCapabilities acp.PromptCapabilities
 
+---@class acp.SessionInfo
+---@field sessionId string
+---@field cwd string
+---@field title? string
+---@field updatedAt? string
+---@field additionalDirectories? string[]
+---@field _meta? table
+
 ---@class acp.PromptCapabilities
 ---@field image boolean
 ---@field audio boolean
