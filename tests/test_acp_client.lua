@@ -562,6 +562,59 @@ h.describe("ACPClient close/fork", function()
   end)
 end)
 
+-- ── list_sessions ──────────────────────────────────────────────
+
+h.describe("ACPClient list_sessions", function()
+  h.it("errors without the capability and never puts session/list on the wire", function()
+    local c, sent = make_client()
+    local err
+    c:list_sessions({}, function(_, e)
+      err = e
+    end)
+    h.is_true(err ~= nil, "unsupported list must report an error, not send")
+    h.eq("Agent does not support listing sessions", err.message)
+    for _, raw in ipairs(sent) do
+      h.eq(false, vim.json.decode(raw).method == "session/list")
+    end
+  end)
+
+  h.it("sends session/list with the params and delivers the response", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { sessionCapabilities = { list = {} } }
+    local got, got_err
+    c:list_sessions({ cwd = "/x" }, function(result, err)
+      got, got_err = result, err
+    end)
+    local d = vim.json.decode(sent[1])
+    h.eq("session/list", d.method)
+    h.eq("/x", d.params.cwd)
+    c:_handle_message({
+      jsonrpc = "2.0",
+      id = d.id,
+      result = { sessions = { { sessionId = "s1", cwd = "/x" } }, nextCursor = "c2" },
+    })
+    h.is_nil(got_err)
+    h.eq("s1", got.sessions[1].sessionId)
+    h.eq("/x", got.sessions[1].cwd)
+    h.eq("c2", got.nextCursor)
+  end)
+
+  h.it("sends the first page with an empty object as params, not [] and not absent", function()
+    local c, sent = make_client()
+    c.agent_capabilities = { sessionCapabilities = { list = {} } }
+    local got
+    c:list_sessions({ cursor = nil }, function(result)
+      got = result
+    end)
+    local raw = sent[1]
+    h.is_true(raw:find('"params":{}', 1, true) ~= nil, "empty params must serialize as a JSON object: " .. raw)
+    local d = vim.json.decode(raw)
+    h.eq("session/list", d.method)
+    c:_handle_message({ jsonrpc = "2.0", id = d.id, result = { sessions = {} } })
+    h.is_true(type(got) == "table")
+  end)
+end)
+
 -- ── client capabilities ────────────────────────────────────────
 
 h.describe("ACPClient capabilities", function()

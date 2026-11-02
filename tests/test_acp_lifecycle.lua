@@ -1416,4 +1416,166 @@ h.describe("acp integration: resync_winbar", function()
   end)
 end)
 
+-- Remote session list sync: after a successful connect/resume, the agent's
+-- own `session/list` is ingested into the local index (filling in sessions
+-- emeth never used and refreshing titles and cwds). Enrichment only: a
+-- failure here must never make a good session unusable.
+h.describe("acp integration: remote session list sync", function()
+  local Sessions = require("emeth.sessions")
+
+  ---Run a successful connect through the lifecycle; the hook fires in a
+  ---scheduled callback, so flush before asserting.
+  local function connect_ok(session, integration)
+    session.connect = function(_, _opts, cb)
+      cb(nil)
+    end
+    integration.connect()
+    flush()
+  end
+
+  ---@param v table
+  ---@return string
+  local function transcript(v)
+    local out = {}
+    for _, m in ipairs(v.messages) do
+      out[#out + 1] = m:text()
+    end
+    return table.concat(out, "\n")
+  end
+
+  h.it("follows nextCursor pages and imports them under the provider tag", function()
+    local session, _, integration = make_setup()
+    local pages, page = {}, 0
+    session.client.agent_capabilities = { sessionCapabilities = { list = {} } }
+    session.client.list_sessions = function(_, params, cb)
+      page = page + 1
+      pages[page] = params
+      if page == 1 then
+        cb({
+          sessions = {
+            { sessionId = "syn-1", cwd = "/proj", title = "One", updatedAt = "2026-01-01T10:00:00Z" },
+            { sessionId = "syn-2", cwd = "/proj" },
+          },
+          nextCursor = "c2",
+        }, nil)
+      else
+        cb({ sessions = { { sessionId = "syn-3", cwd = "/proj", title = "Three" } } }, nil)
+      end
+    end
+    connect_ok(session, integration)
+    h.eq(2, page, "the cursor must be followed until a page without nextCursor")
+    h.eq("c2", pages[2].cursor)
+    local e1 = Sessions.get("syn-1")
+    h.is_true(e1 ~= nil, "syn-1 must be imported")
+    h.eq("test", e1.provider, "rows must be tagged with this integration's provider")
+    h.eq("One", e1.title)
+    h.is_true(Sessions.get("syn-3") ~= nil, "the second page must be imported too")
+  end)
+
+  h.it("never calls list_sessions without the advertised capability", function()
+    local session, _, integration = make_setup()
+    local called = false
+    session.client.list_sessions = function(_, _, cb)
+      called = true
+      cb({ sessions = {} }, nil)
+    end
+    session.client.agent_capabilities = { sessionCapabilities = {} }
+    connect_ok(session, integration)
+    h.eq(false, called)
+  end)
+
+  h.it("sync_remote_sessions = false turns the automatic list off", function()
+    local emeth = require("emeth")
+    local prev = emeth.config.sync_remote_sessions
+    emeth.config.sync_remote_sessions = false
+    local session, _, integration = make_setup()
+    local called = false
+    session.client.agent_capabilities = { sessionCapabilities = { list = {} } }
+    session.client.list_sessions = function(_, _, cb)
+      called = true
+      cb({ sessions = {} }, nil)
+    end
+    connect_ok(session, integration)
+    emeth.config.sync_remote_sessions = prev
+    h.eq(false, called)
+  end)
+
+  h.it("a failing list never reaches the transcript as an error", function()
+    local session, view, integration = make_setup()
+    session.client.agent_capabilities = { sessionCapabilities = { list = {} } }
+    session.client.list_sessions = function(_, _, cb)
+      cb(nil, { type = "error", message = "boom" })
+    end
+    connect_ok(session, integration)
+    h.is_nil(transcript(view):find("session/list", 1, true), "a failed enrichment must not read as a session error")
+    h.is_nil(transcript(view):find("boom", 1, true))
+  end)
+
+  h.it("adopts additional_directories only when the agent advertises them", function()
+    local session, _, integration = make_setup()
+    Sessions.save({ session_id = "syn-ad", provider = "test", cwd = "/p", additional_directories = { "/mine" } })
+    local function wire(ad)
+      local caps = { sessionCapabilities = { list = {} } }
+      if ad then
+        caps.sessionCapabilities.additionalDirectories = true
+      end
+      session.client.agent_capabilities = caps
+      session.client.list_sessions = function(_, _, cb)
+        cb({ sessions = { { sessionId = "syn-ad", cwd = "/p", additionalDirectories = { "/theirs" } } } }, nil)
+      end
+    end
+    wire(false)
+    connect_ok(session, integration)
+    h.eq(
+      { "/mine" },
+      (Sessions.get("syn-ad") or {}).additional_directories,
+      "without the capability the index keeps what emeth saved"
+    )
+    wire(true)
+    connect_ok(session, integration)
+    h.eq({ "/theirs" }, (Sessions.get("syn-ad") or {}).additional_directories, "with it, the agent's list wins")
+  end)
+
+  h.it("a broken paginator (endless empty pages) still hits the page cap", function()
+    local session, _, integration = make_setup()
+    local calls = 0
+    session.client.agent_capabilities = { sessionCapabilities = { list = {} } }
+    session.client.list_sessions = function(_, _, cb)
+      calls = calls + 1
+      cb({ sessions = {}, nextCursor = "again" }, nil)
+    end
+    connect_ok(session, integration)
+    h.eq(51, calls, "the 50-page cap must close the loop even when every page is empty")
+  end)
+
+  h.it("caps at 2000 entries and keeps the pages that arrived", function()
+    local session, _, integration = make_setup()
+    session.client.agent_capabilities = { sessionCapabilities = { list = {} } }
+    local function page(prefix, n)
+      local s = {}
+      for i = 1, n do
+        s[i] = { sessionId = prefix .. "-" .. i, cwd = "/proj" }
+      end
+      return { sessions = s, nextCursor = "more" }
+    end
+    -- 2000 exactly on the first two pages, then one more page past the cap.
+    local seq = { page("capA", 1000), page("capB", 1000), page("capC", 40) }
+    local calls = 0
+    session.client.list_sessions = function(_, _, cb)
+      calls = calls + 1
+      cb(seq[calls] or { sessions = {} }, nil)
+    end
+    connect_ok(session, integration)
+    h.eq(3, calls, "the cap stopped the loop at the overflowing page")
+    local landed = 0
+    for _, e in ipairs(Sessions.list_all("test")) do
+      if e.session_id:sub(1, 4) == "capA" or e.session_id:sub(1, 4) == "capB" then
+        landed = landed + 1
+      end
+    end
+    h.eq(2000, landed, "exactly the cap landed in the index")
+    h.is_nil(Sessions.get("capC-1"), "the page past the cap never lands")
+  end)
+end)
+
 restore()
