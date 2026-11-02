@@ -276,10 +276,10 @@ M._transform_elicitation = transform_elicitation
 -- ── setup / cleanup ──────────────────────────────────────────────
 
 ---Install opencode's update and elicitation transforms on the session.
----@param _session acp.Session|nil
+---@param _ acp.Session|nil Unused: the transforms need no session handle.
 ---@param view chat_ui.ChatView|nil
 ---@return fun() cleanup
-function M.setup(_session, view)
+function M.setup(_, view)
   -- One extension instance per session: drop any previous session's bindings.
   desc_to_id = {}
   child_binding = {}
