@@ -263,37 +263,121 @@ h.describe("acp integration: thinking phase", function()
     undo()
   end)
 
-  h.it("keeps the live face on while streaming, releases it once settled", function()
-    local session, view = make_setup()
-    local cb
+  -- A fake uv timer: records the pulse callback and whether it is running, so a
+  -- test can tick it by hand. Runs `fn(timer)` and always restores new_timer.
+  -- The integration's other timers (the debounces) are one-shot; the pulse is
+  -- the only repeating one, so a repeat interval is what identifies it.
+  local function with_fake_timer(fn)
+    local timer = { created = 0, running = false, cb = nil }
+    -- The pulse callback is schedule_wrap'd: calling it only queues the tick,
+    -- so run the queue to see its effect.
+    function timer.tick()
+      timer.cb()
+      flush()
+    end
     local prev = vim.uv.new_timer
     vim.uv.new_timer = function()
+      local mine = false
       return {
-        start = function(_, _, _, wrapped)
-          cb = wrapped
+        start = function(_, _, rep, wrapped)
+          if rep and rep > 0 then
+            mine = true
+            timer.created = timer.created + 1
+            timer.cb = wrapped
+            timer.running = true
+          end
         end,
-        stop = function() end,
+        stop = function()
+          if mine then
+            timer.running = false
+          end
+        end,
         close = function() end,
+        is_active = function()
+          return false
+        end,
+        again = function() end,
       }
     end
-    local function restore_timer()
-      vim.uv.new_timer = prev
-    end
-    local ok, err = pcall(function()
-      thought(session, "weighing options")
-      h.is_true(cb ~= nil, "the pulse starts on the first streamed update")
-      cb()
-      flush()
-      h.is_true(view.messages[1].metadata.thinking_active == true, "the live face stays on while the thought is open")
-      chunk(session, "the answer")
-      cb()
-      flush()
-      h.is_true(view.messages[1].metadata.thinking_active == false, "the face is released once the thought settles")
-    end)
-    restore_timer()
+    local ok, err = pcall(fn, timer)
+    vim.uv.new_timer = prev
     if not ok then
       error(err, 0)
     end
+  end
+
+  -- More lines than thinking_collapse_lines, so the thought renders folded —
+  -- the only face that shows the spinner.
+  local LONG = string.rep("a line of thought\n", 20)
+
+  local function count_updates(view)
+    local n = { value = 0 }
+    local orig = view.update_message
+    view.update_message = function(self, ...)
+      n.value = n.value + 1
+      return orig(self, ...)
+    end
+    return n
+  end
+
+  h.it("keeps the live face on across ticks, releases it once settled", function()
+    with_fake_timer(function(timer)
+      local session, view = make_setup()
+      thought(session, LONG)
+      flush()
+      h.is_true(timer.cb ~= nil, "a live thought starts the pulse")
+      local frames = {}
+      for i = 1, 3 do
+        timer.tick()
+        h.is_true(view.messages[1].metadata.thinking_active == true, "the live face is still on at tick " .. i)
+        frames[i] = view.messages[1].metadata.thinking_frame
+      end
+      h.is_true(frames[1] ~= frames[2] and frames[2] ~= frames[3], "the spinner moves from tick to tick")
+      chunk(session, "the answer")
+      timer.tick()
+      h.is_true(view.messages[1].metadata.thinking_active == false, "the face is released once the thought settles")
+    end)
+  end)
+
+  h.it("stops the timer once nothing is live, restarts it for the next thought", function()
+    with_fake_timer(function(timer)
+      local session = make_setup()
+      thought(session, LONG)
+      flush()
+      timer.tick()
+      h.is_true(timer.running, "the pulse runs while the thought is live")
+      chunk(session, "the answer")
+      flush()
+      timer.tick()
+      h.is_true(not timer.running, "the first tick with nothing live stops the pulse")
+      thought(session, "and another thing")
+      flush()
+      h.eq(2, timer.created, "the next live thought starts a fresh pulse")
+      h.is_true(timer.running, "and it runs")
+    end)
+  end)
+
+  h.it("does not start the pulse for streamed text alone", function()
+    with_fake_timer(function(timer)
+      local session = make_setup()
+      chunk(session, "just an answer")
+      flush()
+      h.eq(0, timer.created, "no thought, no pulse")
+    end)
+  end)
+
+  h.it("leaves an expanded thought alone on every tick", function()
+    with_fake_timer(function(timer)
+      local session, view = make_setup()
+      thought(session, "a short aside") -- under the fold threshold: renders expanded
+      flush()
+      local updates = count_updates(view)
+      for _ = 1, 5 do
+        timer.tick()
+      end
+      h.eq(0, updates.value, "ticks re-rendered an expanded thought that shows no frame")
+      h.is_true(timer.running, "the thought is still live, so the pulse keeps running")
+    end)
   end)
 end)
 
