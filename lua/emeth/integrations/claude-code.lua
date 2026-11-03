@@ -10,6 +10,9 @@
 --- Subagents: transform_update points each subagent tool call at the Agent/Task
 --- call that spawned it, and rewrites that call's title to show the description +
 --- subagent_type from its rawInput.
+---
+--- Background tasks: a call claude runs in the background is flagged
+--- `backgrounded`, so the renderer marks it as launched rather than done.
 
 local Winbar = require("emeth.ui.winbar")
 
@@ -167,10 +170,19 @@ local function transform_update(update)
     update.parent_tool_call_id = meta.parentToolUseId
   end
 
+  -- A backgrounded call (Bash with `run_in_background`, or one claude moved to
+  -- the background) completes as soon as it is launched while its work runs on.
+  -- `run_in_background` is the request; `toolResponse.backgroundTaskId` is the
+  -- confirmation, and also covers a call backgrounded without asking for it.
+  local raw = type(update.rawInput) == "table" and update.rawInput or {}
+  local response = type(meta.toolResponse) == "table" and meta.toolResponse or nil
+  if raw.run_in_background == true or (response and response.backgroundTaskId ~= nil) then
+    update.backgrounded = true
+  end
+
   if meta.toolName ~= "Task" and meta.toolName ~= "Agent" then
     return
   end
-  local raw = type(update.rawInput) == "table" and update.rawInput or {}
   local description = (type(raw.description) == "string" and raw.description ~= "" and raw.description) or update.title
   local subagent_type = type(raw.subagent_type) == "string" and raw.subagent_type ~= "" and raw.subagent_type or nil
   if description and description ~= "" then

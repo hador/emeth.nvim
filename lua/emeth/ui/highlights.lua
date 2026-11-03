@@ -6,6 +6,7 @@ M.THINKING = "EmethThinking"
 M.TOOL_CALLING = "EmethToolCalling"
 M.TOOL_SUCCEEDED = "EmethToolSucceeded"
 M.TOOL_FAILED = "EmethToolFailed"
+M.TOOL_BACKGROUNDED = "EmethToolBackgrounded"
 M.DIFF_ADDED = "EmethDiffAdded"
 M.DIFF_REMOVED = "EmethDiffRemoved"
 M.DIFF_CONTEXT = "EmethDiffContext"
@@ -27,6 +28,7 @@ function M.setup()
   set(0, M.TOOL_CALLING, { default = true, link = "DiagnosticWarn" })
   set(0, M.TOOL_SUCCEEDED, { default = true, link = "DiagnosticOk" })
   set(0, M.TOOL_FAILED, { default = true, link = "DiagnosticError" })
+  set(0, M.TOOL_BACKGROUNDED, { default = true, link = "DiagnosticInfo" })
   set(0, M.TOOL_PARAM, { default = true, link = "Special" })
   set(0, M.MUTED, { default = true, link = "Comment" })
 

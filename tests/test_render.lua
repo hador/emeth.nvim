@@ -128,6 +128,23 @@ h.describe("Render", function()
     h.is_true(all:find("✗") ~= nil, "expected failure icon")
   end)
 
+  h.it("marks a completed backgrounded call as backgrounded, not succeeded", function()
+    local icons = require("emeth").config.icons
+    local function header(status)
+      local msg = Message:new(
+        "assistant",
+        { type = "tool_use", name = "make", id = "tb", input = {}, status = status, backgrounded = true },
+        { tool_call = { toolCallId = "tb", status = status } }
+      )
+      return tostring(Render.render_message(msg, {})[1])
+    end
+    local glyph = icons.tool_backgrounded or "↗"
+    h.is_true(header("completed"):find(glyph, 1, true) ~= nil, "expected background icon")
+    h.is_true(header("completed"):find(icons.tool_succeeded, 1, true) == nil, "no success tick")
+    h.is_true(header("failed"):find(icons.tool_failed, 1, true) ~= nil, "a failed launch still fails")
+    h.is_true(header("in_progress"):find(icons.tool_generating, 1, true) ~= nil, "not yet launched")
+  end)
+
   h.it("renders diff tool_use with heavy box", function()
     local msg = Message:new("assistant", {
       type = "tool_use",

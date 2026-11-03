@@ -130,6 +130,7 @@ require("emeth").setup({
     tool_generating = "⏳",
     tool_succeeded = "✓",
     tool_failed = "✗",
+    tool_backgrounded = "↗", -- returned at once; still running in the background
   },
   default_provider = nil,       -- nil: :Emeth asks which provider to use
   resume_last_session = false,  -- auto-resume last session on open

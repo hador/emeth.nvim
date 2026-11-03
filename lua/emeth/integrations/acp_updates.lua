@@ -299,6 +299,9 @@ function M.handlers(ctx)
             if update.rawInput then
               item.input = update.rawInput
             end
+            if update.backgrounded then
+              item.backgrounded = true
+            end
           end
         end
         if msg.metadata.tool_call then
@@ -319,6 +322,7 @@ function M.handlers(ctx)
         input = update.rawInput or {},
         status = update.status or "pending",
         failure_reason = update.failure_reason,
+        backgrounded = update.backgrounded,
       }, metadata)
       stream.tool_map[update.toolCallId] = msg.uuid
       if not parent then
@@ -354,6 +358,7 @@ function M.handlers(ctx)
         or update.title ~= nil
         or update.rawInput ~= nil
         or update.locations ~= nil
+        or update.backgrounded ~= nil
       view:update_message(uuid, function(msg)
         for _, item in ipairs(msg.content) do
           if item.type == "tool_use" and item.id == update.toolCallId then
@@ -370,6 +375,11 @@ function M.handlers(ctx)
             -- normalised onto the generic field by the provider transform.
             if update.failure_reason then
               item.failure_reason = update.failure_reason
+            end
+            -- Sticky: the flag arrives on one chunk (normalised by the provider
+            -- transform) and later chunks simply don't repeat it.
+            if update.backgrounded then
+              item.backgrounded = true
             end
           end
         end

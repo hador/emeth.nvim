@@ -11,6 +11,7 @@ local _uuid_counter = 0
 ---@field input? table
 ---@field status? "pending"|"in_progress"|"completed"|"failed"|"cancelled"
 ---@field failure_reason? "cancelled"|"denied"|"error"
+---@field backgrounded? boolean  the call returned at once, its work still running
 
 ---@class chat_ui.MessageMetadata
 ---@field model? string
