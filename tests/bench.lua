@@ -335,16 +335,37 @@ end
 
 local CARD_ID = "toolu_card"
 
+---A view with `msg` mid-transcript: a few paragraphs above it, whatever
+---`under(v)` adds directly beneath it, then `tail` paragraphs written below it
+---since. The shape of every "one message keeps changing while the session
+---writes on below it" scenario -- a subagent card, a live thought. Painted, so
+---the next paint is incremental.
+---@param msg chat_ui.Message
+---@param tail integer
+---@param under? fun(v: chat_ui.ChatView)
+---@return chat_ui.ChatView
+local function mid_transcript(msg, tail, under)
+  local v = fresh_view()
+  for _ = 1, 3 do
+    v:add_message(Message:new("assistant", PARAGRAPH))
+  end
+  v:add_message(msg)
+  if under then
+    under(v)
+  end
+  for _ = 1, tail do
+    v:add_message(Message:new("assistant", PARAGRAPH))
+  end
+  paint()
+  return v
+end
+
 ---A collapsed subagent card with `n_children` hidden children, `prefix`
 ---paragraphs above it and `tail` paragraphs written below it since the spawn.
 ---@param tail integer
 ---@param n_children? integer
 ---@return { view: chat_ui.ChatView, card: chat_ui.Message, children: chat_ui.Message[], spawn: fun(): chat_ui.Message, update: fun(child: chat_ui.Message, i: integer) }
 function M.subagent_scenario(tail, n_children)
-  local v = fresh_view()
-  for _ = 1, 3 do
-    v:add_message(Message:new("assistant", PARAGRAPH))
-  end
   local card = Message:new("assistant", {
     type = "tool_use",
     id = CARD_ID,
@@ -356,10 +377,10 @@ function M.subagent_scenario(tail, n_children)
     subagent_state = "running",
     subagent_children = 0,
   })
-  v:add_message(card)
-  local s = { view = v, card = card, children = {} }
+  local s = { card = card, children = {} }
 
   function s.spawn()
+    local v = s.view
     local n = #s.children + 1
     local child = Message:new("assistant", {
       type = "tool_use",
@@ -380,20 +401,19 @@ function M.subagent_scenario(tail, n_children)
   end
 
   function s.update(child, i)
-    v:update_message(child.uuid, function(m)
+    s.view:update_message(child.uuid, function(m)
       m.content[1].status = "in_progress"
       m.metadata.tool_call.status = "in_progress"
       m.metadata.tool_call.content = { { type = "content", content = { text = "out " .. i } } }
     end)
   end
 
-  for _ = 1, n_children or 2 do
-    s.spawn()
-  end
-  for _ = 1, tail do
-    v:add_message(Message:new("assistant", PARAGRAPH))
-  end
-  paint()
+  mid_transcript(card, tail, function(v)
+    s.view = v
+    for _ = 1, n_children or 2 do
+      s.spawn()
+    end
+  end)
   return s
 end
 
@@ -438,6 +458,94 @@ end
 ---@return number ms
 function M.subagent_spawn_cost(tail)
   local _, run = M.subagent_spawn_run(tail)
+  return M.time(run, 3)
+end
+
+-- ── thinking blocks ────────────────────────────────────────────
+-- A thought streams in one chunk at a time and, while live, a pulse re-stamps
+-- its spinner frame on a timer. Local models think in thousands of lines, so
+-- both paths have to stay cheap as the thought grows -- and the pulse, like a
+-- subagent card, sits mid-transcript once the agent writes on below it. These
+-- mirror the mutations integrations/acp_updates.lua (append a chunk) and the
+-- integration's pulse tick (stamp a frame) make.
+
+---One line of a thought, the unit a thought grows by here.
+---@param i integer
+---@return string
+local function thought_line(i)
+  return "  weighing option " .. i .. ": " .. string.rep("x", 40) .. "\n"
+end
+
+---A live thought that grows to `n_lines`, one chunk per line, rendering every
+---chunk (the throttle off -- the worst case).
+---
+---`expanded` nil is the DEFAULT: the thought renders inline up to
+---thinking_collapse_lines, then folds to one line on its own. `true` forces the
+---whole growing body (K'd open mid-stream) -- inherently O(N^2), like an
+---expanded tool body.
+---@param n_lines integer
+---@param expanded? boolean
+---@return chat_ui.ChatView view, fun() run, chat_ui.Message msg
+function M.thinking_growth_scenario(n_lines, expanded)
+  local v = fresh_view()
+  local msg = Message:new("assistant", { type = "thinking", thinking = "" })
+  msg.metadata.thinking_active = true
+  msg.metadata._expanded = expanded
+  v:add_message(msg)
+  v:_render()
+  local run = function()
+    for i = 1, n_lines do
+      v:update_message(msg.uuid, function(m)
+        m.content[1].thinking = m.content[1].thinking .. thought_line(i)
+      end)
+      v:_render()
+    end
+  end
+  return v, run, msg
+end
+
+--- Wall-clock cost of a thought growing to `n_lines` (make bench).
+---@param n_lines integer
+---@param expanded? boolean
+---@return number ms_total
+function M.streaming_thinking_growth(n_lines, expanded)
+  return M.time(function()
+    local _, run = M.thinking_growth_scenario(n_lines, expanded)
+    run()
+  end, 3)
+end
+
+local PULSE_TICKS = 20
+
+---A live, folded `n_lines` thought mid-transcript with `tail` paragraphs below
+---it, and PULSE_TICKS pulse ticks: each stamps the next spinner frame.
+---@param tail integer
+---@param n_lines? integer
+---@return { view: chat_ui.ChatView, msg: chat_ui.Message }, fun()
+function M.thinking_pulse_run(tail, n_lines)
+  local acc = {}
+  for i = 1, n_lines or 40 do
+    acc[i] = thought_line(i)
+  end
+  local msg = Message:new("assistant", { type = "thinking", thinking = table.concat(acc) })
+  msg.metadata.thinking_active = true
+  local v = mid_transcript(msg, tail)
+  local frames = require("emeth.ui.winbar").spinner_frames()
+  return { view = v, msg = msg }, function()
+    for i = 1, PULSE_TICKS do
+      v:update_message(msg.uuid, function(m)
+        m.metadata.thinking_frame = frames[(i % #frames) + 1]
+      end)
+      paint()
+    end
+  end
+end
+
+--- Wall-clock cost of PULSE_TICKS ticks on a mid-transcript thought (make bench).
+---@param tail integer
+---@return number ms
+function M.thinking_pulse_cost(tail)
+  local _, run = M.thinking_pulse_run(tail)
   return M.time(run, 3)
 end
 
@@ -488,6 +596,21 @@ function M.run()
   print("\nnew nested tool under a mid-transcript card — should be ~FLAT vs tail size:")
   for _, t in ipairs({ 0, 100, 400, 800 }) do
     print(string.format("  tail=%-5d  %7.3f ms / 20 spawns", t, M.subagent_spawn_cost(t)))
+  end
+
+  print("\nstreaming thought growth (DEFAULT, folds past thinking_collapse_lines) — should be LINEAR:")
+  for _, n in ipairs({ 200, 400, 800, 1600 }) do
+    print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_thinking_growth(n)))
+  end
+
+  print("\nstreaming thought growth (expanded, render every chunk) — QUADRATIC:")
+  for _, n in ipairs({ 200, 400, 800 }) do
+    print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_thinking_growth(n, true)))
+  end
+
+  print("\nthinking pulse on a mid-transcript folded thought — should be FLAT vs tail:")
+  for _, t in ipairs({ 0, 100, 400, 800 }) do
+    print(string.format("  tail=%-5d  %7.3f ms / %d ticks", t, M.thinking_pulse_cost(t), PULSE_TICKS))
   end
 end
 

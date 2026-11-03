@@ -199,3 +199,36 @@ h.describe("perf: subagent activity leaves the transcript around its card alone"
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   end)
 end)
+
+h.describe("perf: a live thought stays cheap however long it gets", function()
+  -- Local models think in thousands of lines, and while a thought is live a
+  -- pulse re-stamps its spinner frame several times a second. Both have to cost
+  -- what changed on screen -- one folded row -- not the thought's length or the
+  -- transcript below it.
+
+  h.it("a pulse tick on a folded thought rewrites only its one row", function()
+    for _, tail in ipairs({ SMALL, LARGE }) do
+      local s, run = bench.thinking_pulse_run(tail)
+      local renders
+      local writes = bench.count_buffer_writes(s.view.result_buf, function()
+        renders = bench.count_render_calls(run)
+      end)
+      h.eq(
+        20,
+        writes.rows,
+        string.format("20 pulse ticks wrote %d rows with %d messages below the thought; expected 20", writes.rows, tail)
+      )
+      h.eq(20, renders, string.format("20 pulse ticks re-rendered %d messages (tail=%d); expected 20", renders, tail))
+    end
+  end)
+
+  h.it("a folded thought's footprint is one row regardless of its length", function()
+    local rows = {}
+    for _, n in ipairs({ 40, 800 }) do
+      local v, run = bench.thinking_growth_scenario(n)
+      run()
+      rows[#rows + 1] = vim.api.nvim_buf_line_count(v.result_buf)
+    end
+    h.eq(rows[1], rows[2], "a folded thought grew on screen with its body")
+  end)
+end)
