@@ -17,6 +17,7 @@ local AcpPrompts = require("emeth.integrations.acp_prompts")
 local AcpUpdates = require("emeth.integrations.acp_updates")
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
+local Render = require("emeth.ui.render")
 local Roots = require("emeth.integrations.roots")
 local Sessions = require("emeth.sessions")
 local Winbar = require("emeth.ui.winbar")
@@ -215,15 +216,18 @@ function M.setup_integration(view, session)
   end
 
   -- ── Thinking pulse ─────────────────────────────────────────────
-  -- While a thought is streaming, its block shows a moving spinner instead of
-  -- the parked 🤔. `stream.thinking_uuid` is the single source of "which block
-  -- is live"; this timer only projects that pointer into message metadata, so
-  -- the renderer can pick the right face. Whatever closes a thought block (a
-  -- text chunk, a tool call, steering, a subagent spawn, a new stream) clears
-  -- the pointer — so "lost the pointer" means "settled", and no shutdown path
-  -- has to remember to unmark the last block itself. Ticks are a cheap no-op
-  -- when nothing is live and nothing is pending; the timer stops on
-  -- disconnect like the winbar's own spinner.
+  -- While a thought is streaming, its folded face shows a moving spinner
+  -- instead of the parked 🤔. `stream.thinking_uuid` is the single source of
+  -- "which block is live"; this timer only projects that pointer into message
+  -- metadata, so the renderer can pick the right face. Whatever closes a thought
+  -- block (a text chunk, a tool call, steering, a subagent spawn, a new stream)
+  -- clears the pointer — so "lost the pointer" means "settled", and no shutdown
+  -- path has to remember to unmark the last block itself.
+  --
+  -- The timer only runs while a thought is live: a live thought starts it, and
+  -- the first tick that finds none releases the last block's face and stops it.
+  -- An expanded thought shows no frame, so its ticks leave it alone — a tick
+  -- re-renders exactly what it visibly changes, the one folded row.
   local thinking_timer = nil
   local thinking_pulse = 0
   local thinking_live = nil ---@type string|nil  uuid last stamped active
@@ -234,33 +238,41 @@ function M.setup_integration(view, session)
     end)
   end
 
+  local function stop_thinking_pulse()
+    if thinking_timer then
+      thinking_timer:stop()
+      thinking_timer:close()
+      thinking_timer = nil
+    end
+  end
+
   local function thinking_tick()
     local live = stream.thinking_uuid
-    local active = live and (activity == "thinking" or activity == "generating")
-    if not live or not active then
-      -- Settled or ended: the pointer is gone (a text chunk, a tool call, a
-      -- steer, a subagent, a new turn all clear it) or the turn left. Drop the
-      -- live face from the block that last held it; it keeps its count.
-      if thinking_live then
-        unmark_thinking(thinking_live)
-        thinking_live = nil
-      end
+    if not (activity == "thinking" or activity == "generating") then
+      live = nil -- the turn left: whatever was live has settled
+    end
+    if thinking_live and thinking_live ~= live then
+      -- Settled, or a new block took over: the old one keeps its count and
+      -- drops the live face.
+      unmark_thinking(thinking_live)
+      thinking_live = nil
+    end
+    if not live then
+      stop_thinking_pulse()
+      return
+    end
+    thinking_live = live
+    local msg = view:get_message(live)
+    if not msg or Render.is_expanded(msg) then
       return
     end
     thinking_pulse = thinking_pulse + 1
     local frames = Winbar.spinner_frames()
     local frame = frames[((thinking_pulse - 1) % #frames) + 1]
-    local just_landed = thinking_live ~= live
-    if thinking_live then
-      unmark_thinking(thinking_live)
-    end
-    view:update_message(live, function(msg)
-      if just_landed then
-        msg.metadata.thinking_active = true
-      end
-      msg.metadata.thinking_frame = frame
+    view:update_message(live, function(m)
+      m.metadata.thinking_active = true
+      m.metadata.thinking_frame = frame
     end)
-    thinking_live = live
   end
 
   local function start_thinking_pulse()
@@ -269,14 +281,6 @@ function M.setup_integration(view, session)
     end
     thinking_timer = vim.uv.new_timer()
     thinking_timer:start(0, 120, vim.schedule_wrap(thinking_tick))
-  end
-
-  local function stop_thinking_pulse()
-    if thinking_timer then
-      thinking_timer:stop()
-      thinking_timer:close()
-      thinking_timer = nil
-    end
   end
 
   local function refresh_file_display()
@@ -847,7 +851,9 @@ function M.setup_integration(view, session)
       if activity ~= target then
         set_activity(target)
       end
-      start_thinking_pulse()
+      if target == "thinking" then
+        start_thinking_pulse()
+      end
     end
 
     -- ...and the matching exit. An unsolicited turn (claude-acp: one Claude Code
