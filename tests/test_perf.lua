@@ -222,6 +222,27 @@ h.describe("perf: a live thought stays cheap however long it gets", function()
     end
   end)
 
+  h.it("measuring a folded thought never splits its body", function()
+    -- A folded thought is one row; its count is all the renderer needs, and it
+    -- is re-measured every chunk and every pulse tick. Building the full line
+    -- table each time made streaming a long thought superlinear.
+    local _, run, msg = bench.thinking_growth_scenario(200, false)
+    local splits = 0
+    local orig = vim.split
+    vim.split = function(text, ...)
+      if text == msg.content[1].thinking then
+        splits = splits + 1
+      end
+      return orig(text, ...)
+    end
+    local ok, err = pcall(run)
+    vim.split = orig
+    if not ok then
+      error(err, 0)
+    end
+    h.eq(0, splits, string.format("streaming 200 lines into a folded thought split its body %d times", splits))
+  end)
+
   h.it("a folded thought's footprint is one row regardless of its length", function()
     local rows = {}
     for _, n in ipairs({ 40, 800 }) do
