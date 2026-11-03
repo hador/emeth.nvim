@@ -413,14 +413,6 @@ function M.get_state()
   return state
 end
 
---- Braille spinner frames. Shared so a spinner elsewhere (the transcript's
---- thinking pulse) reads as the same animation rather than a second,
---- independent one.
----@return string[]
-function M.spinner_frames()
-  return spinner_frames
-end
-
 ---@return string
 function M.get_left()
   return left_plain

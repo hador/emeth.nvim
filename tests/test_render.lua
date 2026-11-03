@@ -77,19 +77,6 @@ h.describe("Render", function()
     h.is_true(all:find("20 lines") ~= nil, "the folded face promises the count")
   end)
 
-  h.it("renders a live folded thought with the moving face", function()
-    local msg = Message:new(
-      "assistant",
-      { type = "thinking", thinking = LONG_THOUGHT },
-      { thinking_active = true, thinking_frame = "⠙" }
-    )
-    local all = render_text(msg)
-    h.is_true(all:find("⠙") ~= nil, "the live face shows the spinner frame")
-    h.is_true(all:find("thinking…") ~= nil, "the live face reads as in-progress")
-    h.is_true(all:find("20 lines") ~= nil, "the live face still counts")
-    h.is_true(all:find("pondering 7") == nil, "the body stays folded while live")
-  end)
-
   h.it("honors an explicit expand on a long thought", function()
     local msg = Message:new("assistant", { type = "thinking", thinking = LONG_THOUGHT }, { _expanded = true })
     local all = render_text(msg)

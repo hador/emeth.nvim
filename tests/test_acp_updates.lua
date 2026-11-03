@@ -121,26 +121,6 @@ h.describe("acp integration: agent_thought_chunk", function()
     h.eq(1, #view.messages)
     h.eq("first second", view.messages[1].content[1].thinking)
   end)
-
-  h.it("lands a fresh thought live", function()
-    local session, view = make_setup()
-    session:_emit(
-      "update",
-      { sessionUpdate = "agent_thought_chunk", content = { type = "text", text = "pondering..." } }
-    )
-    local meta = view.messages[1].metadata
-    h.is_true(meta.thinking_active == true, "a streamed thought is live: the pulse keeps it moving")
-    h.is_true(type(meta.thinking_frame) == "string", "a streamed thought starts on a spinner frame")
-  end)
-
-  h.it("brings a replayed thought back settled", function()
-    local session, view = make_setup()
-    session:_emit(
-      "update",
-      { sessionUpdate = "agent_thought_chunk", replay = true, content = { type = "text", text = "pondering..." } }
-    )
-    h.is_true(not view.messages[1].metadata.thinking_active, "history comes back settled, no leftover spinner")
-  end)
 end)
 
 h.describe("acp integration: tool_call lifecycle", function()

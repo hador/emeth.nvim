@@ -337,8 +337,8 @@ local function thinking_body(text)
 end
 
 -- Line counts of thoughts, keyed weakly by content item: { text, n }. A thought
--- is re-measured on every render -- every chunk, every pulse tick, and twice
--- per render (the face and `K`'s is_expanded) -- and local models think in
+-- is re-measured on every render -- every chunk, and twice per render (the
+-- face and `K`'s is_expanded) -- and local models think in
 -- thousands of lines, so measuring must not build the line table each time.
 -- `text` validates the entry: strings are interned, so an unchanged thought
 -- costs one comparison.
@@ -435,6 +435,14 @@ function M.thinking_use(msg)
       return item
     end
   end
+end
+
+---Whether `K` folds this message through `_expanded`: a tool call or a thought,
+---each with a per-kind default the renderer owns (see is_expanded).
+---@param msg chat_ui.Message
+---@return boolean
+function M.foldable(msg)
+  return M.tool_use(msg) ~= nil or M.thinking_use(msg) ~= nil
 end
 
 ---The expand state `K` should toggle away from — the renderer owns the per-kind
@@ -652,22 +660,13 @@ local function render_thinking(item, msg)
     return lines
   end
 
-  -- Collapsed face: one line. While live it moves (the pulse's spinner frame
-  -- stands in for the parked 🤔) and promises "keep coming"; once settled it
-  -- promises the count, recoverable with K.
-  local active = msg.metadata.thinking_active == true
+  -- Collapsed face: one line, the count, recoverable with K. It reads the same
+  -- live or settled: the winbar's thinking phase is what says it is still going.
   local n = thinking_count(item)
   if n == 0 then
     return { Line:new({ { icons.thinking .. "thinking", HL.MUTED } }) }
   end
-  local sections
-  if active then
-    local frame = msg.metadata.thinking_frame or "⠋"
-    sections = { { frame .. " thinking…", HL.THINKING }, { " +" .. n .. " lines", HL.MUTED } }
-  else
-    sections = { { icons.thinking .. "thinking", HL.THINKING }, { " · " .. n .. " lines", HL.MUTED } }
-  end
-  return { Line:new(sections) }
+  return { Line:new({ { icons.thinking .. "thinking", HL.THINKING }, { " · " .. n .. " lines", HL.MUTED } }) }
 end
 
 ---@param msg chat_ui.Message

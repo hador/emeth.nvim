@@ -188,18 +188,10 @@ function ChatView:new(opts)
         return
       end
 
-      if Render.tool_use(msg) then
-        -- Toggle away from what's on screen, not from `_expanded` itself:
-        -- a small diff renders expanded while still nil, so flipping the
-        -- raw field would leave it expanded and make K look broken.
-        msg.metadata._expanded = not Render.is_expanded(msg)
-        invalidate_msg(msg)
-        return
-      end
-
-      if Render.thinking_use(msg) then
-        -- Same rule as tools: a short thought renders expanded while
-        -- `_expanded` is still nil, so toggle away from what's on screen.
+      if Render.foldable(msg) then
+        -- Toggle away from what's on screen, not from `_expanded` itself: a
+        -- small diff or a short thought renders expanded while still nil, so
+        -- flipping the raw field would leave it expanded and make K look broken.
         msg.metadata._expanded = not Render.is_expanded(msg)
         invalidate_msg(msg)
         return
@@ -272,7 +264,7 @@ function ChatView:new(opts)
         hints[#hints + 1] = "K: " .. (msg._show_details and "hide" or "show") .. " details"
       end
     end
-    if Render.tool_use(msg) or Render.thinking_use(msg) then
+    if Render.foldable(msg) then
       -- What's on screen, as K itself decides: a small diff or a short
       -- thought renders expanded while `_expanded` is still nil.
       hints[#hints + 1] = "K: " .. (Render.is_expanded(msg) and "collapse" or "expand")
