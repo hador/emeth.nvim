@@ -239,6 +239,39 @@ h.describe("claude-code subagent attribution transform", function()
   end)
 end)
 
+h.describe("claude-code backgrounded tool transform", function()
+  local function bash(raw, response)
+    return {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "t1",
+      rawInput = raw,
+      _meta = { claudeCode = { toolName = "Bash", toolResponse = response } },
+    }
+  end
+
+  h.it("marks a call that asked for run_in_background", function()
+    local u = bash({ command = "make", run_in_background = true })
+    CC._transform_update(u)
+    h.eq(true, u.backgrounded)
+  end)
+
+  -- The chunk that confirms it carries no rawInput at all (verified on the wire).
+  h.it("marks a call whose response carries a backgroundTaskId", function()
+    local u = bash(nil, { backgroundTaskId = "b7guym8a7", stdout = "", stderr = "" })
+    CC._transform_update(u)
+    h.eq(true, u.backgrounded)
+  end)
+
+  h.it("leaves a foreground call alone", function()
+    local u1 = bash({ command = "ls" }, { stdout = "x", stderr = "" })
+    local u2 = bash({ command = "ls", run_in_background = false })
+    CC._transform_update(u1)
+    CC._transform_update(u2)
+    h.is_nil(u1.backgrounded)
+    h.is_nil(u2.backgrounded)
+  end)
+end)
+
 h.describe("claude-code session_store", function()
   local store = CC.session_store
   local DAY = 86400

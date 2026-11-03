@@ -62,6 +62,7 @@ local defaults = {
     tool_generating = "⏳",
     tool_succeeded = "✓",
     tool_failed = "✗",
+    tool_backgrounded = "↗", -- returned at once; still running in the background
   },
   resume_last_session = false,
   prompt_dirs = {},

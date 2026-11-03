@@ -172,6 +172,11 @@ local function tool_status(item)
   local icons = get_icons()
   local s = item.status or "pending"
   if s == "completed" then
+    -- A backgrounded call "completes" the moment it is launched; its work is
+    -- still running, so a success tick would claim more than we know.
+    if item.backgrounded then
+      return icons.tool_backgrounded or "↗", HL.TOOL_BACKGROUNDED
+    end
     return icons.tool_succeeded, HL.TOOL_SUCCEEDED
   elseif s == "failed" or s == "cancelled" then
     return icons.tool_failed, HL.TOOL_FAILED

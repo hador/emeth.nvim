@@ -203,6 +203,23 @@ h.describe("acp integration: tool_call lifecycle", function()
     h.eq(1, #view.messages)
     h.eq("in_progress", view.messages[1].content[1].status)
   end)
+
+  h.it("keeps a backgrounded flag once any chunk carries it", function()
+    local session, view = make_setup()
+    session:_emit("update", { sessionUpdate = "tool_call", toolCallId = "t1", title = "Terminal", status = "pending" })
+    h.is_nil(view.messages[1].content[1].backgrounded)
+    session:_emit("update", { sessionUpdate = "tool_call_update", toolCallId = "t1", backgrounded = true })
+    session:_emit("update", { sessionUpdate = "tool_call_update", toolCallId = "t1", status = "completed" })
+    local item = view.messages[1].content[1]
+    h.eq(true, item.backgrounded)
+    h.eq("completed", item.status)
+  end)
+
+  h.it("carries a backgrounded flag from the first tool_call", function()
+    local session, view = make_setup()
+    session:_emit("update", { sessionUpdate = "tool_call", toolCallId = "t1", title = "x", backgrounded = true })
+    h.eq(true, view.messages[1].content[1].backgrounded)
+  end)
 end)
 
 h.describe("acp integration: streaming tool render throttle", function()
