@@ -17,7 +17,6 @@ local AcpPrompts = require("emeth.integrations.acp_prompts")
 local AcpUpdates = require("emeth.integrations.acp_updates")
 local Commands = require("emeth.commands")
 local Message = require("emeth.message")
-local Render = require("emeth.ui.render")
 local Roots = require("emeth.integrations.roots")
 local Sessions = require("emeth.sessions")
 local Winbar = require("emeth.ui.winbar")
@@ -213,74 +212,6 @@ function M.setup_integration(view, session)
 
   local function reset_state()
     stream = new_stream()
-  end
-
-  -- ── Thinking pulse ─────────────────────────────────────────────
-  -- While a thought is streaming, its folded face shows a moving spinner
-  -- instead of the parked 🤔. `stream.thinking_uuid` is the single source of
-  -- "which block is live"; this timer only projects that pointer into message
-  -- metadata, so the renderer can pick the right face. Whatever closes a thought
-  -- block (a text chunk, a tool call, steering, a subagent spawn, a new stream)
-  -- clears the pointer — so "lost the pointer" means "settled", and no shutdown
-  -- path has to remember to unmark the last block itself.
-  --
-  -- The timer only runs while a thought is live: a live thought starts it, and
-  -- the first tick that finds none releases the last block's face and stops it.
-  -- An expanded thought shows no frame, so its ticks leave it alone — a tick
-  -- re-renders exactly what it visibly changes, the one folded row.
-  local thinking_timer = nil
-  local thinking_pulse = 0
-  local thinking_live = nil ---@type string|nil  uuid last stamped active
-
-  local function unmark_thinking(uuid)
-    view:update_message(uuid, function(msg)
-      msg.metadata.thinking_active = false
-    end)
-  end
-
-  local function stop_thinking_pulse()
-    if thinking_timer then
-      thinking_timer:stop()
-      thinking_timer:close()
-      thinking_timer = nil
-    end
-  end
-
-  local function thinking_tick()
-    local live = stream.thinking_uuid
-    if not (activity == "thinking" or activity == "generating") then
-      live = nil -- the turn left: whatever was live has settled
-    end
-    if thinking_live and thinking_live ~= live then
-      -- Settled, or a new block took over: the old one keeps its count and
-      -- drops the live face.
-      unmark_thinking(thinking_live)
-      thinking_live = nil
-    end
-    if not live then
-      stop_thinking_pulse()
-      return
-    end
-    thinking_live = live
-    local msg = view:get_message(live)
-    if not msg or Render.is_expanded(msg) then
-      return
-    end
-    thinking_pulse = thinking_pulse + 1
-    local frames = Winbar.spinner_frames()
-    local frame = frames[((thinking_pulse - 1) % #frames) + 1]
-    view:update_message(live, function(m)
-      m.metadata.thinking_active = true
-      m.metadata.thinking_frame = frame
-    end)
-  end
-
-  local function start_thinking_pulse()
-    if thinking_timer then
-      return
-    end
-    thinking_timer = vim.uv.new_timer()
-    thinking_timer:start(0, 120, vim.schedule_wrap(thinking_tick))
   end
 
   local function refresh_file_display()
@@ -717,11 +648,9 @@ function M.setup_integration(view, session)
       -- agent's reply to the steer into a block that renders before the prompt
       -- that caused it -- the transcript then reads as if the steer were never
       -- answered, which is exactly what a glance at the tail is checking for.
-      -- Only the anchors: `tool_map` stays, since tool calls already in flight
-      -- must keep resolving to their own rows, and `plan_uuid` re-displays
-      -- itself once it is no longer the last block.
-      stream.assistant_uuid = nil
-      stream.thinking_uuid = nil
+      -- `plan_uuid` stays too: it re-displays itself once it is no longer the
+      -- last block.
+      AcpUpdates.close_blocks(stream)
       strat.steer(prompt, text, function(outcome, err, info)
         vim.schedule(function()
           if err then
@@ -850,9 +779,6 @@ function M.setup_integration(view, session)
       local target = update.sessionUpdate == "agent_thought_chunk" and "thinking" or "generating"
       if activity ~= target then
         set_activity(target)
-      end
-      if target == "thinking" then
-        start_thinking_pulse()
       end
     end
 
@@ -1337,7 +1263,6 @@ function M.setup_integration(view, session)
         Sessions.touch(session.session_id)
       end
       Commands.clear_config()
-      stop_thinking_pulse()
       Winbar.detach()
       reload_debounce.close()
       render_debounce.close()

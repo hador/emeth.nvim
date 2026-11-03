@@ -201,30 +201,13 @@ h.describe("perf: subagent activity leaves the transcript around its card alone"
 end)
 
 h.describe("perf: a live thought stays cheap however long it gets", function()
-  -- Local models think in thousands of lines, and while a thought is live a
-  -- pulse re-stamps its spinner frame several times a second. Both have to cost
-  -- what changed on screen -- one folded row -- not the thought's length or the
-  -- transcript below it.
-
-  h.it("a pulse tick on a folded thought rewrites only its one row", function()
-    for _, tail in ipairs({ SMALL, LARGE }) do
-      local s, run = bench.thinking_pulse_run(tail)
-      local renders
-      local writes = bench.count_buffer_writes(s.view.result_buf, function()
-        renders = bench.count_render_calls(run)
-      end)
-      h.eq(
-        20,
-        writes.rows,
-        string.format("20 pulse ticks wrote %d rows with %d messages below the thought; expected 20", writes.rows, tail)
-      )
-      h.eq(20, renders, string.format("20 pulse ticks re-rendered %d messages (tail=%d); expected 20", renders, tail))
-    end
-  end)
+  -- Local models think in thousands of lines, streamed a chunk at a time. Each
+  -- chunk has to cost what changed on screen -- one folded row -- not the
+  -- thought's length.
 
   h.it("measuring a folded thought never splits its body", function()
     -- A folded thought is one row; its count is all the renderer needs, and it
-    -- is re-measured every chunk and every pulse tick. Building the full line
+    -- is re-measured every chunk. Building the full line
     -- table each time made streaming a long thought superlinear.
     local _, run, msg = bench.thinking_growth_scenario(200, false)
     local splits = 0

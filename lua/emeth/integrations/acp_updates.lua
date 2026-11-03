@@ -48,6 +48,16 @@ M.SUBAGENT_DISPATCHED = {
   subagent_update = true,
 }
 
+---End the text and thought blocks a stream is writing into, so the next chunk
+---of either starts a fresh message below whatever just landed. Only the
+---anchors: `tool_map` stays, since calls in flight must keep resolving to
+---their own rows.
+---@param stream acp.StreamState
+function M.close_blocks(stream)
+  stream.assistant_uuid = nil
+  stream.thinking_uuid = nil
+end
+
 ---@class acp_updates.Ctx
 ---@field view chat_ui.ChatView
 ---@field session acp.Session
@@ -181,8 +191,7 @@ function M.handlers(ctx)
     -- the card would be stranded below a growing wall of prose. Resetting here
     -- anchors the card at the spawn point: prose before it stays above, prose
     -- after it starts a fresh message below.
-    stream.assistant_uuid = nil
-    stream.thinking_uuid = nil
+    M.close_blocks(stream)
     view:add_message(msg)
     return msg.uuid
   end
@@ -243,13 +252,6 @@ function M.handlers(ctx)
         type = "thinking",
         thinking = update.content.text,
       })
-      -- Live thoughts only: a replayed history (session/load replays the same
-      -- chunks with `update.replay`) must come back settled — folded where
-      -- long, no leftover spinner. The tick then keeps the block moving.
-      if not update.replay then
-        msg.metadata.thinking_active = true
-        msg.metadata.thinking_frame = Winbar.spinner_frames()[1]
-      end
       stream.thinking_uuid = msg.uuid
       stream.assistant_uuid = nil
       view:add_message(msg)
@@ -281,8 +283,7 @@ function M.handlers(ctx)
     -- A top-level call ends the text/thought blocks it lands after. A nested one
     -- is placed under its parent, not at the tail, so the main stream carries on.
     if not parent then
-      stream.assistant_uuid = nil
-      stream.thinking_uuid = nil
+      M.close_blocks(stream)
     end
     local existing_uuid = stream.tool_map[update.toolCallId]
     if existing_uuid then

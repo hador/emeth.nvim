@@ -337,9 +337,8 @@ local CARD_ID = "toolu_card"
 
 ---A view with `msg` mid-transcript: a few paragraphs above it, whatever
 ---`under(v)` adds directly beneath it, then `tail` paragraphs written below it
----since. The shape of every "one message keeps changing while the session
----writes on below it" scenario -- a subagent card, a live thought. Painted, so
----the next paint is incremental.
+---since: one message that keeps changing while the session writes on below
+---it, like a subagent card. Painted, so the next paint is incremental.
 ---@param msg chat_ui.Message
 ---@param tail integer
 ---@param under? fun(v: chat_ui.ChatView)
@@ -462,12 +461,9 @@ function M.subagent_spawn_cost(tail)
 end
 
 -- ── thinking blocks ────────────────────────────────────────────
--- A thought streams in one chunk at a time and, while live, a pulse re-stamps
--- its spinner frame on a timer. Local models think in thousands of lines, so
--- both paths have to stay cheap as the thought grows -- and the pulse, like a
--- subagent card, sits mid-transcript once the agent writes on below it. These
--- mirror the mutations integrations/acp_updates.lua (append a chunk) and the
--- integration's pulse tick (stamp a frame) make.
+-- A thought streams in one chunk at a time, and local models think in
+-- thousands of lines, so a chunk has to stay cheap as the thought grows. This
+-- mirrors the mutation integrations/acp_updates.lua makes (append a chunk).
 
 ---One line of a thought, the unit a thought grows by here.
 ---@param i integer
@@ -476,7 +472,7 @@ local function thought_line(i)
   return "  weighing option " .. i .. ": " .. string.rep("x", 40) .. "\n"
 end
 
----A live thought that grows to `n_lines`, one chunk per line, rendering every
+---A thought that grows to `n_lines`, one chunk per line, rendering every
 ---chunk (the throttle off -- the worst case).
 ---
 ---`expanded` nil is the DEFAULT: the thought renders inline up to
@@ -489,7 +485,6 @@ end
 function M.thinking_growth_scenario(n_lines, expanded)
   local v = fresh_view()
   local msg = Message:new("assistant", { type = "thinking", thinking = "" })
-  msg.metadata.thinking_active = true
   msg.metadata._expanded = expanded
   v:add_message(msg)
   v:_render()
@@ -513,40 +508,6 @@ function M.streaming_thinking_growth(n_lines, expanded)
     local _, run = M.thinking_growth_scenario(n_lines, expanded)
     run()
   end, 3)
-end
-
-local PULSE_TICKS = 20
-
----A live, folded `n_lines` thought mid-transcript with `tail` paragraphs below
----it, and PULSE_TICKS pulse ticks: each stamps the next spinner frame.
----@param tail integer
----@param n_lines? integer
----@return { view: chat_ui.ChatView, msg: chat_ui.Message }, fun()
-function M.thinking_pulse_run(tail, n_lines)
-  local acc = {}
-  for i = 1, n_lines or 40 do
-    acc[i] = thought_line(i)
-  end
-  local msg = Message:new("assistant", { type = "thinking", thinking = table.concat(acc) })
-  msg.metadata.thinking_active = true
-  local v = mid_transcript(msg, tail)
-  local frames = require("emeth.ui.winbar").spinner_frames()
-  return { view = v, msg = msg }, function()
-    for i = 1, PULSE_TICKS do
-      v:update_message(msg.uuid, function(m)
-        m.metadata.thinking_frame = frames[(i % #frames) + 1]
-      end)
-      paint()
-    end
-  end
-end
-
---- Wall-clock cost of PULSE_TICKS ticks on a mid-transcript thought (make bench).
----@param tail integer
----@return number ms
-function M.thinking_pulse_cost(tail)
-  local _, run = M.thinking_pulse_run(tail)
-  return M.time(run, 3)
 end
 
 -- ── runner (make bench) ────────────────────────────────────────
@@ -606,11 +567,6 @@ function M.run()
   print("\nstreaming thought growth (expanded, render every chunk) — QUADRATIC:")
   for _, n in ipairs({ 200, 400, 800 }) do
     print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_thinking_growth(n, true)))
-  end
-
-  print("\nthinking pulse on a mid-transcript folded thought — should be FLAT vs tail:")
-  for _, t in ipairs({ 0, 100, 400, 800 }) do
-    print(string.format("  tail=%-5d  %7.3f ms / %d ticks", t, M.thinking_pulse_cost(t), PULSE_TICKS))
   end
 end
 
