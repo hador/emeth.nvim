@@ -336,6 +336,43 @@ local function thinking_body(text)
   return lines
 end
 
+-- Line counts of thoughts, keyed weakly by content item: { text, n }. A thought
+-- is re-measured on every render -- every chunk, every pulse tick, and twice
+-- per render (the face and `K`'s is_expanded) -- and local models think in
+-- thousands of lines, so measuring must not build the line table each time.
+-- `text` validates the entry: strings are interned, so an unchanged thought
+-- costs one comparison.
+local thinking_counts = setmetatable({}, { __mode = "k" })
+
+---`#thinking_body(item.thinking)`, without building the lines.
+---@param item chat_ui.ContentItem
+---@return integer
+local function thinking_count(item)
+  local text = item.thinking or ""
+  local hit = thinking_counts[item]
+  if hit and hit.text == text then
+    return hit.n
+  end
+  -- Same trim as thinking_body: drop the empty lines at either end, i.e. the
+  -- newlines before the first other byte and after the last.
+  local first = text:find("[^\n]")
+  local n = 0
+  if first then
+    local last = #text
+    while text:byte(last) == 10 do
+      last = last - 1
+    end
+    n = 1
+    local at = text:find("\n", first, true)
+    while at and at < last do
+      n = n + 1
+      at = text:find("\n", at + 1, true)
+    end
+  end
+  thinking_counts[item] = { text = text, n = n }
+  return n
+end
+
 ---Effective expand state for a thought, resolving the default when the user
 ---hasn't toggled it.
 ---
@@ -350,7 +387,7 @@ local function expanded_thinking(item, msg)
   if msg.metadata._expanded ~= nil then
     return msg.metadata._expanded == true
   end
-  return #thinking_body(item.thinking or "") <= get_limits().thinking_collapse_lines
+  return thinking_count(item) <= get_limits().thinking_collapse_lines
 end
 
 ---Effective expand state for a tool call, resolving the default when the user
@@ -605,12 +642,11 @@ end
 ---@return chat_ui.Line[]
 local function render_thinking(item, msg)
   local icons = get_icons()
-  local body = thinking_body(item.thinking or "")
   if expanded_thinking(item, msg) then
     local lines = {}
     lines[#lines + 1] = Line:new({ { icons.thinking .. "Thinking:", HL.THINKING } })
     lines[#lines + 1] = Line:new({ { "" } })
-    for _, l in ipairs(body) do
+    for _, l in ipairs(thinking_body(item.thinking or "")) do
       lines[#lines + 1] = Line:new({ { "> " .. l, HL.THINKING } })
     end
     return lines
@@ -620,15 +656,16 @@ local function render_thinking(item, msg)
   -- stands in for the parked 🤔) and promises "keep coming"; once settled it
   -- promises the count, recoverable with K.
   local active = msg.metadata.thinking_active == true
-  if #body == 0 then
+  local n = thinking_count(item)
+  if n == 0 then
     return { Line:new({ { icons.thinking .. "thinking", HL.MUTED } }) }
   end
   local sections
   if active then
     local frame = msg.metadata.thinking_frame or "⠋"
-    sections = { { frame .. " thinking…", HL.THINKING }, { " +" .. #body .. " lines", HL.MUTED } }
+    sections = { { frame .. " thinking…", HL.THINKING }, { " +" .. n .. " lines", HL.MUTED } }
   else
-    sections = { { icons.thinking .. "thinking", HL.THINKING }, { " · " .. #body .. " lines", HL.MUTED } }
+    sections = { { icons.thinking .. "thinking", HL.THINKING }, { " · " .. n .. " lines", HL.MUTED } }
   end
   return { Line:new(sections) }
 end
