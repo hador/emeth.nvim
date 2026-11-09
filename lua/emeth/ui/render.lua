@@ -615,6 +615,13 @@ local function render_tool_use(item, msg)
       end
     end
 
+    -- A child that failed or was interrupted: surface the agent's reason, if it
+    -- sent one, so the ✗ above isn't a mystery.
+    local subagent_error = msg.metadata.subagent_error
+    if type(subagent_error) == "string" and subagent_error ~= "" then
+      lines[#lines + 1] = Line:new({ { "├─ ", HL.MUTED }, { subagent_error, HL.TOOL_FAILED } })
+    end
+
     local outputs = {}
     if tc and tc.content then
       for _, c in ipairs(tc.content) do

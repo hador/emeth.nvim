@@ -282,6 +282,188 @@ h.describe("opencode transform_update (pass-through)", function()
   end)
 end)
 
+-- ── child_update (advertised capability) ─────────────────────────
+-- `opencode/session/child_update` is the notification opencode sends for each
+-- child event once we advertise `opencode/child-session-updates`. Content is
+-- re-emitted through the update pipeline; terminal status is stamped onto the
+-- launch card's `subagent_state`.
+
+local function mock_session()
+  local s = { session_id = "ses_parent", _emitted = {} }
+  function s:_emit(event, ...)
+    self._emitted[#self._emitted + 1] = { event = event, args = { ... } }
+  end
+  function s:on(event, fn)
+    self._listeners = self._listeners or {}
+    self._listeners[event] = self._listeners[event] or {}
+    self._listeners[event][#self._listeners[event] + 1] = fn
+  end
+  function s:off(event, fn)
+    local list = self._listeners and self._listeners[event]
+    if not list then
+      return
+    end
+    for i, f in ipairs(list) do
+      if f == fn then
+        table.remove(list, i)
+        return
+      end
+    end
+  end
+  return s
+end
+
+local function mock_msg(uuid, tool_call_id)
+  return { uuid = uuid, content = { { id = tool_call_id } }, metadata = {} }
+end
+
+local function mock_view(msgs)
+  return {
+    get_messages = function()
+      return msgs
+    end,
+    update_message = function(_, uuid, fn)
+      for _, m in ipairs(msgs) do
+        if m.uuid == uuid then
+          fn(m)
+          return
+        end
+      end
+    end,
+  }
+end
+
+h.describe("opencode child_update (content)", function()
+  h.it("re-emits a child content update through the update pipeline", function()
+    reset()
+    transform(launch("call_L", "Review", "general"))
+    local s = mock_session()
+    local v = mock_view({ mock_msg("uuid_L", "call_L") })
+    local projected = {
+      sessionUpdate = "tool_call",
+      name = "shell",
+      title = "Review: ls",
+      toolCallId = "ses_child:call_1",
+      _meta = child_tag("Review", "ses_child"),
+    }
+    OpenCode._handle_child_update(s, v, {
+      type = "update",
+      childSessionId = "ses_child",
+      title = "Review",
+      update = projected,
+    })
+    h.eq(1, #s._emitted)
+    h.eq("update", s._emitted[1].event)
+    h.eq(projected, s._emitted[1].args[1])
+    h.eq("ses_parent", s._emitted[1].args[2])
+  end)
+
+  h.it("tolerates a missing update payload", function()
+    local s = mock_session()
+    OpenCode._handle_child_update(s, nil, { type = "update" })
+    h.eq(0, #s._emitted)
+    OpenCode._handle_child_update(s, nil, nil)
+    h.eq(0, #s._emitted)
+  end)
+end)
+
+h.describe("opencode child_update (status)", function()
+  h.it("stamps a failed child onto its launch card with the error", function()
+    reset()
+    transform(launch("call_L", "Review", "general"))
+    local card = mock_msg("uuid_L", "call_L")
+    OpenCode._handle_child_update(mock_session(), mock_view({ card }), {
+      type = "status",
+      childSessionId = "ses_child",
+      title = "Review",
+      status = "failed",
+      error = { type = "boom", message = "the child exploded" },
+    })
+    h.eq("failed", card.metadata.subagent_state)
+    h.eq("the child exploded", card.metadata.subagent_error)
+  end)
+
+  h.it("stamps a completed child as the success state", function()
+    reset()
+    transform(launch("call_L", "Review", "general"))
+    local card = mock_msg("uuid_L", "call_L")
+    OpenCode._handle_child_update(mock_session(), mock_view({ card }), {
+      type = "status",
+      childSessionId = "ses_child",
+      title = "Review",
+      status = "completed",
+    })
+    h.eq("idle", card.metadata.subagent_state)
+    h.is_nil(card.metadata.subagent_error)
+  end)
+
+  h.it("treats an interrupted child as a non-success", function()
+    reset()
+    transform(launch("call_L", "Review", "general"))
+    local card = mock_msg("uuid_L", "call_L")
+    OpenCode._handle_child_update(mock_session(), mock_view({ card }), {
+      type = "status",
+      childSessionId = "ses_child",
+      title = "Review",
+      status = "interrupted",
+    })
+    h.eq("failed", card.metadata.subagent_state)
+  end)
+
+  h.it("ignores non-terminal states (created/running)", function()
+    reset()
+    transform(launch("call_L", "Review", "general"))
+    local card = mock_msg("uuid_L", "call_L")
+    local v = mock_view({ card })
+    OpenCode._handle_child_update(mock_session(), v, { type = "status", title = "Review", status = "running" })
+    h.is_nil(card.metadata.subagent_state)
+    OpenCode._handle_child_update(mock_session(), v, { type = "status", title = "Review", status = "created" })
+    h.is_nil(card.metadata.subagent_state)
+  end)
+
+  h.it("resolves the launch by bound child id once completion has recorded it", function()
+    reset()
+    transform(launch("call_L", "Review", "general"))
+    transform({
+      sessionUpdate = "tool_call_update",
+      name = "subagent",
+      toolCallId = "call_L",
+      status = "completed",
+      rawOutput = { metadata = { sessionID = "ses_bound" } },
+    })
+    local card = mock_msg("uuid_L", "call_L")
+    OpenCode._handle_child_update(mock_session(), mock_view({ card }), {
+      type = "status",
+      childSessionId = "ses_bound",
+      status = "failed",
+    })
+    h.eq("failed", card.metadata.subagent_state)
+  end)
+end)
+
+h.describe("opencode child_update (setup wiring)", function()
+  h.it("routes child_update notifications and cleanup unsubscribes", function()
+    local s = mock_session()
+    local card = mock_msg("uuid_L", "call_L")
+    local v = mock_view({ card })
+    local cleanup = OpenCode.setup(s, v)
+    transform(launch("call_L", "Review", "general"))
+    local listeners = s._listeners and s._listeners["notification"] or {}
+    h.eq(1, #listeners)
+    listeners[1]("opencode/session/child_update", {
+      type = "status",
+      childSessionId = "ses_child",
+      title = "Review",
+      status = "failed",
+    })
+    h.eq("failed", card.metadata.subagent_state)
+    -- An unrelated notification is ignored.
+    listeners[1]("_other/thing", { type = "status", status = "failed" })
+    cleanup()
+    h.eq(0, #(s._listeners and s._listeners["notification"] or {}))
+  end)
+end)
+
 -- ── transform_elicitation ────────────────────────────────────────
 -- opencode's `question` tool arrives as `q<N>` (a select) + `q<N>_custom`
 -- (free text) pairs. Folding the companion in asks the user once.

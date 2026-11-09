@@ -1,5 +1,14 @@
 --- OpenCode ACP extension.
 ---
+--- Subagents: we advertise `opencode/child-session-updates`, so current
+--- opencode sends each child event as an `opencode/session/child_update`
+--- notification (content + terminal status) rather than a tagged
+--- `session/update`. `handle_child_update` (below) routes that: content is
+--- re-emitted through the ordinary update pipeline, terminal status is stamped
+--- onto the launch card. The tagged path the rest of this file describes is
+--- kept for older agents that don't implement the capability — the two share
+--- the same projected update shape, so `transform_update` serves both.
+---
 --- Everything but subagents is generic: top-level tool calls arrive with clean
 --- human titles, and `qN` / `qN_custom` elicitation, steering, and session
 --- storage (opencode's own db) all go through emeth's generic paths — except
@@ -165,6 +174,107 @@ end
 -- Exposed for testing.
 M._transform_update = transform_update
 
+-- ── `opencode/session/child_update` (advertised capability) ──────
+-- Because we advertise `opencode/child-session-updates`, opencode stops
+-- sending child traffic as tagged `session/update` and instead sends one
+-- `opencode/session/child_update` notification per child event, each carrying
+-- the child's session id plus either:
+--
+--   { type = "update", update = <SessionUpdate> }
+--       a projected child update — byte-identical to the tagged
+--       `session/update` we handled before (same `_meta["opencode/child-session"]`
+--       tag, same `"<child id>:"`-namespaced toolCallId), so we re-emit it
+--       through the ordinary update pipeline and the transform + render pick it
+--       up unchanged; or
+--
+--   { type = "status", status = "created"|"running"|"completed"|"failed"
+--     |"interrupted", error? = { type, message } }
+--       the child's real terminal state — the ONLY source of it. We stamp it
+--       onto the launch card's `subagent_state` (render.lua drives the card's
+--       icon from that), overriding the blanket "completed" the launch card
+--       would otherwise show when the child failed or was interrupted.
+--
+-- The tagged `session/update` path above is kept for older agents that don't
+-- implement the capability, so this is additive against them and a switch on
+-- current opencode.
+
+---Map a child's terminal status onto the `subagent_state` the renderer
+---understands. Non-terminal states (created/running) return nil — the launch
+---card's own pending/in_progress status already reads "running".
+---@param status string|nil
+---@return string|nil
+local function child_state(status)
+  if status == "completed" then
+    return "idle"
+  end
+  if status == "failed" or status == "interrupted" then
+    return "failed"
+  end
+  return nil
+end
+
+---Find a launch card's message uuid by its toolCallId.
+---@param view chat_ui.ChatView|nil
+---@param tool_call_id string
+---@return string|nil
+local function find_launch_card(view, tool_call_id)
+  if not (view and view.get_messages) then
+    return nil
+  end
+  for _, m in ipairs(view:get_messages()) do
+    if m.content and m.content[1] and m.content[1].id == tool_call_id then
+      return m.uuid
+    end
+  end
+  return nil
+end
+
+---Handle one `opencode/session/child_update` notification.
+---@param session acp.Session|nil
+---@param view chat_ui.ChatView|nil
+---@param params table|nil the notification's params (the Update envelope)
+local function handle_child_update(session, view, params)
+  if type(params) ~= "table" then
+    return
+  end
+
+  if params.type == "update" then
+    -- Re-emit the projected child update through the ordinary pipeline; the
+    -- transform (which knows the child tag) and the renderer handle it exactly
+    -- as they did for the tagged `session/update` path.
+    local update = params.update
+    if type(update) == "table" and session and session._emit then
+      session:_emit("update", update, session.session_id)
+    end
+    return
+  end
+
+  if params.type == "status" then
+    local state = child_state(params.status)
+    if not state then
+      return -- created/running: the card's own status already reads "running"
+    end
+    local launch_id = resolve_parent({ id = params.childSessionId, title = params.title })
+    if not launch_id then
+      return
+    end
+    local uuid = find_launch_card(view, launch_id)
+    if not (uuid and view and view.update_message) then
+      return
+    end
+    local err = type(params.error) == "table" and params.error.message or nil
+    view:update_message(uuid, function(m)
+      m.metadata.subagent_state = state
+      if type(err) == "string" and err ~= "" then
+        m.metadata.subagent_error = err
+      end
+    end)
+  end
+end
+
+-- Exposed for testing.
+M._handle_child_update = handle_child_update
+
 -- ── mode / model display hooks ───────────────────────────────────
 
 -- opencode modes: `build` (default), `plan`, `worker`; the default gets a
@@ -275,11 +385,12 @@ M._transform_elicitation = transform_elicitation
 
 -- ── setup / cleanup ──────────────────────────────────────────────
 
----Install opencode's update and elicitation transforms on the session.
----@param _ acp.Session|nil Unused: the transforms need no session handle.
+---Install opencode's update and elicitation transforms on the session, and
+---route the advertised `opencode/session/child_update` notifications.
+---@param session acp.Session|nil
 ---@param view chat_ui.ChatView|nil
 ---@return fun() cleanup
-function M.setup(_, view)
+function M.setup(session, view)
   -- One extension instance per session: drop any previous session's bindings.
   desc_to_id = {}
   child_binding = {}
@@ -292,12 +403,30 @@ function M.setup(_, view)
     view.integration.set_transform_elicitation(transform_elicitation)
   end
 
+  -- The advertised capability: child traffic arrives as
+  -- `opencode/session/child_update` notifications rather than tagged
+  -- `session/update`. Re-emit content through the update pipeline and stamp
+  -- terminal status onto the launch card. Optional — a session handle is
+  -- present in real use but nil in the transform-only tests.
+  local on_notification = nil
+  if session and session.on then
+    on_notification = function(method, params)
+      if method == "opencode/session/child_update" then
+        handle_child_update(session, view, params)
+      end
+    end
+    session:on("notification", on_notification)
+  end
+
   return function()
     if view and view.integration and view.integration.set_transform_update then
       view.integration.set_transform_update(nil)
     end
     if view and view.integration and view.integration.set_transform_elicitation then
       view.integration.set_transform_elicitation(nil)
+    end
+    if on_notification and session and session.off then
+      session:off("notification", on_notification)
     end
   end
 end
