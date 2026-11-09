@@ -18,6 +18,16 @@ local Winbar = require("emeth.ui.winbar")
 
 local M = {}
 
+---Advertise the ACP subagents RFD capability so claude-acp runs each subagent
+---as a child session announced by `subagent_update` instead of reporting it as
+---one opaque tool call with none of its work. Lives here (not in the provider
+---config) because the transform that serves it is in this module — the
+---advertisement and the handler must not drift apart.
+---@return { capabilities?: table, capabilities_meta?: table }
+function M.client_capabilities()
+  return { capabilities = { subagents = vim.empty_dict() } }
+end
+
 -- Human-friendly labels + bottom-bar highlight kind for claude-code modes.
 -- "normal" modes (default/auto) skip the bottom-bar tag entirely.
 local MODE_INFO = {

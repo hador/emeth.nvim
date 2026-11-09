@@ -27,10 +27,6 @@ local defaults = {
       command = "npx",
       args = { "-y", "@agentclientprotocol/claude-agent-acp" },
       pass_env = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_MODEL_CONFIG" },
-      -- Without it claude-acp reports a subagent as one opaque tool call and
-      -- sends none of its work. With it, each subagent runs as a child
-      -- session announced by `subagent_update` (ACP subagents RFD).
-      capabilities = { subagents = vim.empty_dict() },
     },
     ["gemini-cli"] = {
       command = "gemini",
@@ -54,22 +50,10 @@ local defaults = {
       -- handling in the CLI relay; "client" would require emeth to implement
       -- `_kiro/auth/getAccessToken`.
       args = { "acp", "--agent-engine=v3", "--auth-method=cli" },
-      -- Advertised so the agent drives its MCP OAuth flow through our
-      -- `_kiro/openExternalUrl` request handler.
-      capabilities_meta = { kiro = { openExternalUrl = true } },
     },
     ["opencode"] = {
       command = "opencode",
       args = { "acp" },
-      -- Advertised so opencode reports each subagent's real terminal state
-      -- (completed/failed/interrupted) via `opencode/session/child_update`.
-      -- Without it the agent sends the child's status nowhere (opencode
-      -- translate.ts `childStatus` returns [] unless this is set) and the
-      -- launch card reads "completed" no matter how the child ended. The
-      -- handler lives in integrations/opencode.lua; the two must land together
-      -- because advertising switches child traffic off the tagged
-      -- `session/update` path onto the notification.
-      capabilities_meta = { ["opencode/child-session-updates"] = true },
     },
   },
 }
