@@ -61,6 +61,15 @@ local defaults = {
     ["opencode"] = {
       command = "opencode",
       args = { "acp" },
+      -- Advertised so opencode reports each subagent's real terminal state
+      -- (completed/failed/interrupted) via `opencode/session/child_update`.
+      -- Without it the agent sends the child's status nowhere (opencode
+      -- translate.ts `childStatus` returns [] unless this is set) and the
+      -- launch card reads "completed" no matter how the child ended. The
+      -- handler lives in integrations/opencode.lua; the two must land together
+      -- because advertising switches child traffic off the tagged
+      -- `session/update` path onto the notification.
+      capabilities_meta = { ["opencode/child-session-updates"] = true },
     },
   },
 }
