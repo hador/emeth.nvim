@@ -1,5 +1,9 @@
 local h = require("tests.helpers")
 local ACPClient = require("emeth.acp.client")
+local Session = require("emeth.acp.session")
+local AcpIntegration = require("emeth.integrations.acp")
+local H = require("tests.acp_harness")
+local make_view = H.make_view
 
 -- Silence capability-warning notifications surfaced via vim.schedule.
 -- They fire after the originating tests have completed, so a per-test stub
@@ -618,7 +622,7 @@ end)
 -- ── client capabilities ────────────────────────────────────────
 
 h.describe("ACPClient capabilities", function()
-  h.it("merges provider capabilities_meta into clientCapabilities._meta", function()
+  h.it("merges provider capabilities_meta into clientCapabilities._meta (user config)", function()
     local real = ACPClient:new({ command = "true", capabilities_meta = { kiro = { openExternalUrl = true } } })
     h.eq(true, real.capabilities._meta.kiro.openExternalUrl)
     -- Absent by default so non-kiro providers send no `_meta`.
@@ -626,17 +630,80 @@ h.describe("ACPClient capabilities", function()
     h.is_nil(plain.capabilities._meta)
   end)
 
-  h.it("adds provider capabilities beside the defaults", function()
+  h.it("adds provider capabilities beside the defaults (user config)", function()
     local real = ACPClient:new({ command = "true", capabilities = { subagents = vim.empty_dict() } })
     h.eq("{}", vim.json.encode(real.capabilities.subagents), "an empty object, not an array")
     h.is_true(real.capabilities.fs ~= nil, "the defaults survive")
     h.is_nil(ACPClient:new({ command = "true" }).capabilities.subagents)
   end)
 
-  h.it("advertises subagents for claude-code only", function()
+  h.it("bundled providers carry no capabilities in config; extensions advertise them", function()
+    -- The hook is the source of truth for each bundled provider.
+    local Claude = require("emeth.integrations.claude-code")
+    h.eq("{}", vim.json.encode(Claude.client_capabilities().capabilities.subagents))
+    local Kiro = require("emeth.integrations.kiro-cli")
+    h.is_true(Kiro.client_capabilities().capabilities_meta.kiro.openExternalUrl)
+    local OpenCode = require("emeth.integrations.opencode")
+    h.is_true(OpenCode.client_capabilities().capabilities_meta["opencode/child-session-updates"])
+  end)
+
+  h.it("setup_integration merges an extension's client_capabilities into the client", function()
     local Acp = require("emeth.acp")
-    h.eq("{}", vim.json.encode(Acp.config.providers["claude-code"].capabilities.subagents))
-    h.is_nil(Acp.config.providers["kiro-cli"].capabilities)
+    local prev = Acp.config
+    Acp.config = vim.tbl_deep_extend("force", vim.deepcopy(prev), {
+      providers = { ["claude-code"] = { command = "npx", args = {} } },
+    })
+    local view = make_view()
+    local session = Session:new("claude-code")
+    AcpIntegration.setup_integration(view, session)
+    Acp.config = prev
+    -- claude-code's hook advertises the subagents RFD; the merge lands on the
+    -- client's capabilities (top-level key) before initialize would send them.
+    h.is_true(session.client.capabilities.subagents ~= nil, "subagents advertised")
+    h.eq("{}", vim.json.encode(session.client.capabilities.subagents), "an empty object, not an array")
+  end)
+
+  h.it("user config wins over the extension's client_capabilities on key conflict", function()
+    local Acp = require("emeth.acp")
+    local prev = Acp.config
+    Acp.config = vim.tbl_deep_extend("force", vim.deepcopy(prev), {
+      providers = {
+        ["claude-code"] = { command = "npx", args = {}, capabilities_meta = { test = { user_value = "user" } } },
+      },
+    })
+    local view = make_view()
+    local session = Session:new("claude-code")
+    AcpIntegration.setup_integration(view, session)
+    Acp.config = prev
+    -- The user's `capabilities_meta` (applied at `Session:new`) is on the
+    -- client's `_meta` before the hook runs. The hook fills in keys the user
+    -- did not set, so the user's value survives the merge — the escape hatch
+    -- for overriding a bundled provider's negotiation.
+    h.eq("user", session.client.capabilities._meta.test.user_value, "user config wins on shared key")
+  end)
+
+  h.it("the extension's hook fills in keys the user did not set", function()
+    local Acp = require("emeth.acp")
+    local prev = Acp.config
+    Acp.config = vim.tbl_deep_extend("force", vim.deepcopy(prev), {
+      providers = { ["claude-code"] = { command = "npx", args = {} } },
+    })
+    local view = make_view()
+    local session = Session:new("claude-code")
+    AcpIntegration.setup_integration(view, session)
+    Acp.config = prev
+    -- The user set no `capabilities`, so the hook's `subagents` lands on the
+    -- client (the bundled default, now sourced from the extension module).
+    h.is_true(session.client.capabilities.subagents ~= nil, "hook fills in the key")
+    h.eq("{}", vim.json.encode(session.client.capabilities.subagents), "an empty object, not an array")
+  end)
+
+  h.it("an extension without client_capabilities leaves the client defaults alone", function()
+    local view = make_view()
+    local session = Session:new("test")
+    AcpIntegration.setup_integration(view, session)
+    h.is_nil(session.client.capabilities.subagents)
+    h.is_nil(session.client.capabilities._meta)
   end)
 
   h.it("advertises form elicitation as an empty object, not an array", function()

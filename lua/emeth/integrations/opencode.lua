@@ -45,6 +45,19 @@
 
 local M = {}
 
+---Advertise `opencode/child-session-updates` so opencode reports each
+---subagent's real terminal state (completed/failed/interrupted) via
+---`opencode/session/child_update`. Without it the agent sends the child's
+---status nowhere (opencode translate.ts `childStatus` returns [] unless this
+---is set) and the launch card reads "completed" no matter how the child ended.
+---Lives here because `handle_child_update` (which serves it) is in this module;
+---advertising also switches child traffic off the tagged `session/update` path
+---onto the notification, so the two must land together.
+---@return { capabilities?: table, capabilities_meta?: table }
+function M.client_capabilities()
+  return { capabilities_meta = { ["opencode/child-session-updates"] = true } }
+end
+
 -- ── Launch ↔ child state ─────────────────────────────────────────
 -- The child's traffic rides our session id, so structural nesting is
 -- impossible; we carry the launch↔child link ourselves. One per session,

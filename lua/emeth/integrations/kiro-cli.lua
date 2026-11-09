@@ -21,6 +21,14 @@ local Winbar = require("emeth.ui.winbar")
 
 local M = {}
 
+---Advertise `_kiro/openExternalUrl` so the agent drives its MCP OAuth flow
+---through our `_kiro/openExternalUrl` request handler (registered in `setup`).
+---Lives here because the handler it advertises is in this module.
+---@return { capabilities?: table, capabilities_meta?: table }
+function M.client_capabilities()
+  return { capabilities_meta = { kiro = { openExternalUrl = true } } }
+end
+
 ---Return `_meta.kiro` off an update, or nil.
 ---@param update table|nil
 ---@return table|nil

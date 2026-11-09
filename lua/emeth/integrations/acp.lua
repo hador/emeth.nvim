@@ -6,9 +6,20 @@
 ---   setup(session, view) → cleanup           streaming events / @mentions / state
 ---   build_session_meta(emeth_config) → meta  `_meta` payload for session/new+load
 ---   format_mode(mode_id) → render_desc       { badge?, tag?, tag_kind? }
+---   client_capabilities() → caps            `clientCapabilities` additions for initialize
 ---
 --- Extensions may also register two in-place transforms during `setup`, via
 --- `integration.set_transform_update` and `set_transform_elicitation`.
+---
+--- `client_capabilities` returns `{ capabilities?, capabilities_meta? }` —
+--- additions merged into the client's `clientCapabilities` (top-level keys and
+--- `_meta`) before `initialize` is sent. This is where a provider advertises
+--- the behaviour its own handlers implement, so the advertisement and the
+--- handler live in one module and cannot drift apart. The user config
+--- (`acp.providers[<name>].capabilities` / `.capabilities_meta`) is applied
+--- first (at `Session:new`); the hook fills in the keys the user did not set,
+--- so on a shared key the user's value wins — the escape hatch for overriding
+--- a bundled provider's negotiation.
 ---
 --- This file knows nothing about claude-code, kiro-cli, etc. — it only knows
 --- the shape of these hooks.
@@ -868,6 +879,41 @@ function M.setup_integration(view, session)
   -- Load provider-specific extensions (e.g. claude-code, kiro-cli).
   local provider_mod = "emeth.integrations." .. session.provider_name
   local has_ext, ext = pcall(require, provider_mod)
+
+  ---Advertise the extension's client capabilities before `initialize` is sent.
+  -- The extension's `client_capabilities()` hook returns `{ capabilities?,
+  -- capabilities_meta? }`; merged into the client's `clientCapabilities` (top-
+  -- level keys and `_meta`) so the advertisement and the handler that serves
+  -- it live in one module. The user config (`acp.providers[<name>].capabilities`
+  -- / `.capabilities_meta`) is applied first (at `Session:new`); this hook fills
+  -- in the keys the user did not set, so on a shared key the user's value wins
+  -- — the escape hatch for overriding a bundled provider's negotiation. Runs
+  -- before the first `client:connect` (the client builds `clientCapabilities`
+  -- from its config at `Session:new`, so mutating it here is safe; the hook is
+  -- called once per integration, and each integration owns its session).
+  if has_ext and type(ext.client_capabilities) == "function" then
+    local ok, caps = pcall(ext.client_capabilities)
+    if ok and type(caps) == "table" then
+      local client = session.client
+      if type(caps.capabilities) == "table" and type(client.capabilities) == "table" then
+        for name, value in pairs(caps.capabilities) do
+          if client.capabilities[name] == nil then
+            client.capabilities[name] = value
+          end
+        end
+      end
+      if type(caps.capabilities_meta) == "table" then
+        local meta = client.capabilities._meta or {}
+        for k, v in pairs(caps.capabilities_meta) do
+          if meta[k] == nil then
+            meta[k] = v
+          end
+        end
+        client.capabilities._meta = meta
+      end
+    end
+  end
+
   local ext_cleanup
   if has_ext and ext.setup then
     -- Temporarily expose the stub so extensions calling
