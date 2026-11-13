@@ -44,7 +44,7 @@ end
 
 -- ── Event emitter ──────────────────────────────────────────────
 
----@alias acp.SessionEvent "update"|"notification"|"file_written"|"permission"|"elicitation"
+---@alias acp.SessionEvent "update"|"notification"|"file_written"|"permission"|"elicitation"|"boundary"
 
 ---Register a listener for a session event.
 ---@param event acp.SessionEvent
@@ -351,6 +351,9 @@ function Session:_finish(session_id, result, err, cb, cwd)
   end
   self:_extract_session_info(result)
   self._state = "ready"
+  -- Session-id transitions (connect/load/new/fork) fire here, after the id is set and `_extract_session_info`
+  -- has populated the session's extensions. Listeners can read `self.session_id` to see who they are now on.
+  self:_emit("boundary")
   cb(nil)
 end
 
