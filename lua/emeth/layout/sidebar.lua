@@ -403,11 +403,13 @@ function Sidebar:_setup_keymaps()
               )
               return
             end
-            if require("emeth.validity").is_remote(provider) or dest ~= raw then
+            -- Open the mapped target when it is a URI (map_path can opt its own protocol into gf), when the
+            -- provider is remote, or when map_path rewrote the ref. Only a local provider whose map_path
+            -- returned the ref unchanged falls through to local resolution.
+            if Target.is_uri(dest) or require("emeth.validity").is_remote(provider) or dest ~= raw then
               Target.open({ path = dest, line = ref_line, focus = true })
               return
             end
-            -- A local provider's map_path kept the default: resolve it here as usual.
           end
           local abs, line = Target.ref_under_cursor()
           if not abs then
