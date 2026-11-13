@@ -431,12 +431,17 @@ function M.clear_badge(key)
   badges[key] = nil
 end
 
---- Snapshot current badges as an ordered list of strings.
+--- Snapshot current badges as an ordered list of strings. `exclude_keys` names badges that are transient
+--- agent-state (e.g. "ask" for a pending request) rather than attributes of the moment -- a user message
+--- captured at that instant shouldn't carry them.
+---@param exclude_keys? table<string, boolean>
 ---@return string[]
-function M.get_badges()
+function M.get_badges(exclude_keys)
   local out = {}
-  for _, v in pairs(badges) do
-    out[#out + 1] = v
+  for k, v in pairs(badges) do
+    if not (exclude_keys and exclude_keys[k]) then
+      out[#out + 1] = v
+    end
   end
   return out
 end
