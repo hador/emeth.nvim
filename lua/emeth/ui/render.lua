@@ -15,7 +15,10 @@ local SUBAGENT_MARKERS = {
 
 local M = {}
 
-local _preferred_keys = { "command", "pattern", "query", "path", "file_path", "url", "regex", "search", "glob" }
+-- `title` and `name` come last: MCP tools rarely have the earlier keys, and without them the fallback below
+-- picks an arbitrary short string (an id, an enum value) where a title or name says what the call is for.
+local _preferred_keys =
+  { "command", "pattern", "query", "path", "file_path", "url", "regex", "search", "glob", "title", "name" }
 
 --- The model's own one-line summary of what a tool call is for, if it sent one.
 ---

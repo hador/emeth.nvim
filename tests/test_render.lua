@@ -856,3 +856,28 @@ h.describe("render: steered marker", function()
     h.is_true(text:find("steered", 1, true) ~= nil)
   end)
 end)
+
+h.describe("Render tool header param", function()
+  -- MCP tools rarely carry the classic keys; without `title`/`name` preferred, the
+  -- fallback picked an arbitrary short string (an id) and repeated what the title said.
+  h.it("prefers a title argument, and drops it when the title already says it", function()
+    local msg = Message:new("assistant", {
+      type = "tool_use",
+      name = "mcp__agent__session_spawn",
+      id = "m1",
+      input = { taskId = "review-CR-1", title = "Adversarial review: CR-1", destination = "local" },
+      status = "completed",
+    }, {
+      tool_call = {
+        toolCallId = "m1",
+        status = "completed",
+        title = "session_spawn (agent): Adversarial review: CR-1",
+        rawInput = { taskId = "review-CR-1", title = "Adversarial review: CR-1", destination = "local" },
+      },
+    })
+    local header = tostring(Render.render_message(msg, {})[1])
+    local _, count = header:gsub(vim.pesc("Adversarial review: CR-1"), "")
+    h.eq(1, count, header)
+    h.is_true(not header:find("review-CR-1", 1, true), header)
+  end)
+end)
