@@ -15,9 +15,10 @@ local Session = require("emeth.acp.session")
 ---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize
 ---@field remote? boolean  Agent runs on another host (e.g. over ssh): session cwds are remote paths, so
 ---  emeth never checks or `cd`s into them; the agent's own session/load decides resumability.
----@field map_path? fun(path: string): string|nil  Where a path this agent reports opens locally (gf/gd),
----  e.g. `"oil-ssh://host/" .. path`. Return nil when it can't be opened. Unset: a remote provider's paths
----  don't open; anyone else's open as-is.
+---@field map_path? fun(path: string, ctx: { provider: string, session_id?: string }): string|false|nil
+---  Where a path this agent reports opens locally (gf/gd), e.g. `"oil-ssh://host/" .. path`; `ctx` names
+---  the session it came from. Return false when it can't be opened, nil for the default (as when unset):
+---  a remote provider's paths don't open; anyone else's open as-is.
 
 ---@class acp.Module
 ---@field config acp.Config

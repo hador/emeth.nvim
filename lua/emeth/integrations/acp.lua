@@ -1174,6 +1174,11 @@ function M.setup_integration(view, session)
   end
 
   local integration = {
+    ---The id of the session the transcript belongs to, if any.
+    ---@return string|nil
+    session_id = function()
+      return session.session_id
+    end,
     connect = function(cb)
       lifecycle({}, function(opts, done)
         session:connect(opts, function(err)

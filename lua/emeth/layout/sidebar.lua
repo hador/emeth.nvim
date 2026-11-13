@@ -383,7 +383,8 @@ function Sidebar:_setup_keymaps()
         silent = true,
         callback = function()
           local Target = require("emeth.target")
-          local provider = require("emeth")._provider
+          local emeth = require("emeth")
+          local provider = emeth._provider
           if Target.maps_paths(provider) then
             -- The agent's paths may not exist here: take the reference as written
             -- and let the provider's `map_path` say where it opens.
@@ -392,7 +393,9 @@ function Sidebar:_setup_keymaps()
               vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
               return
             end
-            local dest = Target.provider_path(raw, provider)
+            local integration = emeth._integration
+            local ctx = { session_id = integration and integration.session_id and integration.session_id() or nil }
+            local dest = Target.provider_path(raw, provider, ctx)
             if not dest then
               vim.notify(
                 ("[emeth] %s is on %s's host; set map_path on the provider to open it"):format(raw, provider),
@@ -400,8 +403,11 @@ function Sidebar:_setup_keymaps()
               )
               return
             end
-            Target.open({ path = dest, line = ref_line, focus = true })
-            return
+            if require("emeth.validity").is_remote(provider) or dest ~= raw then
+              Target.open({ path = dest, line = ref_line, focus = true })
+              return
+            end
+            -- A local provider's map_path kept the default: resolve it here as usual.
           end
           local abs, line = Target.ref_under_cursor()
           if not abs then
