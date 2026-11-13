@@ -383,8 +383,7 @@ function Sidebar:_setup_keymaps()
         silent = true,
         callback = function()
           local Target = require("emeth.target")
-          local integration = require("emeth")._integration
-          local provider = integration and integration.session and integration.session.provider_name
+          local provider = require("emeth")._provider
           if Target.maps_paths(provider) then
             -- The agent's paths may not exist here: take the reference as written
             -- and let the provider's `map_path` say where it opens.
