@@ -131,11 +131,57 @@ local function land(win, opts)
   end
 end
 
+--- Whether `s` is a URI (`scp://…`, `oil-ssh://…`) rather than a filesystem path.
+---@param s any
+---@return boolean
+function M.is_uri(s)
+  return type(s) == "string" and s:match("^%a[%w+.-]*://") ~= nil
+end
+
+--- Where a path an agent of `provider` reported should open locally. The
+--- provider's optional `map_path(path)` decides (e.g. rewriting to an `scp://`
+--- URI for an agent on another host); without one, a `remote` provider's paths
+--- have nothing local to open (nil), and any other provider's open as-is.
+---@param path string
+---@param provider? string
+---@return string|nil target  nil when there is no local way to open it
+function M.provider_path(path, provider)
+  local ok, acp = pcall(require, "emeth.acp")
+  local cfg = ok
+    and type(provider) == "string"
+    and acp.config
+    and acp.config.providers
+    and acp.config.providers[provider]
+  if type(cfg) == "table" and type(cfg.map_path) == "function" then
+    local ok_map, mapped = pcall(cfg.map_path, path)
+    return (ok_map and type(mapped) == "string" and mapped ~= "") and mapped or nil
+  end
+  if type(cfg) == "table" and cfg.remote then
+    return nil
+  end
+  return path
+end
+
+--- Whether `provider` takes paths through `provider_path` instead of local
+--- resolution: it maps paths, or its paths are remote.
+---@param provider? string
+---@return boolean
+function M.maps_paths(provider)
+  local ok, acp = pcall(require, "emeth.acp")
+  local cfg = ok
+    and type(provider) == "string"
+    and acp.config
+    and acp.config.providers
+    and acp.config.providers[provider]
+  return type(cfg) == "table" and (type(cfg.map_path) == "function" or cfg.remote == true)
+end
+
 --- Open `path` in the source (code) window — never in the chat.
 ---@param opts emeth.target.OpenOpts
 ---@return integer|nil win, string abs
 function M.open(opts)
-  local abs = vim.fn.fnamemodify(opts.path, ":p")
+  -- A URI is opened as written; `:p` would glue it onto the cwd.
+  local abs = M.is_uri(opts.path) and opts.path or vim.fn.fnamemodify(opts.path, ":p")
   local win = target_win(opts.win)
   api.nvim_win_call(win, function()
     vim.cmd("edit " .. vim.fn.fnameescape(abs))

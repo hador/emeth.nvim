@@ -136,3 +136,82 @@ h.describe("Sidebar auto-eject", function()
     os.remove(tmp)
   end)
 end)
+
+h.describe("Target.provider_path (remote / map_path)", function()
+  local acp = require("emeth.acp")
+  local function with_provider(name, cfg, fn)
+    local saved = acp.config.providers[name]
+    acp.config.providers[name] = cfg
+    local ok, err = pcall(fn)
+    acp.config.providers[name] = saved
+    assert(ok, err)
+  end
+
+  h.it("recognises URIs, not paths", function()
+    h.eq(true, Target.is_uri("scp://host//etc/hosts"))
+    h.eq(true, Target.is_uri("oil-ssh://host/tmp/x"))
+    h.eq(false, Target.is_uri("/tmp/x"))
+    h.eq(false, Target.is_uri("src/a.lua"))
+  end)
+
+  h.it("uses the provider's map_path", function()
+    with_provider("t-map", {
+      command = "ssh",
+      remote = true,
+      map_path = function(p)
+        return "oil-ssh://box/" .. p
+      end,
+    }, function()
+      h.eq(true, Target.maps_paths("t-map"))
+      h.eq("oil-ssh://box//w/a.rs", Target.provider_path("/w/a.rs", "t-map"))
+    end)
+  end)
+
+  h.it("a remote provider without map_path has nothing local to open", function()
+    with_provider("t-remote", { command = "ssh", remote = true }, function()
+      h.eq(true, Target.maps_paths("t-remote"))
+      h.is_nil(Target.provider_path("/w/a.rs", "t-remote"))
+    end)
+  end)
+
+  h.it("map_path returning nil or erroring means not openable", function()
+    with_provider("t-nil", {
+      command = "x",
+      map_path = function()
+        return nil
+      end,
+    }, function()
+      h.is_nil(Target.provider_path("/w/a.rs", "t-nil"))
+    end)
+    with_provider("t-err", {
+      command = "x",
+      map_path = function()
+        error("boom")
+      end,
+    }, function()
+      h.is_nil(Target.provider_path("/w/a.rs", "t-err"))
+    end)
+  end)
+
+  h.it("other providers pass paths through unchanged", function()
+    h.eq(false, Target.maps_paths("claude-code"))
+    h.eq("/w/a.rs", Target.provider_path("/w/a.rs", "claude-code"))
+    h.eq("/w/a.rs", Target.provider_path("/w/a.rs", nil))
+  end)
+
+  h.it("open keeps a URI as written", function()
+    local captured
+    local orig = vim.cmd
+    ---@diagnostic disable-next-line: assign-type-mismatch
+    vim.cmd = setmetatable({}, {
+      __call = function(_, c)
+        captured = c
+      end,
+      __index = orig,
+    })
+    local ok, err = pcall(Target.open, { path = "scp://box//w/a.rs" })
+    vim.cmd = orig
+    assert(ok, err)
+    h.eq("edit " .. vim.fn.fnameescape("scp://box//w/a.rs"), captured)
+  end)
+end)

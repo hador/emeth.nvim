@@ -383,6 +383,27 @@ function Sidebar:_setup_keymaps()
         silent = true,
         callback = function()
           local Target = require("emeth.target")
+          local integration = require("emeth")._integration
+          local provider = integration and integration.session and integration.session.provider_name
+          if Target.maps_paths(provider) then
+            -- The agent's paths may not exist here: take the reference as written
+            -- and let the provider's `map_path` say where it opens.
+            local raw, ref_line = Target.parse_ref(vim.fn.expand("<cWORD>"))
+            if not raw then
+              vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
+              return
+            end
+            local dest = Target.provider_path(raw, provider)
+            if not dest then
+              vim.notify(
+                ("[emeth] %s is on %s's host; set map_path on the provider to open it"):format(raw, provider),
+                vim.log.levels.INFO
+              )
+              return
+            end
+            Target.open({ path = dest, line = ref_line, focus = true })
+            return
+          end
           local abs, line = Target.ref_under_cursor()
           if not abs then
             vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
