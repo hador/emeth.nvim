@@ -139,13 +139,18 @@ function M.is_uri(s)
 end
 
 --- Where a path an agent of `provider` reported should open locally. The
---- provider's optional `map_path(path)` decides (e.g. rewriting to an `scp://`
---- URI for an agent on another host); without one, a `remote` provider's paths
---- have nothing local to open (nil), and any other provider's open as-is.
+--- provider's optional `map_path(path, ctx)` decides (e.g. rewriting to an
+--- `scp://` URI for an agent on another host); `ctx` names the session the path
+--- came from, so one provider can serve sessions on several hosts. Its answer:
+--- a string opens there; `false` (or an error) means it can't be opened; `nil`
+--- means the default, which is also what applies without a `map_path`: a
+--- `remote` provider's paths have nothing local to open (nil), and any other
+--- provider's open as-is.
 ---@param path string
 ---@param provider? string
+---@param ctx? { session_id?: string }
 ---@return string|nil target  nil when there is no local way to open it
-function M.provider_path(path, provider)
+function M.provider_path(path, provider, ctx)
   local ok, acp = pcall(require, "emeth.acp")
   local cfg = ok
     and type(provider) == "string"
@@ -153,8 +158,13 @@ function M.provider_path(path, provider)
     and acp.config.providers
     and acp.config.providers[provider]
   if type(cfg) == "table" and type(cfg.map_path) == "function" then
-    local ok_map, mapped = pcall(cfg.map_path, path)
-    return (ok_map and type(mapped) == "string" and mapped ~= "") and mapped or nil
+    local ok_map, mapped = pcall(cfg.map_path, path, vim.tbl_extend("force", { provider = provider }, ctx or {}))
+    if not ok_map or mapped == false or mapped == "" then
+      return nil
+    end
+    if type(mapped) == "string" then
+      return mapped
+    end
   end
   if type(cfg) == "table" and cfg.remote then
     return nil

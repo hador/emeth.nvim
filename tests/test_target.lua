@@ -174,14 +174,14 @@ h.describe("Target.provider_path (remote / map_path)", function()
     end)
   end)
 
-  h.it("map_path returning nil or erroring means not openable", function()
-    with_provider("t-nil", {
+  h.it("map_path returning false or erroring means not openable", function()
+    with_provider("t-false", {
       command = "x",
       map_path = function()
-        return nil
+        return false
       end,
     }, function()
-      h.is_nil(Target.provider_path("/w/a.rs", "t-nil"))
+      h.is_nil(Target.provider_path("/w/a.rs", "t-false"))
     end)
     with_provider("t-err", {
       command = "x",
@@ -190,6 +190,35 @@ h.describe("Target.provider_path (remote / map_path)", function()
       end,
     }, function()
       h.is_nil(Target.provider_path("/w/a.rs", "t-err"))
+    end)
+  end)
+
+  h.it("map_path returning nil keeps the default: as-is locally, not openable when remote", function()
+    local none = function()
+      return nil
+    end
+    with_provider("t-nil", { command = "x", map_path = none }, function()
+      h.eq("/w/a.rs", Target.provider_path("/w/a.rs", "t-nil"))
+    end)
+    with_provider("t-nil-remote", { command = "ssh", remote = true, map_path = none }, function()
+      h.is_nil(Target.provider_path("/w/a.rs", "t-nil-remote"))
+    end)
+  end)
+
+  h.it("map_path gets the session it came from, so one provider can map per session", function()
+    local seen
+    with_provider("t-ctx", {
+      command = "x",
+      map_path = function(p, ctx)
+        seen = ctx
+        return ctx.session_id == "cloud-1" and ("oil-ssh://ds-x/" .. p) or nil
+      end,
+    }, function()
+      h.eq("oil-ssh://ds-x//w/a.rs", Target.provider_path("/w/a.rs", "t-ctx", { session_id = "cloud-1" }))
+      h.eq({ provider = "t-ctx", session_id = "cloud-1" }, seen)
+      h.eq("/w/a.rs", Target.provider_path("/w/a.rs", "t-ctx", { session_id = "local-1" }))
+      h.eq("/w/a.rs", Target.provider_path("/w/a.rs", "t-ctx"))
+      h.eq({ provider = "t-ctx" }, seen)
     end)
   end)
 
