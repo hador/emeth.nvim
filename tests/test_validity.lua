@@ -74,6 +74,41 @@ h.describe("validity.check — provider store", function()
   end)
 end)
 
+h.describe("validity.check — remote providers", function()
+  local remote = function(provider)
+    return provider == "remote"
+  end
+
+  h.it("valid for a remote provider even though its cwd does not exist here", function()
+    local e = { session_id = "r1", provider = "remote", cwd = "/no/such/remote/dir" }
+    h.eq("valid", V.check(e, env({ is_remote = remote })))
+  end)
+
+  h.it("remote check wins over a store that would say gone", function()
+    local e = env({
+      is_remote = remote,
+      store_for = function()
+        return FAKE
+      end,
+    })
+    h.eq("valid", V.check({ session_id = "r2", provider = "remote", cwd = "/x" }, e))
+  end)
+
+  h.it("non-remote providers still use the directory check", function()
+    h.eq("gone", V.check({ session_id = "l1", provider = "local", cwd = "/no/such/dir" }, env({ is_remote = remote })))
+  end)
+
+  h.it("is_remote reads the provider's ACP config", function()
+    local acp = require("emeth.acp")
+    local saved = acp.config.providers["test-remote"]
+    acp.config.providers["test-remote"] = { command = "ssh", remote = true }
+    h.eq(true, V.is_remote("test-remote"))
+    h.eq(false, V.is_remote("claude-code"))
+    h.eq(false, V.is_remote(nil))
+    acp.config.providers["test-remote"] = saved
+  end)
+end)
+
 h.describe("validity.check — providers without a store", function()
   h.it("valid when the directory exists", function()
     local dir = vim.fn.tempname()
