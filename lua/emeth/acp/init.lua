@@ -13,6 +13,8 @@ local Session = require("emeth.acp.session")
 ---@field auth_method? string
 ---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
 ---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize
+---@field remote? boolean  Agent runs on another host (e.g. over ssh): session cwds are remote paths, so
+---  emeth never checks or `cd`s into them; the agent's own session/load decides resumability.
 
 ---@class acp.Module
 ---@field config acp.Config

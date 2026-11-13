@@ -374,6 +374,11 @@ end
 ---opening nvim somewhere and wanting a conversation that lived elsewhere.
 function M.history()
   require("emeth.ui.session_picker").open(function(entry)
+    if require("emeth.validity").is_remote(entry.provider) then
+      -- The cwd is on the agent's host; there is nothing to `cd` into here.
+      M.resume(entry.session_id, entry.provider)
+      return
+    end
     if vim.fn.isdirectory(entry.cwd or "") ~= 1 then
       vim.notify("[emeth] Directory no longer exists: " .. (entry.cwd or "?"), vim.log.levels.WARN)
       return

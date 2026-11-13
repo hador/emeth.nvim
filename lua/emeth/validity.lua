@@ -40,8 +40,21 @@ local function provider_store(provider)
   return nil
 end
 
+---Whether a provider's agent runs on another host (`remote = true` in its ACP
+---config). Its sessions' cwds are remote paths, so nothing local can judge them.
+---@param provider? string
+---@return boolean
+function M.is_remote(provider)
+  if type(provider) ~= "string" or provider == "" then
+    return false
+  end
+  local ok, acp = pcall(require, "emeth.acp")
+  local p = ok and acp.config and acp.config.providers and acp.config.providers[provider]
+  return type(p) == "table" and p.remote == true
+end
+
 ---Build the injectable environment with real defaults. Tests pass their own.
----@return table env  { now, home, file_mtime, read_json, store_for }
+---@return table env  { now, home, file_mtime, read_json, store_for, is_remote }
 function M.default_env()
   return {
     now = os.time(),
@@ -52,6 +65,7 @@ function M.default_env()
     end,
     read_json = require("emeth.util").read_json,
     store_for = provider_store,
+    is_remote = M.is_remote,
   }
 end
 
@@ -85,6 +99,10 @@ end
 ---@return "valid"|"stale"|"gone"
 function M.check(entry, env)
   env = env or M.default_env()
+  if env.is_remote and env.is_remote(entry.provider) then
+    -- Lives on another host: no local transcript or directory to check.
+    return "valid"
+  end
   local store = env.store_for(entry.provider)
   if not store then
     -- No known store: the historical directory check.
