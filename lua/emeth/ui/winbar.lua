@@ -32,6 +32,7 @@ local badges = {} ---@type table<string, string>
 --- Mode tag shown alongside the lifecycle label in the bottom bar.
 --- {text=string, kind="info"|"warn"|"error"|"hint"|nil}
 local mode_tag = nil ---@type {text: string, kind?: string}|nil
+local session_title = "" ---@type string  identity of the session shown on the left, if any
 
 -- ── Color helpers ──────────────────────────────────────────────
 local FALLBACK_BG = "#1e222a"
@@ -347,6 +348,19 @@ function M.detach()
   badges = {}
   mode_tag = nil
   state = "ready"
+  session_title = ""
+end
+
+--- An integration-provided identifier for the current session (title or short id). Rendered as part of
+--- the winbar's left segment by providers that compose with it, so you can tell which session you're in.
+---@param text string|nil  pass nil/"" to clear
+function M.set_session_title(text)
+  session_title = text or ""
+end
+
+---@return string
+function M.get_session_title()
+  return session_title
 end
 
 --- Set the mode tag shown next to the lifecycle label in the bottom bar.

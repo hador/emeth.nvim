@@ -200,6 +200,21 @@ function M.setup_integration(view, session)
   -- atomically invalidating everything previously in flight.
   ---@type "idle"|"connecting"|"thinking"|"generating"|"cancelled"
   local activity = "idle"
+  -- Build the winbar left segment: provider · session · model. Extensions set the session identifier via
+  -- Winbar.set_session_title(text), so the composed value survives model-update rewrites.
+  ---@param model? string
+  ---@return string raw, string plain
+  local function compose_left(model)
+    local parts = { session.provider_name }
+    local title = Winbar.get_session_title()
+    if title ~= "" then
+      parts[#parts + 1] = title
+    end
+    if model then
+      parts[#parts + 1] = model
+    end
+    return Winbar.fmt.plain(table.concat(parts, " · "))
+  end
   local epoch = 0
   -- Outstanding `session/prompt` requests. Counted separately from `activity`
   -- because a cancel invalidates the prompt's callback (epoch) without the
@@ -334,7 +349,7 @@ function M.setup_integration(view, session)
     local sidebar = emeth.get_sidebar()
     if sidebar and sidebar.result_win then
       Winbar.attach(sidebar.result_win, sidebar.input_win)
-      Winbar.set_left(Winbar.fmt.plain(session.provider_name))
+      Winbar.set_left(compose_left())
     end
     local token = begin("connecting")
     -- Nudge if the handshake is still in flight after a while (e.g. a
@@ -1018,10 +1033,10 @@ function M.setup_integration(view, session)
     end
     if shown then
       Winbar.set_badge("model", shown)
-      Winbar.set_left(Winbar.fmt.plain(session.provider_name .. " · " .. shown))
+      Winbar.set_left(compose_left(shown))
     else
       Winbar.clear_badge("model")
-      Winbar.set_left(Winbar.fmt.plain(session.provider_name))
+      Winbar.set_left(compose_left())
     end
   end
 
@@ -1334,7 +1349,7 @@ function M.setup_integration(view, session)
     ---Re-assert what the winbar caches. It is only written on transitions, so one
     ---that missed a change would otherwise stay wrong for the rest of the turn.
     resync_winbar = function()
-      Winbar.set_left(Winbar.fmt.plain(session.provider_name))
+      Winbar.set_left(compose_left())
       set_activity(activity)
     end,
 
