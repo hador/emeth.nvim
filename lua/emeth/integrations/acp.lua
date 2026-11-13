@@ -603,7 +603,9 @@ function M.setup_integration(view, session)
       selected_files = vim.deepcopy(selected_files),
       model = exts.model_id,
       mode = exts.mode_id,
-      badges = Winbar.get_badges(),
+      -- The "ask" badge is a transient agent-state marker (a pending request is open); a steered message cut
+      -- in while one is open shouldn't inherit "input needed" on its row.
+      badges = Winbar.get_badges({ ask = true }),
     })
     view:add_message(msg)
     record_session(text)
