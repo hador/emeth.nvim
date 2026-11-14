@@ -256,6 +256,32 @@ h.describe("Session permission event", function()
     h.is_nil(chosen)
   end)
 
+  h.it("a provider's own auto_approve_tools overrides the global setting", function()
+    local acp = require("emeth.acp")
+    local saved = { acp.config.providers["gated"], acp.config.providers["eager"] }
+    acp.config.auto_approve_tools = true
+    acp.config.providers["gated"] = { command = "x", auto_approve_tools = false }
+    acp.config.providers["eager"] = { command = "x" }
+    local opts = { { kind = "allow_once", optionId = "a1", name = "Allow" } }
+    local gated_choice, eager_choice
+    Session:new("gated").client.config.handlers.on_request_permission({ toolCallId = "t1" }, opts, function(id)
+      gated_choice = id
+    end)
+    Session:new("eager").client.config.handlers.on_request_permission({ toolCallId = "t2" }, opts, function(id)
+      eager_choice = id
+    end)
+    h.is_nil(gated_choice) -- asks the user
+    h.eq("a1", eager_choice) -- falls back to the global setting
+    acp.config.auto_approve_tools = false
+    acp.config.providers["eager"] = { command = "x", auto_approve_tools = true }
+    eager_choice = nil
+    Session:new("eager").client.config.handlers.on_request_permission({ toolCallId = "t3" }, opts, function(id)
+      eager_choice = id
+    end)
+    h.eq("a1", eager_choice) -- a provider can also opt in when the global setting is off
+    acp.config.providers["gated"], acp.config.providers["eager"] = saved[1], saved[2]
+  end)
+
   h.it("auto_approve prefers allow_always over allow_once", function()
     require("emeth.acp").config.auto_approve_tools = true
     local s = Session:new("test")

@@ -13,6 +13,8 @@ local Session = require("emeth.acp.session")
 ---@field auth_method? string
 ---@field capabilities_meta? table  Merged into `clientCapabilities._meta` at initialize
 ---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize
+---@field auto_approve_tools? boolean  Overrides the global `auto_approve_tools` for this provider (e.g. false
+---  for agents whose permission prompts are deliberate gates)
 ---@field remote? boolean  Agent runs on another host (e.g. over ssh): session cwds are remote paths, so
 ---  emeth never checks or `cd`s into them; the agent's own session/load decides resumability.
 ---@field map_path? fun(path: string, ctx: { provider: string, session_id?: string }): string|false|nil

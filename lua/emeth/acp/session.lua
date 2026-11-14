@@ -21,11 +21,25 @@ Session.__index = Session
 ---auto-approve is off, when the request is a `switch_mode` (plan-mode exit is a
 ---review gate, never auto-approved -- auto-approving it defeats plan mode and
 ---risks picking the context-clearing variant), or when no option is offered.
+---Whether auto-approve applies to a provider: its own `auto_approve_tools` when set (true or false), else
+---the global one. Lets a provider whose agents gate tools on purpose (e.g. a remote fleet) opt out.
+---@param provider? string
+---@return boolean
+local function auto_approve_enabled(provider)
+  local acp = require("emeth.acp")
+  local p = provider and acp.config.providers and acp.config.providers[provider]
+  if type(p) == "table" and p.auto_approve_tools ~= nil then
+    return p.auto_approve_tools == true
+  end
+  return acp.config.auto_approve_tools == true
+end
+
 ---@param tool_call table
 ---@param options table[]|nil
+---@param provider? string
 ---@return string|nil option_id
-local function auto_approve_choice(tool_call, options)
-  if not require("emeth.acp").config.auto_approve_tools then
+local function auto_approve_choice(tool_call, options, provider)
+  if not auto_approve_enabled(provider) then
     return nil
   end
   if tool_call.kind == "switch_mode" then
@@ -138,7 +152,7 @@ function Session:new(provider_name)
         return session:_handle_request(method, params, respond, respond_error)
       end,
       on_request_permission = function(tool_call, options, callback, permission_session_id)
-        local choice = auto_approve_choice(tool_call, options)
+        local choice = auto_approve_choice(tool_call, options, session.provider_name)
         if choice then
           -- Auto-answered: emit with a nil callback so the UI renders the
           -- tool-call card but doesn't prompt (the request is already resolved).
