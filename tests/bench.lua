@@ -325,6 +325,64 @@ local function paint()
   vim.wait(0)
 end
 
+-- ── concealed transcript ───────────────────────────────────────
+-- render-markdown leaves the transcript window at conceallevel=3, and with conceal on nvim's treesitter
+-- highlighter re-parses the changed rows on every write (markdown's query hides code-fence lines with
+-- conceal_lines). A load writes one message at a time, so this used to cost thousands of parses: 1.2 s and
+-- 4.1 s for ~1k-event sessions. ChatView now writes at conceallevel 0 (`without_conceal`).
+
+local FENCED = table.concat({
+  "Here is the change:",
+  "```lua",
+  "local x = 1",
+  "return x",
+  "```",
+  "and some `inline` code after it.",
+}, "\n")
+
+--- Count LanguageTree:parse calls (treesitter parses, injections included) while running `fn`.
+---@param fn fun()
+---@return integer calls
+function M.count_ts_parses(fn)
+  local LanguageTree = require("vim.treesitter.languagetree")
+  local calls = 0
+  local orig = LanguageTree.parse
+  LanguageTree.parse = function(...)
+    calls = calls + 1
+    return orig(...)
+  end
+  local ok, err = pcall(fn)
+  LanguageTree.parse = orig
+  if not ok then
+    error(err)
+  end
+  return calls
+end
+
+--- A load: `n` messages with code fences rendered into a transcript shown at conceallevel=3 with the
+--- markdown highlighter on, as render-markdown leaves it.
+---@param n integer
+---@return fun()
+function M.concealed_load_run(n)
+  return function()
+    local v = fresh_view()
+    local win =
+      vim.api.nvim_open_win(v.result_buf, false, { relative = "editor", row = 0, col = 0, width = 80, height = 20 })
+    vim.wo[win].conceallevel = 3
+    pcall(vim.treesitter.start, v.result_buf, "markdown")
+    for _ = 1, n do
+      v:add_message(Message:new("assistant", FENCED))
+    end
+    v:_render()
+    vim.api.nvim_win_close(win, true)
+  end
+end
+
+---@param n integer
+function M.concealed_load_cost(n)
+  return M.time(M.concealed_load_run(n), 3)
+end
+
 -- ── subagent cards ─────────────────────────────────────────────
 -- A subagent's spawning call sits mid-transcript (at the spawn point) while the
 -- main session keeps writing below it, and its nested calls arrive as hidden
@@ -557,6 +615,18 @@ function M.run()
   print("\nnew nested tool under a mid-transcript card — should be ~FLAT vs tail size:")
   for _, t in ipairs({ 0, 100, 400, 800 }) do
     print(string.format("  tail=%-5d  %7.3f ms / 20 spawns", t, M.subagent_spawn_cost(t)))
+  end
+
+  print("\nload into a concealing window (conceallevel=3, markdown highlighter) — LINEAR, no per-row parse:")
+  for _, n in ipairs({ 100, 400, 800 }) do
+    print(
+      string.format(
+        "  messages=%-5d  %7.3f ms  (%d treesitter parses)",
+        n,
+        M.concealed_load_cost(n),
+        M.count_ts_parses(M.concealed_load_run(n))
+      )
+    )
   end
 
   print("\nstreaming thought growth (DEFAULT, folds past thinking_collapse_lines) — should be LINEAR:")

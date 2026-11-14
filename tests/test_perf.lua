@@ -236,3 +236,23 @@ h.describe("perf: a live thought stays cheap however long it gets", function()
     h.eq(rows[1], rows[2], "a folded thought grew on screen with its body")
   end)
 end)
+
+h.describe("perf: writing a transcript shown with conceal on", function()
+  -- With conceallevel > 0, nvim's treesitter highlighter re-parses every changed row on each write; a load is
+  -- one write per message, so the parse count grew with the transcript (5458 parses for a 1k-event load).
+  -- Writes happen at conceallevel 0: the count stays flat.
+  h.it("a load does not re-parse treesitter per written message", function()
+    -- Measured: 30 parses for 400 messages at conceallevel 0 writes; 12005 when writing at conceallevel 3.
+    local n = 400
+    local parses = bench.count_ts_parses(bench.concealed_load_run(n))
+    h.is_true(
+      parses < n,
+      string.format(
+        "a load of %d messages ran %d treesitter parses (>= 1 per message): writes are paying the "
+          .. "conceal_lines re-parse again (conceallevel > 0 during _render?)",
+        n,
+        parses
+      )
+    )
+  end)
+end)
