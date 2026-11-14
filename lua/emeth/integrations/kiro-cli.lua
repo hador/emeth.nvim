@@ -178,19 +178,11 @@ function M.setup(session, view)
 
   ---Flip the steer-state marker on the user message that carries `message_id`.
   ---@param message_id string
-  ---@param state string
+  ---@param state "queued"|"steered"|"not_delivered"
   ---@param only_if_queued? boolean  only downgrade ones never injected
   local function set_steer_state(message_id, state, only_if_queued)
-    for _, m in ipairs(view:get_messages()) do
-      if m.metadata and m.metadata.steer_message_id == message_id then
-        if only_if_queued and m.metadata.steer_state ~= "queued" then
-          return
-        end
-        view:update_message(m.uuid, function(mm)
-          mm.metadata.steer_state = state
-        end)
-        return
-      end
+    if view.integration and view.integration.set_steer_state then
+      view.integration.set_steer_state(message_id, state, { only_if_queued = only_if_queued })
     end
   end
 

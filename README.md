@@ -476,9 +476,22 @@ In addition to the module-level hooks above, an extension's `setup(session, view
 |--------|----------|---------|
 | `view.integration.set_transform_update(fn)` | `fn(update) → false?` | Mutate a `session/update` payload in place before the integration consumes it; return `false` to drop it. The bundled claude-code extension lifts subagent attribution and enriches Agent/Task titles this way. |
 | `view.integration.set_transform_elicitation(fn)` | `fn(fields, request) → fields?` | Reshape parsed elicitation fields before they render (claude-code folds AskUserQuestion's "Other" box into its question). |
-| `view.integration.set_steering(strategy)` | `{ supported, steer }` | Let a submit during a running turn steer it. `supported` is a boolean or a function; `steer(prompt, text, cb)` answers `cb(outcome, err, info?)` with `"injected"`, `"promptRequired"` or `"queued"`. |
+| `view.integration.set_steering(strategy)` | `{ supported, steer }` | Let a submit during a running turn steer it. `supported` is a boolean or a function; `steer(prompt, text, cb)` answers `cb(outcome, err, info?)` with `"injected"`, `"promptRequired"` or `"queued"`. A `"queued"` outcome may pass `info.message_id`, which tags the message for `set_steer_state` below. |
 
 Pass `nil` to clear; the integration also clears registered callbacks on disconnect. The setter exists at `view.integration` from the moment `setup` is called, so the registration can happen synchronously inside `setup`.
+
+#### Calls and events available to extensions
+
+These are the parts of emeth an extension may rely on; anything else (`view` internals, message metadata) can change without notice.
+
+| API | Purpose |
+|-----|---------|
+| `view.integration.set_steer_state(message_id, state, opts?) → found` | Move the steer marker of the message a `"queued"` outcome tagged: `"steered"` once the agent injects it, `"not_delivered"` if the turn ends first. `opts.only_if_queued` leaves a message that already moved on. kiro-cli uses it. |
+| `view.integration.session_id() → id\|nil` | The session the transcript belongs to. |
+| `view.integration.resync_winbar()` | Recompose the winbar's left segment and state, e.g. after `Winbar.set_session_title`. Only on the real integration table, so call it after `setup` returns (or guard it). |
+| `Winbar.set_session_title(text\|nil)` / `get_session_title()` | A session identifier (title or short id) shown in the left segment. |
+| `session:on(event, fn)` / `session:off(event, fn)` | Events: `update` (each `session/update`, `fn(update, session_id)`), `notification` (non-ACP notifications), `boundary` (the session id changed: connect, new, load, fork; fires after the id is assigned, so read identity there), plus `file_written`, `permission`, `elicitation`. |
+| `session:request(method, params, cb)` | Send an agent-specific request (e.g. a `_provider/...` extension method). |
 
 ### Per-session metadata (`_meta`)
 
@@ -575,6 +588,7 @@ The winbar has two fungible segments (left and right) flanking a centered title.
 | `Winbar.set_right(raw, plain?)` | Set the right segment |
 | `Winbar.set_state(s)` | Set input separator status: `"connecting"`, `"thinking"`, `"ready"`, `"generating"`, `"compacting"` |
 | `Winbar.set_context(pct)` | Convenience: set right segment to a gradient-colored percentage (0–100) |
+| `Winbar.set_session_title(text)` | Session identifier (title or short id) composed into the left segment; `nil` clears |
 
 #### Badges
 

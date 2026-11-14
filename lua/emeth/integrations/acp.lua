@@ -891,6 +891,26 @@ function M.setup_integration(view, session)
     set_steering = function(s)
       steering = s
     end,
+    ---Move the steer marker of the user message a `queued` steer outcome tagged with `message_id`
+    ---(`info.message_id`): to "steered" once the agent injects it, or "not_delivered" if the turn ends
+    ---first. With `opts.only_if_queued`, a message that already moved on is left alone.
+    ---@param message_id string
+    ---@param state "queued"|"steered"|"not_delivered"
+    ---@param opts? { only_if_queued?: boolean }
+    ---@return boolean found
+    set_steer_state = function(message_id, state, opts)
+      for _, m in ipairs(view:get_messages()) do
+        if m.metadata and m.metadata.steer_message_id == message_id then
+          if not (opts and opts.only_if_queued and m.metadata.steer_state ~= "queued") then
+            view:update_message(m.uuid, function(mm)
+              mm.metadata.steer_state = state
+            end)
+          end
+          return true
+        end
+      end
+      return false
+    end,
   }
 
   -- Load provider-specific extensions (e.g. claude-code, kiro-cli).

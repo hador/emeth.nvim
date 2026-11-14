@@ -985,6 +985,22 @@ h.describe("acp integration: steering", function()
     h.eq("steer-7", msg.metadata.steer_message_id)
   end)
 
+  -- Extensions move a queued marker by the id the outcome carried (kiro's lifecycle
+  -- events, a remote provider's queue delivery).
+  h.it("set_steer_state moves a queued marker by message id; only_if_queued leaves a moved-on one", function()
+    local _, view, integration, calls = steer_setup(true)
+    view.on_submit("first")
+    view.on_submit("steered")
+    local msg = view.messages[#view.messages]
+    calls[1].cb("queued", nil, { message_id = "steer-8" })
+    vim.wait(20)
+    h.eq(false, integration.set_steer_state("nope", "steered"), "an unknown id is reported")
+    h.eq(true, integration.set_steer_state("steer-8", "steered"))
+    h.eq("steered", msg.metadata.steer_state)
+    integration.set_steer_state("steer-8", "not_delivered", { only_if_queued = true })
+    h.eq("steered", msg.metadata.steer_state, "an injected message is not downgraded")
+  end)
+
   -- The marker must not lie: promptRequired means the turn had already ended and
   -- the content went out as an ordinary prompt.
   h.it("does not mark it when the steer became a normal prompt", function()

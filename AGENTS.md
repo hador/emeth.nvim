@@ -74,8 +74,10 @@ resumed), `health.lua` (provider PATH check; `:checkhealth emeth` resolves to
 `acp.lua` is the generic glue: `M.setup_integration(view, session) → integration`,
 assigned to `view.integration`. Its return table provides `connect`, `load_session`,
 `connect_and_load`, `new_session`, `fork`, `rewind(meta)`, `disconnect`, `cancel`,
-`add_file`, `resync_winbar`, plus the extension setters (`set_transform_update`,
-`set_transform_elicitation`, `set_steering`) that a provider extension populates.
+`add_file`, `resync_winbar`, `session_id`, plus the extension setters (`set_transform_update`,
+`set_transform_elicitation`, `set_steering`) that a provider extension populates and `set_steer_state`
+(moves a queued steer marker). README "Calls and events available to extensions" is the public surface for
+extensions; keep it in sync when any of these change.
 
 Provider extensions are **optional hooks** loaded from
 `lua/emeth/integrations/<provider>.lua` (only `claude-code.lua`, `opencode.lua`,
