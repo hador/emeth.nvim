@@ -27,6 +27,76 @@ h.describe("acp integration: user_message_chunk", function()
   end)
 end)
 
+h.describe("acp integration: expand_tools (rows that start expanded)", function()
+  local acp = require("emeth.acp")
+  local function with_rule(rule, fn)
+    local saved = acp.config.providers.test
+    acp.config.providers.test = { command = "true", expand_tools = rule }
+    local ok, err = pcall(fn)
+    acp.config.providers.test = saved
+    if not ok then
+      error(err, 0)
+    end
+  end
+  local function call(id, title, kind)
+    return { sessionUpdate = "tool_call", toolCallId = id, title = title, kind = kind or "other", status = "pending" }
+  end
+
+  h.it("title patterns: a matching row starts expanded, others keep the default, folding sticks", function()
+    with_rule({ "^Pass[ %d]* ·" }, function()
+      local session, view = make_setup()
+      session:_emit("update", call("p1", "Pass 12 · 3 messages · 2 tools"))
+      session:_emit("update", call("t1", "ls -la", "execute"))
+      h.eq(true, view.messages[1].metadata._expanded)
+      h.is_nil(view.messages[2].metadata._expanded)
+      view:update_message(view.messages[1].uuid, function(m)
+        m.metadata._expanded = false
+      end)
+      session:_emit("update", {
+        sessionUpdate = "tool_call_update",
+        toolCallId = "p1",
+        status = "completed",
+        title = "Pass 12 · 3 messages · 2 tools",
+      })
+      h.eq(false, view.messages[1].metadata._expanded, "the user's fold wins over the rule")
+    end)
+  end)
+
+  h.it("a title that only arrives in a later update can match", function()
+    with_rule({ "^Pass" }, function()
+      local session, view = make_setup()
+      session:_emit("update", call("p2", "tool"))
+      h.is_nil(view.messages[1].metadata._expanded)
+      session:_emit("update", { sessionUpdate = "tool_call_update", toolCallId = "p2", title = "Pass · 1 message" })
+      h.eq(true, view.messages[1].metadata._expanded)
+    end)
+  end)
+
+  h.it("a predicate gets the tool call; an erroring one expands nothing; no rule changes nothing", function()
+    with_rule(function(tc)
+      return tc.kind == "think"
+    end, function()
+      local session, view = make_setup()
+      session:_emit("update", call("a", "plan", "think"))
+      session:_emit("update", call("b", "ls", "execute"))
+      h.eq(true, view.messages[1].metadata._expanded)
+      h.is_nil(view.messages[2].metadata._expanded)
+    end)
+    with_rule(function()
+      error("bad rule")
+    end, function()
+      local session, view = make_setup()
+      session:_emit("update", call("c", "Pass 1 · x"))
+      h.is_nil(view.messages[1].metadata._expanded)
+    end)
+    with_rule(nil, function()
+      local session, view = make_setup()
+      session:_emit("update", call("d", "Pass 1 · x"))
+      h.is_nil(view.messages[1].metadata._expanded)
+    end)
+  end)
+end)
+
 h.describe("acp integration: agent_message_chunk", function()
   h.it("creates a new assistant message on first chunk", function()
     local session, view = make_setup()

@@ -90,6 +90,33 @@ local function attach_subagent_expand(parent, view)
   end
 end
 
+---Whether `provider`'s config asks for this tool row to start expanded (`acp.providers[<name>].expand_tools`:
+---Lua patterns matched against the title, or a predicate given the tool_call).
+---@param provider? string
+---@param tc table  the ACP tool_call (as merged so far)
+---@return boolean
+function M.wants_expanded(provider, tc)
+  local ok, acp = pcall(require, "emeth.acp")
+  local cfg = ok
+    and type(provider) == "string"
+    and acp.config
+    and acp.config.providers
+    and acp.config.providers[provider]
+  local rule = type(cfg) == "table" and cfg.expand_tools or nil
+  if type(rule) == "function" then
+    local ok_rule, yes = pcall(rule, tc)
+    return ok_rule and yes == true
+  end
+  if type(rule) == "table" and type(tc.title) == "string" then
+    for _, pat in ipairs(rule) do
+      if type(pat) == "string" and tc.title:find(pat) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 ---Build the dispatch table. Each handler receives the update, the streaming
 ---state for the session that update belongs to, and that session's id; handlers
 ---that need neither ignore them.
@@ -98,6 +125,17 @@ end
 function M.handlers(ctx)
   local view = ctx.view
   local session = ctx.session
+  ---A row the user hasn't folded or unfolded yet starts expanded when the config says so.
+  ---@param msg chat_ui.Message
+  local function apply_expand_rule(msg)
+    if
+      msg.metadata._expanded == nil
+      and msg.metadata.tool_call
+      and M.wants_expanded(session and session.provider_name, msg.metadata.tool_call)
+    then
+      msg.metadata._expanded = true
+    end
+  end
   local handlers = {}
 
   -- The concatenated text of a `content` field, which is either a single block
@@ -309,11 +347,15 @@ function M.handlers(ctx)
             msg.metadata.tool_call[k] = v
           end
         end
+        apply_expand_rule(msg)
       end)
     else
       local metadata = { tool_call = update }
       if parent then
         metadata.parent_tool_call_id = update.parent_tool_call_id
+      end
+      if M.wants_expanded(session and session.provider_name, update) then
+        metadata._expanded = true
       end
       local msg = Message:new("assistant", {
         type = "tool_use",
@@ -392,6 +434,7 @@ function M.handlers(ctx)
           end
           if update.title then
             msg.metadata.tool_call.title = update.title
+            apply_expand_rule(msg) -- a title that only arrives now can match too
           end
           if update.rawOutput then
             msg.metadata.tool_call.rawOutput = update.rawOutput

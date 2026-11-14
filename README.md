@@ -167,6 +167,15 @@ require("emeth").setup({
 })
 ```
 
+Per-provider options, besides `command`, `args`, `env` and `pass_env`:
+
+| Option | Effect |
+|--------|--------|
+| `auto_approve_tools` | overrides the global `acp.auto_approve_tools` for this provider |
+| `expand_tools` | tool rows that start expanded: Lua patterns matched against the title, e.g. `{ "^Pass[ %d]* ·" }`, or a predicate `function(tool_call) return ... end`. Only the starting state; you can still fold them |
+| `remote` | the agent runs on another host: its paths are not opened locally |
+| `map_path` | `function(path, ctx)` returning where an agent's path opens (a URI, `false` for not openable, `nil` for the default) |
+
 > **kiro-cli** must run its **v3** (Kiro Agent Server) engine — these are the
 > default args emeth ships, so you only need them if you override the provider.
 > See [kiro-cli (v3)](#kiro-cli-v3) below for agent selection and gotchas.

@@ -15,6 +15,9 @@ local Session = require("emeth.acp.session")
 ---@field capabilities? table  Extra top-level `clientCapabilities` advertised at initialize
 ---@field auto_approve_tools? boolean  Overrides the global `auto_approve_tools` for this provider (e.g. false
 ---  for agents whose permission prompts are deliberate gates)
+---@field expand_tools? string[]|fun(tool_call: table): boolean  Tool rows of this provider that start expanded:
+---  Lua patterns matched against the tool call's title, or a predicate given the ACP tool_call (title, kind,
+---  rawInput, ...). Only the starting state; the user can still fold them.
 ---@field remote? boolean  Agent runs on another host (e.g. over ssh): session cwds are remote paths, so
 ---  emeth never checks or `cd`s into them; the agent's own session/load decides resumability.
 ---@field map_path? fun(path: string, ctx: { provider: string, session_id?: string }): string|false|nil
