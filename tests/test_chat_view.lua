@@ -319,6 +319,61 @@ h.describe("ChatView incremental line->msg map", function()
 end)
 
 -- ── deferred render (streaming throttle primitive) ─────────────
+h.describe("ChatView render with concealing windows", function()
+  local Message = require("emeth.message")
+
+  -- With conceallevel > 0, nvim's treesitter highlighter re-parses on every write (conceal_lines);
+  -- the writes happen at conceallevel 0 and the window keeps its own level, with no OptionSet.
+  h.it("writes at conceallevel 0 and restores the window's level without OptionSet", function()
+    local view = make_view()
+    local win =
+      vim.api.nvim_open_win(view.result_buf, false, { relative = "editor", row = 0, col = 0, width = 40, height = 5 })
+    vim.wo[win].conceallevel = 3
+    local seen = {}
+    local done = false
+    vim.api.nvim_buf_attach(view.result_buf, false, {
+      on_lines = function()
+        if done or not vim.api.nvim_win_is_valid(win) then
+          return true -- detach: later tests reuse buffers
+        end
+        seen[#seen + 1] = vim.wo[win].conceallevel
+      end,
+    })
+    local option_set = 0
+    local au = vim.api.nvim_create_autocmd("OptionSet", {
+      pattern = "conceallevel",
+      callback = function()
+        option_set = option_set + 1
+      end,
+    })
+    view:add_message(Message:new("assistant", "one\ntwo"))
+    view:add_message(Message:new("assistant", "three"))
+    view:_render()
+    vim.api.nvim_del_autocmd(au)
+    done = true
+    h.is_true(#seen > 0, "the render wrote rows")
+    for _, level in ipairs(seen) do
+      h.eq(0, level, "a write happened with conceal on")
+    end
+    h.eq(3, vim.wo[win].conceallevel)
+    h.eq(0, option_set)
+    vim.api.nvim_win_close(win, true)
+  end)
+
+  h.it("restores the level when the wrapped work fails", function()
+    local view = make_view()
+    local win =
+      vim.api.nvim_open_win(view.result_buf, false, { relative = "editor", row = 0, col = 0, width = 40, height = 5 })
+    vim.wo[win].conceallevel = 2
+    local ok = pcall(ChatView._without_conceal, view.result_buf, function()
+      error("boom")
+    end)
+    h.eq(false, ok)
+    h.eq(2, vim.wo[win].conceallevel)
+    vim.api.nvim_win_close(win, true)
+  end)
+end)
+
 h.describe("ChatView:update_message defer_render + flush", function()
   local Message = require("emeth.message")
 

@@ -610,11 +610,52 @@ function ChatView:_schedule_render()
   end)
 end
 
+---Run `fn` with conceallevel 0 on every window showing `buf`, restoring each afterwards (without firing
+---OptionSet). With conceallevel > 0, nvim's treesitter highlighter re-parses the changed rows (injections
+---included) synchronously on every buffer write, for queries using `conceal_lines` such as markdown's code
+---fences: a load writes one message at a time, so a ~1k-event transcript paid seconds of parsing (1.2 s and
+---4.1 s measured with render-markdown's conceallevel=3; ~0.12 s without). Nothing redraws in between, so the
+---toggle is invisible.
+---@param buf integer
+---@param fn fun()
+local function without_conceal(buf, fn)
+  local saved = {} ---@type table<integer, integer>
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    local level = api.nvim_get_option_value("conceallevel", { win = win })
+    if level > 0 then
+      saved[win] = level
+      api.nvim_win_call(win, function()
+        vim.cmd("noautocmd setlocal conceallevel=0")
+      end)
+    end
+  end
+  local ok, err = pcall(fn)
+  for win, level in pairs(saved) do
+    if api.nvim_win_is_valid(win) then
+      api.nvim_win_call(win, function()
+        vim.cmd("noautocmd setlocal conceallevel=" .. level)
+      end)
+    end
+  end
+  if not ok then
+    error(err, 0)
+  end
+end
+ChatView._without_conceal = without_conceal
+
 function ChatView:_render()
   local buf = self.result_buf
   if not api.nvim_buf_is_valid(buf) then
     return
   end
+  without_conceal(buf, function()
+    self:_render_rows()
+  end)
+end
+
+---The body of `_render`: write the dirty messages' rows.
+function ChatView:_render_rows()
+  local buf = self.result_buf
 
   local dirty_from = self._dirty_from or 1
   local dirty_all = self._dirty_all
@@ -727,7 +768,10 @@ function ChatView:_render()
         if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == buf then
           if cur_buf ~= buf then
             local line_count = api.nvim_buf_line_count(buf)
-            pcall(api.nvim_win_set_cursor, win, { line_count, 0 })
+            -- Moving the cursor re-evaluates concealed lines too (see without_conceal).
+            without_conceal(buf, function()
+              pcall(api.nvim_win_set_cursor, win, { line_count, 0 })
+            end)
           end
         end
       end
