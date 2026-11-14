@@ -172,6 +172,26 @@ function M.provider_path(path, provider, ctx)
   return path
 end
 
+--- A tool header clamps a long title with "…", so `gf` on it reads a cut path. When `ref` ends in "…"
+--- and the message it sits in is a tool call, return the location whose path the ref is a prefix of;
+--- otherwise `ref` unchanged.
+---@param ref string
+---@param msg? chat_ui.Message  the message under the cursor
+---@return string
+function M.unclamp(ref, msg)
+  local prefix = ref:match("^(.-)…$")
+  if not prefix or prefix == "" then
+    return ref
+  end
+  local tc = msg and msg.metadata and msg.metadata.tool_call
+  for _, loc in ipairs(tc and tc.locations or {}) do
+    if type(loc.path) == "string" and loc.path:sub(1, #prefix) == prefix then
+      return loc.path
+    end
+  end
+  return ref
+end
+
 --- Whether `provider` takes paths through `provider_path` instead of local
 --- resolution: it maps paths, or its paths are remote.
 ---@param provider? string

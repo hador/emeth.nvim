@@ -137,6 +137,30 @@ h.describe("Sidebar auto-eject", function()
   end)
 end)
 
+h.describe("Target.unclamp (a path cut by a tool header's clamp)", function()
+  local msg = {
+    metadata = {
+      tool_call = {
+        locations = {
+          { path = "/w/src/WidgetGadgetsServiceTestApp/src/interactive/ContentProviders.ts" },
+        },
+      },
+    },
+  }
+  h.it("expands a clamped ref to the tool call's location it starts", function()
+    h.eq(
+      "/w/src/WidgetGadgetsServiceTestApp/src/interactive/ContentProviders.ts",
+      Target.unclamp("/w/src/WidgetGadgets…", msg)
+    )
+  end)
+  h.it("leaves a ref that is not clamped, matches no location, or has no tool call", function()
+    h.eq("/w/src/a.ts", Target.unclamp("/w/src/a.ts", msg))
+    h.eq("/x/y…", Target.unclamp("/x/y…", msg))
+    h.eq("/w/src/K…", Target.unclamp("/w/src/K…", nil))
+    h.eq("…", Target.unclamp("…", msg))
+  end)
+end)
+
 h.describe("Target.provider_path (remote / map_path)", function()
   local acp = require("emeth.acp")
   local function with_provider(name, cfg, fn)

@@ -393,6 +393,7 @@ function Sidebar:_setup_keymaps()
               vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
               return
             end
+            raw = Target.unclamp(raw, (view:cursor_message_line()))
             local integration = emeth._integration
             local ctx = { session_id = integration and integration.session_id and integration.session_id() or nil }
             local dest = Target.provider_path(raw, provider, ctx)
@@ -412,6 +413,11 @@ function Sidebar:_setup_keymaps()
             end
           end
           local abs, line = Target.ref_under_cursor()
+          if abs and abs:find("…$") then
+            -- A path cut by the tool header's clamp: take the tool call's own location.
+            local full = Target.unclamp(abs, (view:cursor_message_line()))
+            abs = full ~= abs and Target.resolve(full) or abs
+          end
           if not abs then
             vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
             return
