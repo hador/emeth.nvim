@@ -200,13 +200,18 @@ local function best_str_param(tbl)
       return v
     end
   end
-  for _, v in pairs(tbl) do
-    if type(v) == "string" and #v > 0 and #v < 200 then
-      return v
+  -- Otherwise the first short string by key name. Sorted: pairs() order is not fixed, so the same call
+  -- could be titled by a different argument on each render or load.
+  local keys = {}
+  for k, v in pairs(tbl) do
+    if type(k) == "string" and type(v) == "string" and #v > 0 and #v < 200 then
+      keys[#keys + 1] = k
     end
   end
-  return nil
+  table.sort(keys)
+  return keys[1] and tbl[keys[1]] or nil
 end
+M._best_str_param = best_str_param
 
 ---Reduce a header string to something that fits on one row.
 ---

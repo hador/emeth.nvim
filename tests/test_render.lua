@@ -881,3 +881,20 @@ h.describe("Render tool header param", function()
     h.is_true(not header:find("review-CR-1", 1, true), header)
   end)
 end)
+
+h.describe("Render._best_str_param (tool header hint)", function()
+  h.it("prefers the well-known keys, then the first short string by key name, the same every time", function()
+    h.eq("ls", Render._best_str_param({ zeta = "z", command = "ls" }))
+    -- No preferred key: the alphabetically first string, never whichever pairs() visits first.
+    for _ = 1, 20 do
+      local t = {}
+      for i = 1, 12 do
+        t["k" .. string.format("%02d", 13 - i)] = "v" .. (13 - i)
+      end
+      t.answerQuote, t.decisionId = "right ok run it", "pa-ask-1"
+      h.eq("right ok run it", Render._best_str_param(t))
+    end
+    h.eq(nil, Render._best_str_param({ n = 1, long = string.rep("x", 300) }))
+    h.eq(nil, Render._best_str_param(nil))
+  end)
+end)
