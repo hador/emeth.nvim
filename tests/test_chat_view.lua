@@ -419,6 +419,95 @@ h.describe("ChatView:update_message defer_render + flush", function()
   end)
 end)
 
+h.describe("ChatView:hold_render", function()
+  local Message = require("emeth.message")
+
+  local function shows(view, text)
+    for _, l in ipairs(vim.api.nvim_buf_get_lines(view.result_buf, 0, -1, false)) do
+      if l:find(text, 1, true) then
+        return true
+      end
+    end
+    return false
+  end
+
+  ---Run `body` with a short paint interval so the tests don't wait half a second per step.
+  local function with_interval(ms, body)
+    local prev = ChatView.HELD_PAINT_MS
+    ChatView.HELD_PAINT_MS = ms
+    local ok, err = pcall(body)
+    ChatView.HELD_PAINT_MS = prev
+    if not ok then
+      error(err, 0)
+    end
+  end
+
+  h.it("paints the first change at once, then waits out the interval", function()
+    with_interval(200, function()
+      local view = make_view()
+      view:clear() -- a load clears (and paints) right before it holds
+      local release = view:hold_render()
+      view:add_message(Message:new("assistant", "first-held"))
+      vim.wait(0)
+      h.is_true(shows(view, "first-held"), "the first paint under a hold is immediate")
+      view:add_message(Message:new("assistant", "second-held"))
+      vim.wait(0)
+      h.is_true(not shows(view, "second-held"), "a change inside the interval waits for it")
+      h.is_true(
+        vim.wait(1000, function()
+          return shows(view, "second-held")
+        end),
+        "the waiting change paints once the interval is up"
+      )
+      release()
+    end)
+  end)
+
+  h.it("release paints a waiting change immediately", function()
+    with_interval(5000, function()
+      local view = make_view()
+      local release = view:hold_render()
+      view:add_message(Message:new("assistant", "lead"))
+      vim.wait(0)
+      view:add_message(Message:new("assistant", "tail-held"))
+      vim.wait(0)
+      h.is_true(not shows(view, "tail-held"))
+      release()
+      vim.wait(0)
+      h.is_true(shows(view, "tail-held"), "release must not leave the tail waiting out the interval")
+      h.is_nil(view._render_timer)
+    end)
+  end)
+
+  h.it("holds nest and a release only counts once", function()
+    with_interval(5000, function()
+      local view = make_view()
+      local outer = view:hold_render()
+      local inner = view:hold_render()
+      inner()
+      inner()
+      h.eq(1, view._holds, "a repeated release must not drop someone else's hold")
+      view:add_message(Message:new("assistant", "lead"))
+      vim.wait(0)
+      view:add_message(Message:new("assistant", "still-held"))
+      vim.wait(0)
+      h.is_true(not shows(view, "still-held"), "the outer hold still throttles")
+      outer()
+      vim.wait(0)
+      h.is_true(shows(view, "still-held"))
+    end)
+  end)
+
+  h.it("paints every change at once without a hold", function()
+    local view = make_view()
+    view:add_message(Message:new("assistant", "one"))
+    vim.wait(0)
+    view:add_message(Message:new("assistant", "two-free"))
+    vim.wait(0)
+    h.is_true(shows(view, "two-free"))
+  end)
+end)
+
 -- ── vim.paste lifecycle (global hygiene) ───────────────────────
 h.describe("ChatView paste lifecycle", function()
   h.it("install wraps the global, detach restores the original", function()

@@ -264,6 +264,62 @@ h.describe("acp integration: thinking phase", function()
   end)
 end)
 
+h.describe("acp integration: paint hold during a load", function()
+  ---A session whose connect_and_load answers only when the test calls `answer(err)`.
+  local function pending_load()
+    local session = Session:new("test")
+    local view = make_view()
+    local integration = Acp.setup_integration(view, session)
+    local answer
+    session.connect_and_load = function(_self, _id, _opts, cb)
+      answer = cb
+    end
+    session.disconnect = function() end
+    return session, view, integration, function(err)
+      answer(err)
+    end
+  end
+
+  h.it("holds painting while the load is in flight and releases it when it succeeds", function()
+    local session, view, integration, answer = pending_load()
+    integration.connect_and_load("sess-load")
+    h.eq(1, view.holds, "a load paints on an interval while its replay streams in")
+    session.session_id = "sess-load"
+    answer(nil)
+    h.eq(0, view.holds, "the hold ends with the load")
+    flush()
+  end)
+
+  h.it("releases the hold when the load fails", function()
+    local _, view, integration, answer = pending_load()
+    integration.connect_and_load("sess-gone")
+    answer("Resource not found")
+    h.eq(0, view.holds)
+    flush()
+  end)
+
+  h.it("disconnect drops the hold of a load that never answered", function()
+    local _, view, integration = pending_load()
+    integration.connect_and_load("sess-hung")
+    integration.disconnect()
+    h.eq(0, view.holds)
+  end)
+
+  h.it("a plain connect does not hold painting", function()
+    local session = Session:new("test")
+    local view = make_view()
+    local integration = Acp.setup_integration(view, session)
+    local seen
+    session.connect = function(_self, _opts, cb)
+      seen = view.holds
+      cb(nil)
+    end
+    integration.connect()
+    h.eq(0, seen)
+    flush()
+  end)
+end)
+
 h.describe("acp integration: slow-connect nudge", function()
   h.it("posts a nudge if the handshake is still pending after the threshold", function()
     local emeth = require("emeth")

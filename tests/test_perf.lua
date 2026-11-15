@@ -256,3 +256,29 @@ h.describe("perf: writing a transcript shown with conceal on", function()
     )
   end)
 end)
+
+h.describe("perf: a session load paints on an interval", function()
+  -- Each paint costs a redraw that grows with the transcript, and a load's replay lands across many
+  -- event-loop ticks: painting per tick made a real 3.7k-update load cost ~8 s of CPU. While a load is in
+  -- flight the transcript paints at most every HELD_PAINT_MS, so the paint count follows the load's
+  -- duration, not its update count.
+  local H = require("tests.acp_harness")
+
+  h.it("a load replayed one update per tick does not paint per update", function()
+    local restore = H.install()
+    local n = 200
+    local ok, paints = pcall(bench.trickled_load_paints, n)
+    restore()
+    h.is_true(ok, tostring(paints))
+    -- Measured: 3 paints with the hold (the first replayed update, the release, the settle), 201 without.
+    h.is_true(
+      paints <= n / 10,
+      string.format(
+        "a %d-update load painted %d times: the load no longer holds painting (ChatView:hold_render "
+          .. "from with_lifecycle for kind = 'load')",
+        n,
+        paints
+      )
+    )
+  end)
+end)

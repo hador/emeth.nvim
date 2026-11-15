@@ -44,6 +44,9 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _dirty_all? boolean  re-render everything on next paint
 ---@field _dirty_from? integer  first message index that may have changed
 ---@field _render_pending? boolean
+---@field _render_timer? uv.uv_timer_t  a held paint waiting out its interval
+---@field _holds? integer  outstanding hold_render() calls
+---@field _last_paint? integer  vim.uv.now() of the last paint
 local ChatView = {}
 ChatView.__index = ChatView
 
@@ -599,15 +602,67 @@ local function expand(raw_lines)
 end
 ChatView._expand = expand
 
+---While held, paint at most this often (ms).
+ChatView.HELD_PAINT_MS = 500
+
 function ChatView:_schedule_render()
   if self._render_pending then
     return
   end
   self._render_pending = true
-  vim.schedule(function()
+  local function paint()
+    self._render_timer = nil
     self._render_pending = false
     self:_render()
-  end)
+  end
+  local wait = 0
+  if (self._holds or 0) > 0 and self._last_paint then
+    wait = ChatView.HELD_PAINT_MS - (vim.uv.now() - self._last_paint)
+  end
+  if wait > 0 then
+    self._render_timer = vim.defer_fn(paint, wait)
+  else
+    vim.schedule(paint)
+  end
+end
+
+---Paint at most every `HELD_PAINT_MS` until the returned release is called (holds nest; the
+---release is idempotent). For a session load: its replay arrives as thousands of updates over
+---several event-loop ticks, and every paint is followed by a redraw whose cost grows with the
+---transcript (nvim's treesitter highlighter re-parses each visible row of a concealing window,
+---walking every injection in the buffer, and re-parses the tree after each write). Painting per
+---tick made a ~3.7k-update load cost ~8 s of CPU; painting at this interval keeps it bounded by
+---the load's duration instead of its update count. The first paint is immediate, and so is the
+---one after the last release.
+---@return fun() release
+function ChatView:hold_render()
+  if (self._holds or 0) == 0 then
+    self._last_paint = nil -- measured from the hold, not from a paint before it (e.g. a load's clear)
+  end
+  self._holds = (self._holds or 0) + 1
+  local released = false
+  return function()
+    if released then
+      return
+    end
+    released = true
+    self._holds = self._holds - 1
+    if self._holds > 0 then
+      return
+    end
+    -- A paint waiting out the interval goes now instead.
+    if self._render_timer then
+      self._render_timer:stop()
+      if not self._render_timer:is_closing() then
+        self._render_timer:close()
+      end
+      self._render_timer = nil
+      self._render_pending = false
+    end
+    if self._dirty_from then
+      self:_schedule_render()
+    end
+  end
 end
 
 ---Run `fn` with conceallevel 0 on every window showing `buf`, restoring each afterwards (without firing
@@ -648,6 +703,7 @@ function ChatView:_render()
   if not api.nvim_buf_is_valid(buf) then
     return
   end
+  self._last_paint = vim.uv.now()
   without_conceal(buf, function()
     self:_render_rows()
   end)

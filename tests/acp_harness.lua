@@ -99,6 +99,21 @@ function M.make_view()
 
   function view:invalidate() end
 
+  -- Paint holds: the real view paints on an interval while one is held (ChatView's
+  -- own tests cover that); the mock counts outstanding holds so a lifecycle test can
+  -- see a load take one and give it back.
+  view.holds = 0
+  function view:hold_render()
+    self.holds = self.holds + 1
+    local released = false
+    return function()
+      if not released then
+        released = true
+        self.holds = self.holds - 1
+      end
+    end
+  end
+
   function view:set_context_files(files)
     self._context_files = files
   end

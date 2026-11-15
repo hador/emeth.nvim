@@ -383,6 +383,58 @@ function M.concealed_load_cost(n)
   return M.time(M.concealed_load_run(n), 3)
 end
 
+-- ── trickled session load ──────────────────────────────────────
+-- A session/load replay is the whole history, and it reaches nvim over many stdout reads (the agent's
+-- writes interleave with its own startup), so updates land across many event-loop ticks. Every paint is
+-- followed by a redraw whose cost grows with the transcript (with conceal on, nvim's treesitter
+-- highlighter re-parses each visible row, walking every injection), so painting per tick made a real
+-- 3.7k-update load cost ~8 s of CPU. A load paints on an interval instead (ChatView:hold_render).
+
+--- Drive a load of `n` replayed messages, one per event-loop tick, through a real Session and the real
+--- integration into a real ChatView, then answer the load. Returns how many times the transcript painted.
+---@param n integer
+---@param answer_load? boolean  false: leave the load unanswered (default true)
+---@return integer paints
+function M.trickled_load_paints(n, answer_load)
+  local Session = require("emeth.acp.session")
+  local Acp = require("emeth.integrations.acp")
+  local emeth = require("emeth")
+  local v = fresh_view()
+  local session = Session:new((next(require("emeth.acp").config.providers)))
+  local integration = Acp.setup_integration(v, session)
+  local answer
+  session.connect_and_load = function(self, id, _opts, cb)
+    self.session_id = id
+    answer = cb
+  end
+  session.disconnect = function() end
+  local paints = 0
+  local orig = v._render
+  v._render = function(...)
+    paints = paints + 1
+    return orig(...)
+  end
+  local prev_sync = emeth.config.sync_remote_sessions
+  emeth.config.sync_remote_sessions = false
+  integration.connect_and_load("bench-load")
+  for i = 1, n do
+    session:_emit("update", {
+      sessionUpdate = "agent_message_chunk",
+      messageId = "m" .. i,
+      content = { type = "text", text = "replayed message " .. i },
+    }, "bench-load")
+    vim.wait(0)
+  end
+  if answer_load ~= false then
+    answer(nil)
+  end
+  vim.wait(0)
+  vim.wait(0)
+  emeth.config.sync_remote_sessions = prev_sync
+  integration.disconnect()
+  return paints
+end
+
 -- ── subagent cards ─────────────────────────────────────────────
 -- A subagent's spawning call sits mid-transcript (at the spawn point) while the
 -- main session keeps writing below it, and its nested calls arrive as hidden
@@ -605,6 +657,11 @@ function M.run()
   print("\nstreaming tool body growth (expanded, throttled ~1 render/10 chunks) — the fix:")
   for _, n in ipairs({ 100, 400, 800 }) do
     print(string.format("  final_lines=%-5d  %7.3f ms total", n, M.streaming_tool_growth_throttled(n, 10)))
+  end
+
+  print("\nsession load, one replayed update per tick — paints should NOT scale with updates:")
+  for _, n in ipairs({ 100, 400 }) do
+    print(string.format("  updates=%-5d  %4d paints", n, M.trickled_load_paints(n)))
   end
 
   print("\nsubagent child updates under a mid-transcript card — should be FLAT vs tail size:")

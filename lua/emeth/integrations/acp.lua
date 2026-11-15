@@ -336,6 +336,19 @@ function M.setup_integration(view, session)
   ---@field touch? boolean
   ---@field kind? "new"|"load"
 
+  -- Paint holds taken by loads still in flight, released as each settles (or on disconnect).
+  local paint_holds = {} ---@type table<fun(), true>
+  ---@return fun() release
+  local function hold_paint()
+    local release = view:hold_render()
+    local function drop()
+      paint_holds[drop] = nil
+      release()
+    end
+    paint_holds[drop] = true
+    return drop
+  end
+
   ---Run a session lifecycle action with standard boilerplate.
   ---@param opts acp.LifecycleOpts
   ---@param action fun(done: fun(err: any))
@@ -345,6 +358,10 @@ function M.setup_integration(view, session)
       view:clear()
       reset_state()
     end
+    -- A load's replay is the whole history in one burst of updates: paint it on an interval, not
+    -- per update (see ChatView:hold_render). Released when the lifecycle settles, superseded or
+    -- not; disconnect drops a hold whose answer never came.
+    local release_paint = opts.kind == "load" and hold_paint() or nil
     local emeth = require("emeth")
     local sidebar = emeth.get_sidebar()
     if sidebar and sidebar.result_win then
@@ -369,6 +386,9 @@ function M.setup_integration(view, session)
       end, slow_ms)
     end
     action(function(err)
+      if release_paint then
+        release_paint()
+      end
       if epoch ~= token then
         return -- superseded: cancelled or a newer lifecycle took over
       end
@@ -1354,6 +1374,9 @@ function M.setup_integration(view, session)
       Winbar.detach()
       reload_debounce.close()
       render_debounce.close()
+      for drop in pairs(paint_holds) do
+        drop()
+      end
       view:flush() -- paint any final throttled tool content before we detach
       if ext_cleanup then
         ext_cleanup()
