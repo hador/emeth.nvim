@@ -28,6 +28,7 @@
 ---@field thinking_collapse_lines number
 ---@field claude_code? chat_ui.ClaudeCodeConfig
 ---@field kiro_cli? chat_ui.KiroCliConfig
+---@field experimental? { strip_conceal_lines?: boolean }  opt-in behavior that may change or go away
 
 ---@class chat_ui.Module
 ---@field config chat_ui.Config
@@ -101,6 +102,17 @@ local defaults = {
   thinking_collapse_lines = 16,
   default_provider = nil,
   auto_add_current_file = true,
+  -- Opt-in behavior that may change or go away.
+  experimental = {
+    -- Highlight the transcript with the markdown highlights query minus its `conceal_lines` (the rule
+    -- that hides code-fence lines). With conceal on (render-markdown sets conceallevel=3), nvim checks
+    -- that rule on every redraw by parsing each visible row separately, and each parse walks every
+    -- inline injection in the buffer: streaming into a ~9k-line transcript cost ~70 ms per redraw,
+    -- ~5 ms without it. render-markdown hides fence lines itself (code.border = "hide", its default),
+    -- so the transcript looks the same; without render-markdown a fence shows as a blank line.
+    -- Only the transcript buffer is affected; markdown files keep the stock query.
+    strip_conceal_lines = false,
+  },
   claude_code = {
     -- Forwarded as `--<key> <value>` to the Claude CLI on session/new and
     -- session/load via the agent SDK's `extraArgs` channel. Use `true` for

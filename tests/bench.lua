@@ -435,6 +435,63 @@ function M.trickled_load_paints(n, answer_load)
   return paints
 end
 
+-- ── conceal_lines per visible row ──────────────────────────────
+-- With conceal on, every redraw asks for the window's bottom line, which runs the treesitter highlighter's
+-- conceal_lines check on each visible row as its own parse, and each parse walks every inline injection in
+-- the buffer. Measuring a screenful of rows after a write does the same work headless.
+-- (config.experimental.strip_conceal_lines highlights the transcript without that rule.)
+
+local VISIBLE_ROWS = 40 -- about a screenful
+
+--- An `n_lines` fenced-markdown transcript in a real sidebar at conceallevel 3, highlighted with or without
+--- `conceal_lines`. `run` writes one line at the tail and measures the last VISIBLE_ROWS rows, the work a
+--- redraw does per visible row; `close` tears the sidebar down.
+---@param n_lines integer
+---@param strip boolean  config.experimental.strip_conceal_lines
+---@return fun() run, fun() close
+function M.visible_rows_scenario(n_lines, strip)
+  local Sidebar = require("emeth.layout.sidebar")
+  local cfg = vim.deepcopy(require("emeth").config)
+  cfg.experimental = { strip_conceal_lines = strip }
+  local v = ChatView:new({ config = cfg })
+  local sb = Sidebar:new(cfg)
+  sb:open(v)
+  local buf, win = v.result_buf, sb.result_win
+  local lines = {}
+  while #lines < n_lines do
+    vim.list_extend(lines, vim.split(FENCED, "\n"))
+  end
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.wo[win].conceallevel = 3
+  vim.api.nvim_win_text_height(win, {})
+  local writes = 0
+  local function run()
+    writes = writes + 1
+    vim.api.nvim_buf_set_lines(buf, -2, -1, false, { "a streamed `chunk` " .. writes })
+    local n = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_win_text_height(win, { start_row = n - VISIBLE_ROWS, end_row = n - 1 })
+  end
+  local function close()
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+    vim.bo[buf].modifiable = false
+    sb:close()
+  end
+  return run, close
+end
+M.VISIBLE_ROWS = VISIBLE_ROWS
+
+--- Median ms of one `visible_rows_scenario` run (make bench).
+---@param n_lines integer
+---@param strip boolean
+---@return number ms
+function M.visible_rows_after_write(n_lines, strip)
+  local run, close = M.visible_rows_scenario(n_lines, strip)
+  local ms = M.time(run, 9)
+  close()
+  return ms
+end
+
 -- ── subagent cards ─────────────────────────────────────────────
 -- A subagent's spawning call sits mid-transcript (at the spawn point) while the
 -- main session keeps writing below it, and its nested calls arrive as hidden
@@ -662,6 +719,20 @@ function M.run()
   print("\nsession load, one replayed update per tick — paints should NOT scale with updates:")
   for _, n in ipairs({ 100, 400 }) do
     print(string.format("  updates=%-5d  %4d paints", n, M.trickled_load_paints(n)))
+  end
+
+  print(
+    "\nmeasuring 40 visible rows after a write, conceallevel 3 — stock grows with the transcript, stripped ~100x lower:"
+  )
+  for _, n in ipairs({ 600, 3000, 9000 }) do
+    print(
+      string.format(
+        "  lines=%-5d  stock %7.2f ms   strip_conceal_lines %7.2f ms",
+        n,
+        M.visible_rows_after_write(n, false),
+        M.visible_rows_after_write(n, true)
+      )
+    )
   end
 
   print("\nsubagent child updates under a mid-transcript card — should be FLAT vs tail size:")

@@ -101,6 +101,7 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     thinking_collapse_lines = 16, -- longer thoughts start folded behind K
     claude_code = { extra_args = nil },        -- CLI flags for claude
     kiro_cli = { mode = nil, rewind_key = "R" },
+    experimental = { strip_conceal_lines = false }, -- see |emeth-experimental|
     acp = {
       debug = false,  -- per-session logs in stdpath("state")/emeth/logs/
       auto_approve_tools = false, -- answer permission requests automatically
@@ -144,6 +145,23 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   connection -- it never spawns an agent -- and is skipped when the agent does
   not advertise the capability. The picker's `S` key also triggers it. Set to
   false to keep the index purely local.
+
+                                                      *emeth-experimental*
+`experimental` ~
+  Opt-in behavior that may change or go away.
+
+  `strip_conceal_lines` (default false): highlight the transcript with the
+  markdown highlights query minus its `conceal_lines` rules (the ones that
+  hide code-fence lines). With conceal on (render-markdown sets
+  'conceallevel' to 3), nvim checks those rules on every redraw by parsing
+  each visible row separately, and each parse walks every inline injection
+  in the buffer, so redraws slow down as the transcript grows: streaming into
+  a ~9k-line transcript measured ~70 ms per redraw, ~5 ms with this on.
+  render-markdown hides fence lines itself (`code.border = "hide"`, its
+  default), so the transcript looks the same; without render-markdown a
+  fence line shows as a blank line instead of disappearing. Only the
+  transcript buffer is affected; markdown files keep the stock query. Read
+  when the sidebar opens.
 
                                                          *emeth-prompt_dirs*
 `prompt_dirs` ~

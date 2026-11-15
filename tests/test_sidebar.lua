@@ -220,3 +220,73 @@ h.describe("mappings.switch_window", function()
     h.is_true(not got.insert_tab, "insert mode disabled")
   end)
 end)
+
+h.describe("experimental.strip_conceal_lines", function()
+  local LT = require("vim.treesitter.languagetree")
+  local FENCED = { "Some `code` and **bold** text.", "```lua", "local x = 1", "```", "After the block." }
+
+  ---Open a sidebar with the option set to `strip` and fill its transcript with fenced markdown at
+  ---conceallevel 3, as render-markdown leaves it.
+  local function open_concealing(strip)
+    vim.o.columns = 200
+    vim.o.lines = 50
+    local cfg = vim.deepcopy(require("emeth").config)
+    cfg.experimental = { strip_conceal_lines = strip }
+    local view = ChatView:new({ config = cfg })
+    local sb = Sidebar:new(cfg)
+    sb:open(view)
+    local buf, win = view.result_buf, sb.result_win
+    local lines = {}
+    for _ = 1, 80 do
+      vim.list_extend(lines, FENCED)
+    end
+    vim.bo[buf].modifiable = true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.wo[win].conceallevel = 3
+    return sb, buf, win
+  end
+
+  local ROWS = 40 -- about a screenful
+
+  ---Treesitter parses run to measure the last ROWS rows after a write. A redraw does the same per visible
+  ---row (the highlighter's on_start asks for the window's bottom line), and with conceal_lines in the query
+  ---each row is its own parse.
+  local function parses_after_write(buf, win)
+    vim.api.nvim_buf_set_lines(buf, -2, -1, false, { "a streamed `chunk`" })
+    local n = vim.api.nvim_buf_line_count(buf)
+    local calls, orig = 0, LT.parse
+    LT.parse = function(...)
+      calls = calls + 1
+      return orig(...)
+    end
+    local ok, err = pcall(vim.api.nvim_win_text_height, win, { start_row = n - ROWS, end_row = n - 1 })
+    LT.parse = orig
+    assert(ok, err)
+    return calls
+  end
+
+  local function close(sb, buf)
+    vim.bo[buf].modifiable = false
+    sb:close()
+  end
+
+  h.it("still highlights the transcript, and leaves the global markdown query alone", function()
+    local sb, buf = open_concealing(true)
+    h.is_true(vim.treesitter.highlighter.active[buf] ~= nil, "transcript must stay treesitter-highlighted")
+    h.is_true(
+      vim.treesitter.query.get("markdown", "highlights").has_conceal_line,
+      "markdown files keep conceal_lines (only the transcript's highlighter drops it)"
+    )
+    close(sb, buf)
+  end)
+
+  h.it("turning it off again restores the stock highlighter on the reused buffer", function()
+    local sb, buf = open_concealing(true)
+    close(sb, buf)
+    local win
+    sb, buf, win = open_concealing(false)
+    h.is_nil(vim.b[buf].emeth_strip_conceal_lines)
+    h.is_true(parses_after_write(buf, win) > 10, "the stripped highlighter must not survive the switch back")
+    close(sb, buf)
+  end)
+end)

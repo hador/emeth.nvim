@@ -152,6 +152,9 @@ require("emeth").setup({
     mode = nil,                 -- default mode/agent for new kiro sessions (see below)
     rewind_key = "R",           -- result-buffer rewind key on a user message; false disables
   },
+  experimental = {
+    strip_conceal_lines = false, -- transcript highlighting without markdown's conceal_lines (faster redraws, see :h emeth-experimental)
+  },
   acp = {
     debug = false,               -- per-session logs in stdpath("state")/emeth/logs/
     auto_approve_tools = false, -- auto-approve tool permission requests

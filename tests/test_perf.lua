@@ -282,3 +282,39 @@ h.describe("perf: a session load paints on an interval", function()
     )
   end)
 end)
+
+h.describe("perf: transcript redraws with experimental.strip_conceal_lines", function()
+  -- With conceal on, every redraw asks for the window's bottom line, which runs the treesitter highlighter's
+  -- conceal_lines check on each visible row as its own parse, and each parse walks every inline injection in
+  -- the buffer: ~60 ms per streamed chunk on a 9k-line transcript. Without the rule (the transcript-only
+  -- query this option installs) a write costs at most one parse, however big the transcript is.
+  local function parses(n_lines, strip)
+    local run, close = bench.visible_rows_scenario(n_lines, strip)
+    local ok, calls = pcall(bench.count_ts_parses, run)
+    close()
+    assert(ok, calls)
+    return calls
+  end
+
+  h.it("measuring the visible rows after a write runs at most one parse at any transcript size", function()
+    local stock = parses(600, false)
+    -- Guards the scenario itself: if this stops parsing per row, the assertions below prove nothing.
+    h.is_true(
+      stock >= bench.VISIBLE_ROWS / 2,
+      ("stock query ran %d parses for %d rows; the scenario no longer exercises conceal_lines"):format(
+        stock,
+        bench.VISIBLE_ROWS
+      )
+    )
+    for _, n in ipairs({ 600, 3000 }) do
+      local stripped = parses(n, true)
+      h.is_true(
+        stripped <= 1,
+        (
+          "with strip_conceal_lines, %d rows of a %d-line transcript ran %d parses (stock: %d); the transcript's "
+          .. "highlighter is checking conceal_lines again"
+        ):format(bench.VISIBLE_ROWS, n, stripped, stock)
+      )
+    end
+  end)
+end)

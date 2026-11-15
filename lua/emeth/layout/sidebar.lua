@@ -14,6 +14,70 @@ local api = vim.api
 local Sidebar = {}
 Sidebar.__index = Sidebar
 
+---The installed markdown highlights query (user and plugin overrides included) without its
+---`conceal_lines` rules, or nil when there is none to strip.
+---@return string|nil
+local function markdown_highlights_without_conceal_lines()
+  local files = vim.treesitter.query.get_files("markdown", "highlights")
+  if #files == 0 then
+    return nil
+  end
+  local parts = {}
+  for _, file in ipairs(files) do
+    local ok, lines = pcall(vim.fn.readfile, file)
+    if not ok then
+      return nil
+    end
+    parts[#parts + 1] = table.concat(lines, "\n")
+  end
+  local src, n = table.concat(parts, "\n"):gsub('%(#set!%s+conceal_lines%s+""%)', "")
+  if n == 0 then
+    return nil
+  end
+  return src
+end
+
+---Treesitter-highlight the transcript as markdown. With `strip_conceal_lines`
+---(config.experimental), its highlighter uses a query without `conceal_lines`: nvim checks
+---that rule on every redraw of a concealing window by parsing each visible row on its own,
+---each parse walking every inline injection in the buffer, so the cost of a redraw grew
+---with the transcript (~70 ms per streamed chunk at ~9k lines, ~5 ms without the rule).
+---Falls back to the stock highlighter if the query can't be built or used.
+---@param buf integer
+---@param strip_conceal_lines? boolean
+local function start_transcript_highlighter(buf, strip_conceal_lines)
+  -- The buffer outlives views, and highlighter.new hands back the active highlighter for the
+  -- same parser unchanged: switching to (or away from) the stripped query needs a stop first.
+  local function restart(fn)
+    if vim.treesitter.highlighter.active[buf] then
+      vim.treesitter.stop(buf)
+    end
+    return fn()
+  end
+  local stripped = vim.b[buf].emeth_strip_conceal_lines == true
+  if strip_conceal_lines then
+    if stripped and vim.treesitter.highlighter.active[buf] then
+      return
+    end
+    local src = markdown_highlights_without_conceal_lines()
+    local ok_parser, parser = pcall(vim.treesitter.get_parser, buf, "markdown")
+    if src and ok_parser and parser and pcall(vim.treesitter.query.parse, "markdown", src) then
+      local ok = restart(function()
+        return pcall(vim.treesitter.highlighter.new, parser, { queries = { markdown = src } })
+      end)
+      if ok then
+        vim.b[buf].emeth_strip_conceal_lines = true
+        return
+      end
+    end
+  end
+  vim.b[buf].emeth_strip_conceal_lines = nil
+  if stripped then
+    restart(function() end)
+  end
+  pcall(vim.treesitter.start, buf, "markdown")
+end
+
 ---@param config chat_ui.Config
 ---@return chat_ui.SidebarLayout
 function Sidebar:new(config)
@@ -110,7 +174,7 @@ function Sidebar:open(view)
   api.nvim_set_option_value("statusline", " ", { win = self.result_win })
   vim.treesitter.language.register("markdown", "emeth")
   api.nvim_set_option_value("filetype", "emeth", { buf = view.result_buf })
-  pcall(vim.treesitter.start, view.result_buf, "markdown")
+  start_transcript_highlighter(view.result_buf, (config.experimental or {}).strip_conceal_lines)
 
   vim.cmd("belowright " .. input_height .. "split")
   self.input_win = api.nvim_get_current_win()
