@@ -23,13 +23,13 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field input_buf number
 ---@field messages chat_ui.Message[]
 ---@field on_submit fun(text: string)|nil
----@field on_remove_file fun(index: number)|nil
 ---@field integration table|nil
 ---@field _config chat_ui.Config
 ---@field _augroup integer  owns the view's buffer-local autocmds; cleared per view
 ---@field _ns_id number
 ---@field _scroll boolean
----@field _context_files string[]
+---@field _mention_at? integer[]  {row, col} (0-based) of the `@` that opened the mention picker
+---@field _mention_skip_tick? integer  input changedtick of insert_mention's own edit (not a typed `@`)
 ---@field _pastes table<integer, { text: string, placeholder: string, mark: integer }>
 ---@field _paste_ns integer
 ---@field _paste_seq integer
@@ -89,12 +89,10 @@ function ChatView:new(opts)
     _augroup = api.nvim_create_augroup("emeth_chat_view", { clear = true }),
     messages = {},
     on_submit = opts.on_submit,
-    on_remove_file = nil,
     integration = nil,
     _config = opts.config,
     _ns_id = api.nvim_create_namespace("emeth_render"),
     _scroll = true,
-    _context_files = {},
     _line_to_msg = {},
     _line_cache = {},
     _dirty = {},
@@ -1057,6 +1055,10 @@ function ChatView:_setup_input()
       local row = api.nvim_win_get_cursor(0)[1]
       local line = api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
 
+      -- The `@` a cancelled pick put back is not a new one being typed (see insert_mention).
+      if self._mention_skip_tick == api.nvim_buf_get_changedtick(buf) then
+        return
+      end
       if line == "@" or line:match("%s@$") then
         local triggers = vim.tbl_keys(self._mention_handlers)
         table.sort(triggers)
@@ -1065,6 +1067,8 @@ function ChatView:_setup_input()
         end
         local col = #line - 1
         api.nvim_buf_set_text(buf, row - 1, col, row - 1, #line, { "" })
+        -- Where a handler's `insert_mention` puts its token.
+        self._mention_at = { row - 1, col }
         vim.schedule(function()
           vim.ui.select(triggers, {
             prompt = "@",
@@ -1075,6 +1079,8 @@ function ChatView:_setup_input()
           }, function(choice)
             if choice and self._mention_handlers[choice] then
               self._mention_handlers[choice].handler()
+            else
+              self:insert_mention(nil) -- cancelled: give the `@` back, so a path can be typed by hand
             end
           end)
         end)
@@ -1117,69 +1123,36 @@ function ChatView:append_fenced(header_or_lines, body)
   api.nvim_buf_set_lines(buf, -1, -1, false, to_append)
 end
 
-function ChatView:open_file_manager()
-  if #self._context_files == 0 then
-    vim.notify("[emeth] No context files", vim.log.levels.INFO)
+---Put `token` and a space where the `@` that opened the mention picker was (the end of the input when
+---there is no such spot), or put the `@` back when `token` is nil (the pick was cancelled), then resume
+---typing right after it. Focus and insert mode are deferred past the picker's close, as in
+---`prefill_command`.
+---@param token? string  e.g. "@lua/emeth/init.lua:L12" (see emeth.mentions)
+function ChatView:insert_mention(token)
+  local buf = self.input_buf
+  if not api.nvim_buf_is_valid(buf) then
     return
   end
-
-  local width = 60
-  local height = math.min(#self._context_files + 2, 20)
-  local float_buf = api.nvim_create_buf(false, true)
-  local win = api.nvim_open_win(float_buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = math.floor((vim.o.lines - height) / 2),
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = "rounded",
-    title = " Context Files (d: remove, q: close) ",
-    title_pos = "center",
-  })
-  vim.cmd("stopinsert")
-
-  local function refresh()
-    local lines = {}
-    for _, f in ipairs(self._context_files) do
-      lines[#lines + 1] = "  @ " .. vim.fn.fnamemodify(f, ":~:.")
-    end
-    if #lines == 0 then
-      if api.nvim_win_is_valid(win) then
-        api.nvim_win_close(win, true)
-      end
+  local at = self._mention_at
+  self._mention_at = nil
+  local text = token and (token .. " ") or "@"
+  local last = api.nvim_buf_line_count(buf) - 1
+  local row = (at and at[1] <= last) and at[1] or last
+  local line = api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+  local col = (at and at[1] <= last) and math.min(at[2], #line) or #line
+  api.nvim_buf_set_text(buf, row, col, row, col, { text })
+  -- Our own edit reaches TextChangedI once insert mode resumes; a put-back `@` must not reopen the picker.
+  self._mention_skip_tick = api.nvim_buf_get_changedtick(buf)
+  local at_eol = col >= #line -- nothing after the insertion: append (`A`) rather than insert before a char
+  vim.schedule(function()
+    local win = vim.fn.bufwinid(buf)
+    if win == -1 then
       return
     end
-    api.nvim_set_option_value("modifiable", true, { buf = float_buf })
-    api.nvim_buf_set_lines(float_buf, 0, -1, false, lines)
-    api.nvim_set_option_value("modifiable", false, { buf = float_buf })
-  end
-
-  refresh()
-  api.nvim_set_option_value("modifiable", false, { buf = float_buf })
-  api.nvim_set_option_value("buftype", "nofile", { buf = float_buf })
-  api.nvim_set_option_value("cursorline", true, { win = win })
-
-  local function remove_under_cursor()
-    local row = api.nvim_win_get_cursor(win)[1]
-    if row > 0 and row <= #self._context_files and self.on_remove_file then
-      self.on_remove_file(row)
-      refresh()
-    end
-  end
-
-  local function close()
-    if api.nvim_win_is_valid(win) then
-      api.nvim_win_close(win, true)
-    end
-  end
-
-  for _, key in ipairs({ "d", "x", "<C-x>" }) do
-    api.nvim_buf_set_keymap(float_buf, "n", key, "", { noremap = true, silent = true, callback = remove_under_cursor })
-  end
-  for _, key in ipairs({ "q", "<Esc>" }) do
-    api.nvim_buf_set_keymap(float_buf, "n", key, "", { noremap = true, silent = true, callback = close })
-  end
+    api.nvim_set_current_win(win)
+    pcall(api.nvim_win_set_cursor, win, { row + 1, col + #text })
+    vim.cmd(at_eol and "startinsert!" or "startinsert")
+  end)
 end
 
 ---Pre-fill the input buffer with `/<name> ` (and the hint as a real-text
@@ -1226,11 +1199,6 @@ function ChatView:prefill_command(name, hint)
     pcall(api.nvim_win_set_cursor, 0, { 1, cursor_col })
     vim.cmd("startinsert")
   end)
-end
-
----@param files string[]
-function ChatView:set_context_files(files)
-  self._context_files = files
 end
 
 return ChatView

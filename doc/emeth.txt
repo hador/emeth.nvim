@@ -87,7 +87,6 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
     },
     default_provider = nil,       -- nil: :Emeth asks which provider
     resume_last_session = false,  -- auto-resume last session on open
-    auto_add_current_file = true, -- add current buffer as context
     slow_connect_ms = 10000,      -- nudge if connect exceeds this (0 disables)
     sync_remote_sessions = true,  -- refresh the session index from a live agent
     prompt_dirs = {},             -- e.g. { "~/.config/prompts" }
@@ -122,11 +121,6 @@ Call `require("emeth").setup(opts)` with any of the following: >lua
   Name of the provider to connect to when `:Emeth` is called without an
   argument. When unset, `:Emeth` asks which configured provider to use (those
   whose command isn't on PATH are marked); cancelling the pick does nothing.
-
-                                                  *emeth-auto_add_current_file*
-`auto_add_current_file` ~
-  When true (default), the buffer the user was editing when opening the
-  sidebar is automatically added as file context.
 
                                                        *emeth-slow_connect_ms*
 `slow_connect_ms` ~
@@ -251,8 +245,10 @@ require("emeth").cancel()                                    *emeth.cancel()*
   session is still connecting. Bound to <C-c> in the chat windows.
 
 require("emeth").send_selection()                      *emeth.send_selection()*
-  Send the current visual selection to the chat as a fenced code block.
-  Exits visual mode and focuses the sidebar.
+  Paste the current visual selection into the input as a fenced code block,
+  headed by a mention of where it came from (`@path:L10-L20`), so the agent
+  gets the file and lines with the prompt (|emeth-mentions|). Exits visual
+  mode and focuses the sidebar.
 
 ==============================================================================
 7. MAPPINGS                                                   *emeth-mappings*
@@ -325,15 +321,22 @@ the question is answered.
 ==============================================================================
 9. MENTIONS                                                   *emeth-mentions*
 
-Type these in the input buffer to attach context:
+File context is whatever the prompt mentions. An `@path` token naming a
+readable file -- relative to the cwd, `~/`, or absolute, optionally with a
+line (`@a.lua:L12`) or range (`@a.lua:L12-L40`) -- is sent to the agent as a
+`resource_link` with that prompt, and only that prompt: nothing is attached
+that isn't in the text you send, and nothing carries over to later turns. The
+sent message shows the file count; `K` lists them.
 
-  Mention      Action ~
-  `@file`        Pick a project file
-  `@buffers`     Attach all open buffers
-  `@files`       Review/remove attached files
-  `@diagnostics` Attach LSP diagnostics from the current buffer
-  `@workspace`   Add a workspace root (sent as `additionalDirectories`)
-  `@roots`       Review/remove workspace roots
+Typing `@` at the start of a line or after a space opens a picker (cancel it
+to type a path by hand):
+
+  Entry          Action ~
+  `file`         Pick a project file; inserts `@path`
+  `current`      Insert `@path:LINE` for the source window's file and line
+  `diagnostics`  Paste the source buffer's LSP diagnostics as a fenced block
+  `workspace`    Add a workspace root (sent as `additionalDirectories`)
+  `roots`        Review/remove workspace roots
 
 Prompt templates come from the `/prompts` slash command
 (|emeth-slash-commands|).

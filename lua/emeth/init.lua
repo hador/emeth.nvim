@@ -16,7 +16,6 @@
 ---@field prompt_dirs string[]
 ---@field prompt_edit_before_send boolean
 ---@field default_provider string|nil
----@field auto_add_current_file boolean
 ---@field fold_pasted_text boolean
 ---@field paste_fold_min_lines number
 ---@field paste_fold_min_chars number
@@ -101,7 +100,6 @@ local defaults = {
   -- mid-thought folds the block away on its own — which is the point.
   thinking_collapse_lines = 16,
   default_provider = nil,
-  auto_add_current_file = true,
   -- Opt-in behavior that may change or go away.
   experimental = {
     -- Highlight the transcript with the markdown highlights query minus its `conceal_lines` (the rule
@@ -253,14 +251,7 @@ end
 ---@param opts? { fresh?: boolean }
 local function connect(provider, opts)
   opts = opts or {}
-  local origin_buf = vim.api.nvim_get_current_buf()
-  local origin_file = vim.api.nvim_buf_get_name(origin_buf)
-
   local integration = start_integration(provider)
-
-  if M.config.auto_add_current_file and origin_file ~= "" and vim.fn.filereadable(origin_file) == 1 then
-    integration.add_file(origin_file)
-  end
 
   local resumed = false
   if not opts.fresh and M.config.resume_last_session then
@@ -439,18 +430,26 @@ function M.cancel()
   end
 end
 
----Send the current visual selection to the chat as a fenced code block.
+---Send the current visual selection to the chat as a fenced code block, headed by a mention of where it
+---came from (`@path:L10-L20`), so the agent gets the file and the exact lines along with the text.
 function M.send_selection()
   if not M._integration then
     vim.notify("[emeth] No active chat. Open one first with :Emeth", vim.log.levels.WARN)
     return
   end
-  local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = vim.fn.mode() })
+  local from, to = vim.fn.getpos("v"), vim.fn.getpos(".")
+  local lines = vim.fn.getregion(from, to, { type = vim.fn.mode() })
   if #lines == 0 then
     return
   end
-  local fname = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
-  assert(_view):append_fenced({ "From " .. fname .. ":" }, lines)
+  local name = vim.api.nvim_buf_get_name(0)
+  local header
+  if name ~= "" and vim.fn.filereadable(name) == 1 then
+    header = require("emeth.mentions").format(name, math.min(from[2], to[2]), math.max(from[2], to[2])) .. ":"
+  else
+    header = "From " .. (name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]") .. ":"
+  end
+  assert(_view):append_fenced({ header }, lines)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
   M.open()
 end

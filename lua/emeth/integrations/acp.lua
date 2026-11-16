@@ -27,6 +27,7 @@
 local AcpPrompts = require("emeth.integrations.acp_prompts")
 local AcpUpdates = require("emeth.integrations.acp_updates")
 local Commands = require("emeth.commands")
+local Mentions = require("emeth.mentions")
 local Message = require("emeth.message")
 local Roots = require("emeth.integrations.roots")
 local Sessions = require("emeth.sessions")
@@ -59,7 +60,6 @@ function M.setup_integration(view, session)
     return { tool_map = {}, subagents = {} }
   end
   local stream = new_stream()
-  local selected_files = {} ---@type string[]
 
   local roots = Roots.attach()
   local pending_reloads = {} ---@type table<string, { line?: integer, follow: boolean }>  -- path → reload record
@@ -240,10 +240,6 @@ function M.setup_integration(view, session)
     stream = new_stream()
   end
 
-  local function refresh_file_display()
-    view:set_context_files(selected_files)
-  end
-
   -- ── Remote session list ─────────────────────────────────────────
   -- Pull the agent's own `session/list` into the local index, once per
   -- successful lifecycle (and on the picker's `S`). Enrichment only: the
@@ -418,26 +414,13 @@ function M.setup_integration(view, session)
     end)
   end
 
-  -- ── File context ───────────────────────────────────────────────
-
-  view.on_remove_file = function(idx)
-    table.remove(selected_files, idx)
-    refresh_file_display()
-  end
-
-  local function add_file(path)
-    path = vim.fn.fnamemodify(path, ":p")
-    if not vim.tbl_contains(selected_files, path) then
-      selected_files[#selected_files + 1] = path
-      refresh_file_display()
-    end
-  end
-
   -- ── @mention handlers ──────────────────────────────────────────
+  -- File context is the `@path` tokens in the prompt itself (see emeth.mentions): these insert one at the
+  -- `@` the user typed, and submit sends what the text names, for that prompt only.
 
   view._mention_handlers = {
     file = {
-      desc = "Add a file from the project",
+      desc = "Mention a file from the project",
       handler = function()
         local cwd = vim.fn.getcwd()
         local files
@@ -454,38 +437,28 @@ function M.setup_integration(view, session)
             files[i] = vim.fn.fnamemodify(f, ":.")
           end
         end
-        vim.ui.select(files, { prompt = "Add file to context:" }, function(choice)
-          if choice then
-            add_file(choice)
-          end
+        vim.ui.select(files, { prompt = "Mention file:" }, function(choice)
+          view:insert_mention(choice and Mentions.format(choice, nil, nil, cwd) or nil)
         end)
       end,
     },
-    buffers = {
-      desc = "Add all open buffers",
+    current = {
+      desc = "Mention the source window's buffer at its cursor line",
       handler = function()
-        local added = 0
-        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-          if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted then
-            local name = vim.api.nvim_buf_get_name(buf)
-            if name ~= "" and vim.fn.filereadable(name) == 1 and not vim.tbl_contains(selected_files, name) then
-              selected_files[#selected_files + 1] = name
-              added = added + 1
-            end
-          end
+        local win = util.find_source_win()
+        local name = win and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)) or ""
+        if name == "" or vim.fn.filereadable(name) == 0 then
+          vim.notify("[emeth] No file in the source window", vim.log.levels.WARN)
+          view:insert_mention(nil)
+          return
         end
-        refresh_file_display()
-        vim.notify(("[emeth] Added %d buffer(s) to context"):format(added), vim.log.levels.INFO)
-      end,
-    },
-    files = {
-      desc = "Manage context files",
-      handler = function()
-        view:open_file_manager()
+        view:insert_mention(Mentions.format(name, vim.api.nvim_win_get_cursor(win)[1]))
       end,
     },
     diagnostics = {
-      desc = "LSP diagnostics from current buffer",
+      -- Pickers fuzzy-match the description too: keep words of other entries' names ("current",
+      -- "file") out of it, or typing `current` lands here.
+      desc = "LSP diagnostics of the source buffer",
       handler = function()
         local win = util.find_source_win()
         if not win then
@@ -570,20 +543,22 @@ function M.setup_integration(view, session)
 
   -- ── Submit ─────────────────────────────────────────────────────
 
-  ---Prompt content for `text`: the @-mentioned files, then the text itself.
+  ---Prompt content for `text`: a resource_link per file its `@path` tokens name (this prompt only;
+  ---nothing carries over to the next turn), then the text itself, tokens and all.
   ---@param text string
-  ---@return table[]
+  ---@return table[] prompt, string[] files  absolute paths, in mention order
   local function build_prompt(text)
-    local prompt = {}
-    for _, fpath in ipairs(selected_files) do
+    local prompt, files = {}, {}
+    for _, m in ipairs(Mentions.parse(text)) do
+      files[#files + 1] = m.path
       prompt[#prompt + 1] = {
         type = "resource_link",
-        uri = "file://" .. fpath,
-        name = vim.fn.fnamemodify(fpath, ":t"),
+        uri = "file://" .. m.path,
+        name = vim.fn.fnamemodify(m.path, ":t"),
       }
     end
     prompt[#prompt + 1] = { type = "text", text = text }
-    return prompt
+    return prompt, files
   end
 
   ---Upsert this session's index entry. The cwd is the session's bound one, not
@@ -631,11 +606,12 @@ function M.setup_integration(view, session)
   ---input back (a steered message's replay is consumed agent-side), so this is
   ---the only place a user message comes from.
   ---@param text string
+  ---@param files string[]  the files the prompt sends (build_prompt)
   ---@return chat_ui.Message
-  local function add_user_message(text)
+  local function add_user_message(text, files)
     local exts = session.extensions or {}
     local msg = Message:new("user", text, {
-      selected_files = vim.deepcopy(selected_files),
+      selected_files = files,
       model = exts.model_id,
       mode = exts.mode_id,
       -- The "ask" badge is a transient agent-state marker (a pending request is open); a steered message cut
@@ -689,8 +665,8 @@ function M.setup_integration(view, session)
     -- "generating" forever.
     if session:is_connected() and (activity == "generating" or activity == "thinking") and steering_supported() then
       local strat = assert(steering) -- steering_supported() implies it
-      local prompt = build_prompt(text)
-      local msg = add_user_message(text)
+      local prompt, files = build_prompt(text)
+      local msg = add_user_message(text, files)
       -- Close the text/thought blocks the turn was streaming into. They sit
       -- ABOVE the message we just appended, so leaving them open sends the
       -- agent's reply to the steer into a block that renders before the prompt
@@ -744,8 +720,9 @@ function M.setup_integration(view, session)
       return
     end
 
-    add_user_message(text)
-    start_turn(build_prompt(text))
+    local prompt, files = build_prompt(text)
+    add_user_message(text, files)
+    start_turn(prompt)
   end
 
   -- ── Session events ─────────────────────────────────────────────
@@ -1291,8 +1268,6 @@ function M.setup_integration(view, session)
       end
       view:clear()
       reset_state()
-      selected_files = {}
-      refresh_file_display()
       -- Keep roots as-is so a new session inherits the user's roots.
       lifecycle({}, function(opts, done)
         session:new_session(opts, function(err)
@@ -1386,8 +1361,6 @@ function M.setup_integration(view, session)
     end,
 
     cancel = do_cancel,
-
-    add_file = add_file,
 
     ---Re-assert what the winbar caches. It is only written on transitions, so one
     ---that missed a change would otherwise stay wrong for the rest of the turn.

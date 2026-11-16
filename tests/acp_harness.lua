@@ -34,7 +34,6 @@ function M.make_view()
   local view = {
     messages = {},
     integration = nil,
-    _context_files = {},
     _mention_handlers = {},
   }
 
@@ -114,13 +113,13 @@ function M.make_view()
     end
   end
 
-  function view:set_context_files(files)
-    self._context_files = files
-  end
-
   function view:append_fenced() end
 
-  function view:open_file_manager() end
+  -- Records the tokens a mention handler inserts (nil: the pick was cancelled).
+  view.mentions = {}
+  function view:insert_mention(token)
+    self.mentions[#self.mentions + 1] = token or false
+  end
 
   -- Records that focus moved to the input box (real impl scans windows).
   view.focus_input_count = 0

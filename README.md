@@ -35,7 +35,7 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 - The agent can ask you questions, answered inline without stealing focus
 - Steering: redirect a running turn instead of cancelling it
 - Winbar with spinner, context usage %, compaction indicator
-- File context mentions: `@file`, `@buffers`, `@files`, `@diagnostics`
+- File context as `@path[:Lstart-Lend]` mentions in the prompt, sent with that prompt only (`@` opens a picker)
 - Workspace roots (`@workspace`, `@roots`) sent as ACP `additionalDirectories`
 - Prompt templates via `/prompts` (local `.md` files from `prompt_dirs`)
 - Agent config options (model, mode, effort, …) as `/model`-style slash commands
@@ -87,7 +87,6 @@ Full example:
   opts = {
     default_provider = "kiro-cli",
     resume_last_session = true,
-    auto_add_current_file = true,
     slow_connect_ms = 10000, -- nudge if a connect takes this long (0 disables)
     prompt_dirs = { "~/.config/prompts" },
     sidebar = {
@@ -134,7 +133,6 @@ require("emeth").setup({
   },
   default_provider = nil,       -- nil: :Emeth asks which provider to use
   resume_last_session = false,  -- auto-resume last session on open
-  auto_add_current_file = true, -- add current buffer as context on open
   prompt_dirs = {},             -- e.g. { "~/.config/prompts", ".prompts" }
   prompt_edit_before_send = true, -- paste prompt into input for editing; false = send immediately
   fold_pasted_text = true,      -- collapse large pastes to one placeholder line
@@ -209,7 +207,7 @@ To cancel a running request (or abort a stuck connection), press `<C-c>` in eith
 | `require("emeth").history()` | Pick and resume a previous session |
 | `require("emeth").resume(id, provider?)` | Resume a session by id (in its recorded provider) |
 | `require("emeth").cancel()` | Cancel current AI request (or abort a stuck connection) |
-| `require("emeth").send_selection()` | Send visual selection to chat |
+| `require("emeth").send_selection()` | Paste the visual selection into the input as a fenced block headed `@path:Lstart-Lend` |
 
 ### Provider switching
 
@@ -352,16 +350,20 @@ Put the cursor on a line and press `<CR>`:
 
 ### Mentions
 
-Type these in the input buffer:
+File context is whatever the prompt mentions: an `@path` token (`@lua/emeth/init.lua`, `@src/a.rs:L12`,
+`@src/a.rs:L12-L40`; relative to the cwd, `~/`, or absolute) naming a readable file is sent to the agent as a
+`resource_link` along with that prompt, and only that prompt. Nothing is attached that isn't in the text you
+send, and nothing carries over to later turns. The sent message shows the file count; `K` lists them.
 
-| Mention | Action |
-|---------|--------|
-| `@file` | Pick a project file to add as context |
-| `@buffers` | Attach all open buffers as context |
-| `@files` | Review/remove attached context files |
-| `@diagnostics` | Attach LSP diagnostics from current buffer |
-| `@workspace` | Add a workspace root directory (sent as `additionalDirectories` on the next session start) |
-| `@roots` | Review/remove workspace roots |
+Typing `@` (at the start of a line or after a space) opens a picker; cancel it to type a path by hand:
+
+| Entry | Action |
+|-------|--------|
+| `file` | Pick a project file; inserts `@path` |
+| `current` | Inserts `@path:LINE` for the source window's file and cursor line |
+| `diagnostics` | Paste the source buffer's LSP diagnostics as a fenced block |
+| `workspace` | Add a workspace root directory (sent as `additionalDirectories` on the next session start) |
+| `roots` | Review/remove workspace roots |
 
 Prompts come from the `/prompts` slash command, which reads the `.md` files in `prompt_dirs`. When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
 
