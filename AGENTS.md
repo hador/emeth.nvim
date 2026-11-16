@@ -5,6 +5,21 @@ ACP (Agent Client Protocol) chat sidebar for Neovim ≥ 0.10. Talks to coding ag
 spawned as subprocesses, communicate over JSON-RPC, and emeth renders their transcripts
 in a split sidebar with an edit-able input buffer.
 
+## Public repository (hard rule)
+
+This repo is public. Nothing from the author's employer may appear in it -- not in code,
+comments, tests, fixtures, docs, or commit messages. That covers internal product, package,
+service and tool names; internal hosts, URLs and ticket systems; work-machine paths; and
+work identities. Write generic stand-ins instead (`acme`, `/home/me/code/...`,
+`myagent://...`), even when the real case is what prompted the change. Commits are authored
+as `Andrea Fagiani <andfagiani@gmail.com>` (set in this clone's local git config).
+
+Local git hooks enforce it (`core.hooksPath` points at a guard outside the repo, whose
+deny-list stays private so the list itself never leaks): pre-commit checks staged lines and
+identity, commit-msg the message, and pre-push every commit being pushed -- which also covers
+rebases and other rewrites that skip the commit hooks. Never pass `--no-verify`. If the guard
+trips, reword; if the text is already committed, rewrite those commits before pushing.
+
 ## Commands
 
 All from the repo root:
