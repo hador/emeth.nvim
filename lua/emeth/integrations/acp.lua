@@ -353,6 +353,10 @@ function M.setup_integration(view, session)
     -- per update (see ChatView:hold_render). Released when the lifecycle settles, superseded or
     -- not; disconnect drops a hold whose answer never came.
     local release_paint = opts.kind == "load" and hold_paint() or nil
+    if opts.kind == "load" then
+      -- A loaded session opens at the end of its history, even with the cursor in the transcript.
+      view:follow_end()
+    end
     local emeth = require("emeth")
     local sidebar = emeth.get_sidebar()
     if sidebar and sidebar.result_win then

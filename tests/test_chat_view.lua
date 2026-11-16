@@ -374,6 +374,76 @@ h.describe("ChatView render with concealing windows", function()
   end)
 end)
 
+h.describe("ChatView following the end of the transcript", function()
+  local Message = require("emeth.message")
+
+  -- A focused transcript window, cursor on `row`, after `n` messages were painted.
+  local function focused_view(n, row)
+    local view = make_view()
+    for i = 1, n do
+      view:add_message(Message:new("assistant", "line " .. i))
+    end
+    view:_render()
+    local prev = vim.api.nvim_get_current_win()
+    local win =
+      vim.api.nvim_open_win(view.result_buf, true, { relative = "editor", row = 0, col = 0, width = 40, height = 5 })
+    vim.api.nvim_win_set_cursor(win, { row == "last" and vim.api.nvim_buf_line_count(view.result_buf) or row, 0 })
+    return view, win, prev
+  end
+  local function last_row(view)
+    return vim.api.nvim_buf_line_count(view.result_buf)
+  end
+  local function settle()
+    vim.wait(50, function()
+      return false
+    end)
+  end
+  local function close(win, prev)
+    vim.api.nvim_win_close(win, true)
+    if vim.api.nvim_win_is_valid(prev) then
+      vim.api.nvim_set_current_win(prev)
+    end
+  end
+
+  h.it("leaves a focused transcript's cursor alone while it is reading above the end", function()
+    local view, win, prev = focused_view(4, 1)
+    view:add_message(Message:new("assistant", "more"))
+    view:_render()
+    settle()
+    h.eq(1, vim.api.nvim_win_get_cursor(win)[1])
+    close(win, prev)
+  end)
+
+  h.it("keeps a focused transcript on the end when its cursor is on the last row", function()
+    local view, win, prev = focused_view(4, "last")
+    view:add_message(Message:new("assistant", "more\nand more"))
+    view:_render()
+    settle()
+    h.eq(last_row(view), vim.api.nvim_win_get_cursor(win)[1])
+    close(win, prev)
+  end)
+
+  h.it("follow_end moves a focused transcript to the end once its paint lands outside a hold", function()
+    local view, win, prev = focused_view(4, 1)
+    view:follow_end()
+    local release = view:hold_render()
+    view:add_message(Message:new("assistant", "replayed"))
+    view:_render() -- a paint inside the hold: the request survives it
+    release()
+    view:add_message(Message:new("assistant", "last of the history"))
+    view:_render()
+    settle()
+    h.eq(last_row(view), vim.api.nvim_win_get_cursor(win)[1])
+    -- Done: reading above the end again is left alone.
+    vim.api.nvim_win_set_cursor(win, { 1, 0 })
+    view:add_message(Message:new("assistant", "live"))
+    view:_render()
+    settle()
+    h.eq(1, vim.api.nvim_win_get_cursor(win)[1])
+    close(win, prev)
+  end)
+end)
+
 h.describe("ChatView:update_message defer_render + flush", function()
   local Message = require("emeth.message")
 

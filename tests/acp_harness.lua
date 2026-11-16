@@ -98,6 +98,12 @@ function M.make_view()
 
   function view:invalidate() end
 
+  -- A load asks the view to open at the end of the history (ChatView's own tests cover the cursor).
+  view.follow_end_calls = 0
+  function view:follow_end()
+    self.follow_end_calls = self.follow_end_calls + 1
+  end
+
   -- Paint holds: the real view paints on an interval while one is held (ChatView's
   -- own tests cover that); the mock counts outstanding holds so a lifecycle test can
   -- see a load take one and give it back.

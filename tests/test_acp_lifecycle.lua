@@ -284,6 +284,7 @@ h.describe("acp integration: paint hold during a load", function()
     local session, view, integration, answer = pending_load()
     integration.connect_and_load("sess-load")
     h.eq(1, view.holds, "a load paints on an interval while its replay streams in")
+    h.eq(1, view.follow_end_calls, "a load opens at the end of its history")
     session.session_id = "sess-load"
     answer(nil)
     h.eq(0, view.holds, "the hold ends with the load")

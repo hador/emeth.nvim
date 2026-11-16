@@ -46,6 +46,8 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _render_pending? boolean
 ---@field _render_timer? uv.uv_timer_t  a held paint waiting out its interval
 ---@field _holds? integer  outstanding hold_render() calls
+---@field _follow_end? boolean  follow_end() asked; cleared by the first paint outside a hold
+---@field _at_end? table<integer, true>  windows whose cursor was on the last row when this paint began
 ---@field _last_paint? integer  vim.uv.now() of the last paint
 local ChatView = {}
 ChatView.__index = ChatView
@@ -696,11 +698,29 @@ local function without_conceal(buf, fn)
 end
 ChatView._without_conceal = without_conceal
 
+---Follow the end of the transcript in every window showing it, focused or not, until a paint with no
+---render hold outstanding has done so. For a session load: the transcript was just replaced, so where the
+---cursor sat before means nothing, and the history should open at its end even when the transcript window
+---has focus (the usual rule leaves a focused transcript alone, since its user may be reading).
+function ChatView:follow_end()
+  self._follow_end = true
+end
+
 function ChatView:_render()
   local buf = self.result_buf
   if not api.nvim_buf_is_valid(buf) then
     return
   end
+  -- Windows whose cursor is on the last row keep following the end as rows arrive, focused or not (like
+  -- `tail -f`): measured before this paint adds rows.
+  local last = api.nvim_buf_line_count(buf)
+  local at_end = {}
+  for _, win in ipairs(api.nvim_list_wins()) do
+    if api.nvim_win_get_buf(win) == buf and api.nvim_win_get_cursor(win)[1] >= last then
+      at_end[win] = true
+    end
+  end
+  self._at_end = at_end
   self._last_paint = vim.uv.now()
   without_conceal(buf, function()
     self:_render_rows()
@@ -815,12 +835,19 @@ function ChatView:_render_rows()
   end
   self._line_to_msg_max = row
 
+  local at_end = self._at_end or {}
+  self._at_end = nil
   if self._scroll then
+    -- A follow_end() request holds until a paint outside any render hold (the load's last one) has run.
+    local force = self._follow_end == true
+    if force and (self._holds or 0) == 0 then
+      self._follow_end = nil
+    end
     vim.schedule(function()
       local cur_buf = api.nvim_get_current_buf()
       for _, win in ipairs(api.nvim_list_wins()) do
         if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == buf then
-          if cur_buf ~= buf then
+          if cur_buf ~= buf or force or at_end[win] then
             local line_count = api.nvim_buf_line_count(buf)
             -- Moving the cursor re-evaluates concealed lines too (see without_conceal).
             without_conceal(buf, function()
