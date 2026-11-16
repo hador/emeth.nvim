@@ -770,77 +770,15 @@ h.describe("ACPClient _handle_write_text_file", function()
   end)
 end)
 
--- ── create_session additionalDirectories ──────────────────────
+-- ── create_session ────────────────────────────────────────────
 
 h.describe("ACPClient create_session", function()
   h.it("3rd arg may be a callback (back-compat with no opts)", function()
     local c, sent = make_client()
     c:create_session("/cwd", {}, function(_, _, _) end)
-    -- Should have sent a session/new request without additionalDirectories
     local decoded = vim.json.decode(sent[1])
     h.eq("session/new", decoded.method)
     h.eq("/cwd", decoded.params.cwd)
-    h.is_nil(decoded.params.additionalDirectories)
-  end)
-
-  h.it("forwards additionalDirectories when capability is advertised", function()
-    local c, sent = make_client()
-    c.agent_capabilities = { sessionCapabilities = { additionalDirectories = true } }
-    c:create_session("/cwd", {}, { additionalDirectories = { "/a", "/b" } }, function() end)
-    local decoded = vim.json.decode(sent[1])
-    h.eq({ "/a", "/b" }, decoded.params.additionalDirectories)
-  end)
-
-  h.it("strips additionalDirectories when capability is not advertised", function()
-    local c, sent = make_client()
-    c.agent_capabilities = { sessionCapabilities = {} }
-    c:create_session("/cwd", {}, { additionalDirectories = { "/a" } }, function() end)
-    local decoded = vim.json.decode(sent[1])
-    h.is_nil(decoded.params.additionalDirectories)
-  end)
-
-  h.it("drops roots on load and fork too, warning once per client", function()
-    local c, sent = make_client()
-    c.agent_capabilities = { loadSession = true, sessionCapabilities = { fork = {} } }
-    -- Let warnings scheduled by earlier tests' clients fire before counting.
-    vim.wait(50, function()
-      return false
-    end)
-    local warnings = 0
-    local orig = vim.notify
-    vim.notify = function(msg)
-      if type(msg) == "string" and msg:find("workspace roots ignored", 1, true) then
-        warnings = warnings + 1
-      end
-    end
-    local opts = { additionalDirectories = { "/a" } }
-    c:create_session("/cwd", {}, opts, function() end)
-    c:load_session("s1", "/cwd", {}, opts, function() end)
-    c:fork_session("s1", "/cwd", {}, opts, function() end)
-    vim.wait(50, function()
-      return false
-    end)
-    vim.notify = orig
-    for i = 1, 3 do
-      h.is_nil(vim.json.decode(sent[i]).params.additionalDirectories)
-    end
-    h.eq(1, warnings, "one warning per client, not one per session request")
-  end)
-
-  h.it("strips additionalDirectories when agent_capabilities is nil", function()
-    local c, sent = make_client()
-    c.agent_capabilities = nil
-    c:create_session("/cwd", {}, { additionalDirectories = { "/a" } }, function() end)
-    local decoded = vim.json.decode(sent[1])
-    h.is_nil(decoded.params.additionalDirectories)
-  end)
-
-  h.it("ignores empty additionalDirectories list", function()
-    local c, sent = make_client()
-    c.agent_capabilities = { sessionCapabilities = { additionalDirectories = true } }
-    c:create_session("/cwd", {}, { additionalDirectories = {} }, function() end)
-    local decoded = vim.json.decode(sent[1])
-    h.is_nil(decoded.params.additionalDirectories)
   end)
 
   h.it("forwards opts.meta as request _meta", function()
@@ -863,7 +801,7 @@ h.describe("ACPClient create_session", function()
   end)
 end)
 
--- ── load_session additionalDirectories ────────────────────────
+-- ── load_session ──────────────────────────────────────────────
 
 h.describe("ACPClient load_session", function()
   h.it("3rd-arg-as-callback back-compat path", function()
@@ -873,18 +811,6 @@ h.describe("ACPClient load_session", function()
     local decoded = vim.json.decode(sent[1])
     h.eq("session/load", decoded.method)
     h.eq("sid", decoded.params.sessionId)
-    h.is_nil(decoded.params.additionalDirectories)
-  end)
-
-  h.it("forwards additionalDirectories when both loadSession and dir cap supported", function()
-    local c, sent = make_client()
-    c.agent_capabilities = {
-      loadSession = true,
-      sessionCapabilities = { additionalDirectories = true },
-    }
-    c:load_session("sid", "/cwd", {}, { additionalDirectories = { "/x" } }, function() end)
-    local decoded = vim.json.decode(sent[1])
-    h.eq({ "/x" }, decoded.params.additionalDirectories)
   end)
 
   h.it("returns error when loadSession capability missing", function()

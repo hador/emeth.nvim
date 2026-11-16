@@ -335,8 +335,6 @@ to type a path by hand):
   `file`         Pick a project file; inserts `@path`
   `current`      Insert `@path:LINE` for the source window's file and line
   `diagnostics`  Paste the source buffer's LSP diagnostics as a fenced block
-  `workspace`    Add a workspace root (sent as `additionalDirectories`)
-  `roots`        Review/remove workspace roots
 
 Prompt templates come from the `/prompts` slash command
 (|emeth-slash-commands|).

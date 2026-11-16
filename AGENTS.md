@@ -88,8 +88,7 @@ transforms (`set_transform_update` / `set_transform_elicitation`) or steering (`
 The generic layer knows only this shape — it knows nothing about specific agents.
 
 Split-out submodules: `acp_updates.lua` (one handler per `sessionUpdate` type),
-`acp_prompts.lua` (permission + elicitation prompt rendering), `roots.lua`
-(workspace roots / `additionalDirectories` + `@workspace`/`@roots` mentions).
+`acp_prompts.lua` (permission + elicitation prompt rendering).
 
 ### UI (`lua/emeth/ui/`, `lua/emeth/layout/`)
 
@@ -125,8 +124,9 @@ Split-out submodules: `acp_updates.lua` (one handler per `sessionUpdate` type),
   It works by overriding the *global* `vim.paste` while the view is up — teardown must
   restore the true original (tracked so re-install wraps the original, not a wrapper).
 - **Session index** is `stdpath("state")/emeth/sessions.json` (`sessions.lua`), entries:
-  `{ session_id, provider, cwd, title?, additional_directories?, forked_from?,
-  created_at, updated_at }`. `forked_from` is **write-once** (lineage must survive
+  `{ session_id, provider, cwd, title?, title_source?, forked_from?, created_at,
+  updated_at }` (entries written before workspace roots were removed may still carry
+  an ignored `additional_directories`). `forked_from` is **write-once** (lineage must survive
   later lazy saves). It is the *only* cross-directory source of sessions — the agent's
   own `session/list` is per-cwd and needs a live connection.
 - **Tests share one process.** `tests/minimal_init.lua` sandboxes

@@ -116,7 +116,7 @@ local function update_entry(session_id, fn)
   end
 end
 
----@param entry { session_id: string, provider: string, cwd: string, title?: string, additional_directories?: string[], forked_from?: string }
+---@param entry { session_id: string, provider: string, cwd: string, title?: string, forked_from?: string }
 function M.save(entry)
   local entries = read_index()
   local now = now_iso()
@@ -126,9 +126,6 @@ function M.save(entry)
       if entry.title then
         e.title = entry.title
         e.title_source = "auto"
-      end
-      if entry.additional_directories then
-        e.additional_directories = entry.additional_directories
       end
       -- Lineage is write-once: later lazy saves (first-prompt record) don't carry
       -- it, so never clear it, and don't let a re-save overwrite a known parent.
@@ -146,7 +143,6 @@ function M.save(entry)
     cwd = entry.cwd,
     title = entry.title,
     title_source = "auto",
-    additional_directories = entry.additional_directories,
     forked_from = entry.forked_from,
     created_at = now,
     updated_at = now,
@@ -216,11 +212,10 @@ end
 --- title wins over an auto-derived one, but never over a user rename
 --- (`title_source == "user"`). `cwd` adopts the agent's (it is the cwd of
 --- record for that provider). `updated_at` takes the *later* of the two, so an
---- import never demotes a session just used in emeth. `additional_directories`
---- replaces wholesale — spec: never merge with prior values. `forked_from` is
+--- import never demotes a session just used in emeth. `forked_from` is
 --- local-only lineage and untouched (forks are otherwise imported like any
 --- other entry). Returns `{ imported, updated }`.
----@param rows { session_id: string, cwd?: string, title?: string, updated_at?: string, additional_directories?: string[] }[]
+---@param rows { session_id: string, cwd?: string, title?: string, updated_at?: string }[]
 ---@param provider string
 ---@return { imported: integer, updated: integer }
 function M.import(rows, provider)
@@ -245,9 +240,6 @@ function M.import(rows, provider)
         if row.updated_at then
           e.updated_at = later_iso(e.updated_at, row.updated_at)
         end
-        if row.additional_directories ~= nil then
-          e.additional_directories = row.additional_directories
-        end
         updated = updated + 1
       else
         local remote_e = iso_epoch(row.updated_at)
@@ -258,7 +250,6 @@ function M.import(rows, provider)
           cwd = row.cwd,
           title = row.title,
           title_source = "auto",
-          additional_directories = row.additional_directories,
           created_at = stamp,
           updated_at = stamp,
         }

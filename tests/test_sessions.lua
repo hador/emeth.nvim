@@ -116,61 +116,6 @@ h.describe("Sessions", function()
     reset()
     Sessions.remove("nonexistent") -- should not error
   end)
-
-  h.it("save persists additional_directories", function()
-    reset()
-    Sessions.save({
-      session_id = "s1",
-      provider = "test",
-      cwd = "/tmp",
-      additional_directories = { "/a", "/b" },
-    })
-    local entry = Sessions.get("s1")
-    h.eq({ "/a", "/b" }, entry.additional_directories)
-  end)
-
-  h.it("save updates additional_directories on existing entry", function()
-    reset()
-    Sessions.save({
-      session_id = "s1",
-      provider = "test",
-      cwd = "/tmp",
-      additional_directories = { "/a" },
-    })
-    Sessions.save({
-      session_id = "s1",
-      provider = "test",
-      cwd = "/tmp",
-      additional_directories = { "/a", "/b", "/c" },
-    })
-    h.eq({ "/a", "/b", "/c" }, Sessions.get("s1").additional_directories)
-  end)
-
-  h.it("save without additional_directories preserves existing value", function()
-    reset()
-    Sessions.save({
-      session_id = "s1",
-      provider = "test",
-      cwd = "/tmp",
-      additional_directories = { "/a" },
-    })
-    -- Update title only — additional_directories should not be wiped
-    Sessions.save({
-      session_id = "s1",
-      provider = "test",
-      cwd = "/tmp",
-      title = "renamed",
-    })
-    local entry = Sessions.get("s1")
-    h.eq({ "/a" }, entry.additional_directories)
-    h.eq("renamed", entry.title)
-  end)
-
-  h.it("save without additional_directories on new entry leaves field nil", function()
-    reset()
-    Sessions.save({ session_id = "s1", provider = "test", cwd = "/tmp" })
-    h.is_nil(Sessions.get("s1").additional_directories)
-  end)
 end)
 
 h.describe("Sessions.import", function()
@@ -240,16 +185,6 @@ h.describe("Sessions.import", function()
     local gemini = Sessions.list("/other", "gemini")
     h.eq(1, #gemini)
     h.eq("gemini title", gemini[1].title)
-  end)
-
-  h.it("replaces additional_directories wholesale; absent leaves them", function()
-    reset()
-    Sessions.save({ session_id = "s1", provider = "opencode", cwd = "/tmp", additional_directories = { "/a" } })
-    Sessions.import({ { session_id = "s1", additional_directories = { "/a", "/b", "/c" } } }, "opencode")
-    h.eq({ "/a", "/b", "/c" }, Sessions.get("s1").additional_directories)
-    -- a page that omits the field must not wipe what we have
-    Sessions.import({ { session_id = "s1" } }, "opencode")
-    h.eq({ "/a", "/b", "/c" }, Sessions.get("s1").additional_directories)
   end)
 
   h.it("skips malformed rows without writing", function()

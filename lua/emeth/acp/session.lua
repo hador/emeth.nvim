@@ -344,7 +344,6 @@ end
 ---Map public opts to session/new + session/load request opts.
 local function req_opts(opts)
   return {
-    additionalDirectories = opts and opts.additional_directories,
     meta = opts and opts.meta,
   }
 end
@@ -385,7 +384,7 @@ function Session:_connect_then(cb, next)
   end)
 end
 
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param opts? { meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:connect(opts, cb)
   opts, cb = norm_args(opts, cb)
@@ -396,7 +395,7 @@ end
 
 ---Create a fresh session over an already-connected client (clean conversation
 ---without restarting the agent process).
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param opts? { meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:new_session(opts, cb)
   opts, cb = norm_args(opts, cb)
@@ -472,7 +471,7 @@ end
 ---Fork the current session into a new one and adopt it as this Session's active
 ---session (whole-session clone unless `opts.meta` targets a point). Ready-guarded
 ---like load; on success the forked id and its info replace the current ones.
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param opts? { meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:fork(opts, cb)
   opts, cb = norm_args(opts, cb)
@@ -512,7 +511,7 @@ end
 
 ---Load a previous session by ID.
 ---@param session_id string
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil)
+---@param opts? { meta?: table }|fun(err: acp.ACPError|nil)
 ---@param cb? fun(err: acp.ACPError|nil)
 function Session:load(session_id, opts, cb)
   opts, cb = norm_args(opts, cb)
@@ -527,7 +526,7 @@ end
 ---second argument names the step that failed, so a caller can tell "the agent
 ---did not start" (`"connect"`) from "the agent does not know this id" (`"load"`).
 ---@param session_id string
----@param opts? { additional_directories?: string[], meta?: table }|fun(err: acp.ACPError|nil, stage?: "connect"|"load")
+---@param opts? { meta?: table }|fun(err: acp.ACPError|nil, stage?: "connect"|"load")
 ---@param cb? fun(err: acp.ACPError|nil, stage?: "connect"|"load")
 function Session:connect_and_load(session_id, opts, cb)
   opts, cb = norm_args(opts, cb)

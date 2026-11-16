@@ -29,7 +29,6 @@ local AcpUpdates = require("emeth.integrations.acp_updates")
 local Commands = require("emeth.commands")
 local Mentions = require("emeth.mentions")
 local Message = require("emeth.message")
-local Roots = require("emeth.integrations.roots")
 local Sessions = require("emeth.sessions")
 local Winbar = require("emeth.ui.winbar")
 local util = require("emeth.util")
@@ -61,7 +60,6 @@ function M.setup_integration(view, session)
   end
   local stream = new_stream()
 
-  local roots = Roots.attach()
   local pending_reloads = {} ---@type table<string, { line?: integer, follow: boolean }>  -- path → reload record
   -- Abs path emeth last navigated the source window to on a file write. Lets
   -- `flush_reloads` tell "the pane is still on the file I put there" from "the
@@ -307,9 +305,6 @@ function M.setup_integration(view, session)
             cwd = s.cwd,
             title = s.title,
             updated_at = s.updatedAt,
-            -- Import the agent's directories only when it advertised the
-            -- capability; otherwise the index keeps whatever emeth saved.
-            additional_directories = sc.additionalDirectories and s.additionalDirectories or nil,
           }
         end
         local r = Sessions.import(rows, session.provider_name)
@@ -485,11 +480,6 @@ function M.setup_integration(view, session)
     },
   }
 
-  -- Merge in roots' @workspace / @roots handlers
-  for k, v in pairs(roots:mention_handlers()) do
-    view._mention_handlers[k] = v
-  end
-
   ---Cancel is a total function: converge the UI to ready, cancelling whatever
   ---that requires based on `activity` alone.
   local function do_cancel()
@@ -572,7 +562,6 @@ function M.setup_integration(view, session)
       session_id = id,
       provider = session.provider_name,
       cwd = session.cwd or vim.fn.getcwd(),
-      additional_directories = roots:save_field(),
       forked_from = forked_from,
     })
   end
@@ -1152,19 +1141,11 @@ function M.setup_integration(view, session)
     end
   end
 
-  ---Build options carrying the current workspace roots and provider meta, if any.
+  ---Build options carrying the provider's session meta, if any.
   ---@param kind "new"|"load"
   local function lifecycle_opts(kind)
-    local opts = {}
-    local snap = roots:snapshot()
-    if #snap > 0 then
-      opts.additional_directories = snap
-    end
     local meta = build_session_meta(kind)
-    if meta then
-      opts.meta = meta
-    end
-    return next(opts) and opts or nil
+    return meta and { meta = meta } or nil
   end
 
   ---Run a session lifecycle method through with_lifecycle, applying the
@@ -1231,8 +1212,6 @@ function M.setup_integration(view, session)
       if session.session_id and session.session_id ~= session_id then
         session:close(session.session_id)
       end
-      -- Hydrate roots from the persisted session entry before re-loading
-      roots:hydrate_from(Sessions.get(session_id))
       lifecycle({ clear = true, touch = true, kind = "load" }, function(opts, done)
         session:load(session_id, opts, function(err)
           if not err then
@@ -1244,7 +1223,6 @@ function M.setup_integration(view, session)
     end,
 
     connect_and_load = function(session_id, cb)
-      roots:hydrate_from(Sessions.get(session_id))
       -- Carried past lifecycle (which forwards only `err`) so the caller can
       -- tell a failed agent start from an unknown session id.
       local failed_stage
@@ -1268,7 +1246,6 @@ function M.setup_integration(view, session)
       end
       view:clear()
       reset_state()
-      -- Keep roots as-is so a new session inherits the user's roots.
       lifecycle({}, function(opts, done)
         session:new_session(opts, function(err)
           if not err then
@@ -1356,7 +1333,6 @@ function M.setup_integration(view, session)
       if ext_cleanup then
         ext_cleanup()
       end
-      roots:cleanup()
       session:disconnect()
     end,
 

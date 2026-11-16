@@ -1195,24 +1195,25 @@ h.describe("acp integration: session id at every boundary", function()
   end)
 end)
 
--- Every lifecycle path builds its request options from the same `lifecycle_opts`
--- (roots + session meta), so a path that forgets to forward them silently resumes
--- without the additional directories the user added. `load_session` did exactly
--- that: `session:load` takes `(id, opts, cb)`, and it was calling `(id, cb)`.
+-- Every lifecycle path builds its request options from the same `lifecycle_opts` (the provider's
+-- session meta, e.g. claude-code's extra_args), so a path that forgets to forward them silently resumes
+-- without it. `load_session` did exactly that: `session:load` takes `(id, opts, cb)`, and it was calling
+-- `(id, cb)`.
 h.describe("acp integration: lifecycle options reach every load path", function()
-  ---`roots:add` rejects anything that isn't a real directory, so the fixture has
-  ---to exist on disk, and is compared back in the normalised form `add` stores.
-  ---@return string
-  local function real_dir()
-    local dir = vim.fn.tempname()
-    vim.fn.mkdir(dir, "p")
-    return (vim.fn.fnamemodify(dir, ":p"):gsub("/$", ""))
-  end
-
-  ---Capture the opts a load path forwards to the session.
+  ---Capture the opts a load path forwards to the session, with a provider extension whose session meta
+  ---names the lifecycle kind.
   ---@return table|nil opts, boolean called
-  local function capture_load(dir, fn)
-    local session, view, integration = make_setup()
+  local function capture_load(fn)
+    local mod = "emeth.integrations.test"
+    local prev = package.loaded[mod]
+    package.loaded[mod] = {
+      build_session_meta = function(_, kind)
+        return { probe = kind }
+      end,
+    }
+    local ok, session, _, integration = pcall(make_setup)
+    package.loaded[mod] = prev
+    assert(ok, session)
     local seen, called = nil, false
     session.load = function(_, _session_id, opts, cb)
       called = true
@@ -1227,36 +1228,27 @@ h.describe("acp integration: lifecycle options reach every load path", function(
       end
     end
     session.connect_and_load = session.load
-    -- Add the root the way a user does: the @workspace mention's prompt.
-    local orig_input = vim.ui.input
-    vim.ui.input = function(_, on_confirm)
-      on_confirm(dir)
-    end
-    view._mention_handlers.workspace.handler()
-    vim.ui.input = orig_input
     fn(integration)
     flush()
     return seen, called
   end
 
-  h.it("forwards added roots when resuming by id", function()
-    local dir = real_dir()
-    local opts, called = capture_load(dir, function(integration)
+  h.it("forwards the session meta when resuming by id", function()
+    local opts, called = capture_load(function(integration)
       integration.load_session("sess-resume")
     end)
     h.is_true(called, "session:load was never reached")
     h.is_true(opts ~= nil, "resume dropped its lifecycle options entirely")
-    h.eq({ dir }, opts.additional_directories)
+    h.eq({ probe = "load" }, opts.meta)
   end)
 
-  h.it("forwards added roots when connecting and loading", function()
-    local dir = real_dir()
-    local opts, called = capture_load(dir, function(integration)
+  h.it("forwards the session meta when connecting and loading", function()
+    local opts, called = capture_load(function(integration)
       integration.connect_and_load("sess-resume")
     end)
     h.is_true(called)
     h.is_true(opts ~= nil, "connect_and_load dropped its lifecycle options")
-    h.eq({ dir }, opts.additional_directories)
+    h.eq({ probe = "load" }, opts.meta)
   end)
 end)
 
@@ -1548,31 +1540,6 @@ h.describe("acp integration: remote session list sync", function()
     connect_ok(session, integration)
     h.is_nil(transcript(view):find("session/list", 1, true), "a failed enrichment must not read as a session error")
     h.is_nil(transcript(view):find("boom", 1, true))
-  end)
-
-  h.it("adopts additional_directories only when the agent advertises them", function()
-    local session, _, integration = make_setup()
-    Sessions.save({ session_id = "syn-ad", provider = "test", cwd = "/p", additional_directories = { "/mine" } })
-    local function wire(ad)
-      local caps = { sessionCapabilities = { list = {} } }
-      if ad then
-        caps.sessionCapabilities.additionalDirectories = true
-      end
-      session.client.agent_capabilities = caps
-      session.client.list_sessions = function(_, _, cb)
-        cb({ sessions = { { sessionId = "syn-ad", cwd = "/p", additionalDirectories = { "/theirs" } } } }, nil)
-      end
-    end
-    wire(false)
-    connect_ok(session, integration)
-    h.eq(
-      { "/mine" },
-      (Sessions.get("syn-ad") or {}).additional_directories,
-      "without the capability the index keeps what emeth saved"
-    )
-    wire(true)
-    connect_ok(session, integration)
-    h.eq({ "/theirs" }, (Sessions.get("syn-ad") or {}).additional_directories, "with it, the agent's list wins")
   end)
 
   h.it("a broken paginator (endless empty pages) still hits the page cap", function()

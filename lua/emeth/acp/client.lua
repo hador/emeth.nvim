@@ -33,7 +33,6 @@ end
 ---@field id_counter number
 ---@field transport acp.ACPTransport
 ---@field state acp.ConnectionState
----@field _warned_no_roots? boolean  the "roots ignored" warning already shown
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -698,31 +697,12 @@ local function split_opts(opts_or_cb, maybe_cb)
   return opts_or_cb, maybe_cb or function() end
 end
 
----Build the params shared by session/new, session/load and session/fork:
----`base` plus `additionalDirectories` and `_meta` from opts. Roots go out only
----when the agent advertises `sessionCapabilities.additionalDirectories`;
----otherwise they're dropped with one warning per client (not one per session),
----so the user learns their @workspace roots aren't reaching this agent.
+---Build the params shared by session/new, session/load and session/fork: `base` plus `_meta` from opts.
 ---@param base table
----@param opts table|nil  { additionalDirectories?, meta? }
+---@param opts table|nil  { meta? }
 ---@return table params
 function ACPClient:_session_params(base, opts)
   local params = base
-  local dirs = opts and opts.additionalDirectories
-  if dirs and #dirs > 0 then
-    local sc = self.agent_capabilities and self.agent_capabilities.sessionCapabilities
-    if sc and sc.additionalDirectories then
-      params.additionalDirectories = dirs
-    elseif not self._warned_no_roots then
-      self._warned_no_roots = true
-      vim.schedule(function()
-        vim.notify(
-          "[emeth-acp] Agent does not advertise additionalDirectories capability — workspace roots ignored",
-          vim.log.levels.WARN
-        )
-      end)
-    end
-  end
   if opts and opts.meta and next(opts.meta) ~= nil then
     params._meta = opts.meta
   end

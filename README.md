@@ -36,7 +36,6 @@ AI chat sidebar for Neovim, powered by [ACP](https://agentclientprotocol.com).
 - Steering: redirect a running turn instead of cancelling it
 - Winbar with spinner, context usage %, compaction indicator
 - File context as `@path[:Lstart-Lend]` mentions in the prompt, sent with that prompt only (`@` opens a picker)
-- Workspace roots (`@workspace`, `@roots`) sent as ACP `additionalDirectories`
 - Prompt templates via `/prompts` (local `.md` files from `prompt_dirs`)
 - Agent config options (model, mode, effort, …) as `/model`-style slash commands
 - Session history: list, load, resume, fork; rewind to a past message (kiro-cli)
@@ -362,8 +361,6 @@ Typing `@` (at the start of a line or after a space) opens a picker; cancel it t
 | `file` | Pick a project file; inserts `@path` |
 | `current` | Inserts `@path:LINE` for the source window's file and cursor line |
 | `diagnostics` | Paste the source buffer's LSP diagnostics as a fenced block |
-| `workspace` | Add a workspace root directory (sent as `additionalDirectories` on the next session start) |
-| `roots` | Review/remove workspace roots |
 
 Prompts come from the `/prompts` slash command, which reads the `.md` files in `prompt_dirs`. When `prompt_edit_before_send` is `true` (default), the prompt content is pasted into the input buffer for editing before sending.
 
