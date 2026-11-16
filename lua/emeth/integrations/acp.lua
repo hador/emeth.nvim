@@ -901,6 +901,20 @@ function M.setup_integration(view, session)
       end
       return false
     end,
+    ---End a turn the agent started on its own (no `session/prompt` in flight to settle it): the
+    ---winbar goes back to ready. For agents that mark that end some other way than the result usage
+    ---the generic path already reads (see the update handler). A no-op while a prompt is in flight,
+    ---since its response owns settling, and when nothing is running.
+    ---@return boolean settled
+    settle_turn = function()
+      if
+        prompts_in_flight > 0 or not (activity == "generating" or activity == "thinking" or activity == "cancelled")
+      then
+        return false
+      end
+      set_activity("idle")
+      return true
+    end,
   }
 
   -- Load provider-specific extensions (e.g. claude-code, kiro-cli).

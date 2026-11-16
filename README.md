@@ -498,6 +498,7 @@ These are the parts of emeth an extension may rely on; anything else (`view` int
 | API | Purpose |
 |-----|---------|
 | `view.integration.set_steer_state(message_id, state, opts?) → found` | Move the steer marker of the message a `"queued"` outcome tagged: `"steered"` once the agent injects it, `"not_delivered"` if the turn ends first. `opts.only_if_queued` leaves a message that already moved on. kiro-cli uses it. |
+| `view.integration.settle_turn() → settled` | End a turn the agent started on its own (no prompt in flight): the winbar returns to ready. For agents that signal that end in their own way; the generic path already settles on the result `usage_update` (the one carrying `cost`). A no-op while a prompt is in flight or nothing is running. |
 | `view.integration.session_id() → id\|nil` | The session the transcript belongs to. |
 | `view.integration.resync_winbar()` | Recompose the winbar's left segment and state, e.g. after `Winbar.set_session_title`. Only on the real integration table, so call it after `setup` returns (or guard it). |
 | `Winbar.set_session_title(text\|nil)` / `get_session_title()` | A session identifier (title or short id) shown in the left segment. |

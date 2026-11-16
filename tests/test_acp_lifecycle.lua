@@ -162,6 +162,31 @@ h.describe("acp integration: unsolicited turn end", function()
     h.is_true(not cancelled, "nothing is in flight once the turn has ended")
   end)
 
+  h.it("an extension can settle it with settle_turn, but not a prompted turn", function()
+    local session, view = make_setup()
+    local states, undo = spy_state()
+    chunk(session, "Worker finished")
+    flush()
+    h.eq("generating", states[#states])
+    h.eq(true, view.integration.settle_turn())
+    flush()
+    h.eq("ready", states[#states])
+    h.eq(false, view.integration.settle_turn(), "nothing running: no-op")
+    -- With a prompt in flight its response owns settling.
+    local captured
+    session.client.send_prompt = function(_, _sid, _prompt, cb)
+      captured = cb
+    end
+    view.on_submit("do a thing")
+    chunk(session, "working")
+    flush()
+    h.eq(false, view.integration.settle_turn())
+    captured({ stopReason = "end_turn" }, nil)
+    flush()
+    undo()
+    h.eq("ready", states[#states])
+  end)
+
   h.it("a usage_update without cost does not end it", function()
     local session = make_setup()
     local cancelled = false
