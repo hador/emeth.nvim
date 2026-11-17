@@ -23,7 +23,9 @@ local _uuid_counter = 0
 ---@field role "user"|"assistant"|"system"
 ---@field content chat_ui.ContentItem[]
 ---@field _show_details? boolean
----@field timestamp string
+---@field timestamp string  "YYYY-MM-DD HH:MM:SS" of `at`, "" when the time is unknown
+---@field at? integer  when the message was produced (epoch seconds); nil when unknown (replayed history
+---  whose agent sent no time)
 ---@field uuid string
 ---@field metadata chat_ui.MessageMetadata
 ---@field visible boolean
@@ -45,14 +47,23 @@ function Message:new(role, content, metadata)
   elseif type(content) == "table" and content.type then
     content = { content }
   end
+  local now = os.time()
   return setmetatable({
     role = role,
     content = content,
-    timestamp = os.date("%Y-%m-%d %H:%M:%S"),
+    at = now,
+    timestamp = os.date("%Y-%m-%d %H:%M:%S", now) --[[@as string]],
     uuid = gen_uuid(),
     metadata = metadata or {},
     visible = true,
   }, Message)
+end
+
+--- Set when the message was produced (an agent-supplied time, or nil when unknown).
+---@param at? number  epoch seconds
+function Message:set_time(at)
+  self.at = at and math.floor(at) or nil
+  self.timestamp = self.at and os.date("%Y-%m-%d %H:%M:%S", self.at) --[[@as string]] or ""
 end
 
 --- Get the concatenated text content of the message.

@@ -340,6 +340,33 @@ function M.setup_integration(view, session)
     return drop
   end
 
+  -- Loads in flight (their replay is history: see `update_time`).
+  local replays = 0
+  ---@return fun() done  idempotent
+  local function begin_replay()
+    replays = replays + 1
+    local done = false
+    return function()
+      if not done then
+        done = true
+        replays = replays - 1
+      end
+    end
+  end
+  ---When an update's content was produced: its own `timestamp` (epoch ms, set by the agent or a provider
+  ---transform), false when it has none and is replayed history, nil when live (now).
+  ---@param update table
+  ---@return number|false|nil
+  local function update_time(update)
+    if type(update.timestamp) == "number" then
+      return update.timestamp / 1000
+    end
+    if update.replay or replays > 0 then
+      return false
+    end
+    return nil
+  end
+
   ---Run a session lifecycle action with standard boilerplate.
   ---@param opts acp.LifecycleOpts
   ---@param action fun(done: fun(err: any))
@@ -353,6 +380,8 @@ function M.setup_integration(view, session)
     -- per update (see ChatView:hold_render). Released when the lifecycle settles, superseded or
     -- not; disconnect drops a hold whose answer never came.
     local release_paint = opts.kind == "load" and hold_paint() or nil
+    -- While a load replays history, an update without its own time must not take the arrival time.
+    local end_replay = opts.kind == "load" and begin_replay() or nil
     if opts.kind == "load" then
       -- A loaded session opens at the end of its history, even with the cursor in the transcript.
       view:follow_end()
@@ -383,6 +412,9 @@ function M.setup_integration(view, session)
     action(function(err)
       if release_paint then
         release_paint()
+      end
+      if end_replay then
+        end_replay()
       end
       if epoch ~= token then
         return -- superseded: cancelled or a newer lifecycle took over
@@ -836,7 +868,13 @@ function M.setup_integration(view, session)
 
     local handler = update_handlers[update.sessionUpdate]
     if handler then
-      handler(update, stream, update_session_id)
+      -- Messages this update creates carry its time (see ChatView:set_message_time).
+      view:set_message_time(update_time(update))
+      local ok, err = pcall(handler, update, stream, update_session_id)
+      view:set_message_time(nil)
+      if not ok then
+        error(err, 0)
+      end
     end
   end)
 

@@ -99,6 +99,17 @@ local defaults = {
   -- Note a thought never shrinks as it streams, so outgrowing the threshold
   -- mid-thought folds the block away on its own — which is the point.
   thinking_collapse_lines = 16,
+  -- Times in the transcript, for long sessions: your messages carry theirs in the header; an agent
+  -- reply gets a dim right-aligned time on its first line when it starts a turn (after your message)
+  -- or comes after at least `gap_minutes` of quiet; a divider marks each new day. Times come from the
+  -- agent when it sends them (`update.timestamp`, so a reloaded transcript keeps the real times),
+  -- else from when the update arrived; replayed history without times shows none.
+  timestamps = {
+    enabled = true,
+    format = "%H:%M", -- os.date format
+    day_format = "%a %d %b",
+    gap_minutes = 5,
+  },
   default_provider = nil,
   -- Opt-in behavior that may change or go away.
   experimental = {

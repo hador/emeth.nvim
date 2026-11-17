@@ -37,11 +37,23 @@ function M.make_view()
     _mention_handlers = {},
   }
 
+  -- Same stamping as ChatView:set_message_time.
+  function view:set_message_time(at)
+    self._message_time = at
+  end
+  local function stamp(self, msg)
+    if self._message_time ~= nil then
+      msg:set_time(self._message_time or nil)
+    end
+  end
+
   function view:add_message(msg)
+    stamp(self, msg)
     table.insert(self.messages, msg)
   end
 
   function view:insert_message_after(after_uuid, msg)
+    stamp(self, msg)
     for i, m in ipairs(self.messages) do
       if m.uuid == after_uuid then
         table.insert(self.messages, i + 1, msg)

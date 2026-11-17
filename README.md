@@ -142,6 +142,12 @@ require("emeth").setup({
   tool_header_max_chars = 100,  -- clamp a collapsed tool row's header (K shows the rest)
   diff_collapse_lines = 30,     -- diffs longer than this start folded behind K
   thinking_collapse_lines = 16, -- thoughts longer than this start folded behind K
+  timestamps = {                -- times in the transcript (see "Times" below)
+    enabled = true,
+    format = "%H:%M",           -- os.date format
+    day_format = "%a %d %b",    -- the divider at each new day
+    gap_minutes = 5,            -- an agent message after this much quiet shows its time
+  },
   claude_code = {
     extra_args = nil,           -- CLI flags for claude, e.g. { agent = "my-agent" } (see below)
   },
@@ -297,6 +303,15 @@ Keys act on the message under the cursor.
 | `C` | Cancel the subagent whose card is under the cursor, leaving the main turn running (shown only while it is still running) |
 | `R` | kiro-cli: rewind, forking the session at the user message under the cursor (`kiro_cli.rewind_key`); during a permission prompt `R` is reject-always |
 | `gf` / `gd` | Open the file path under the cursor in the code window (honours `:LINE`) |
+
+#### Times
+
+Your messages carry their time in the header. An agent reply shows a dim time at the right of its first
+line when it starts a turn (follows your message) or comes after `timestamps.gap_minutes` of quiet, such
+as an unprompted report; replies inside a turn don't, so the transcript stays readable. A divider marks
+each new day. Times are the agent's when it sends them (`update.timestamp`), so a reloaded transcript keeps
+the real ones; otherwise live messages take their arrival time and replayed history without times shows
+none. `timestamps.enabled = false` turns the marks off.
 
 ### Steering a running turn
 
@@ -485,7 +500,7 @@ In addition to the module-level hooks above, an extension's `setup(session, view
 
 | Setter | Callback | Purpose |
 |--------|----------|---------|
-| `view.integration.set_transform_update(fn)` | `fn(update) → false?` | Mutate a `session/update` payload in place before the integration consumes it; return `false` to drop it. The bundled claude-code extension lifts subagent attribution and enriches Agent/Task titles this way. |
+| `view.integration.set_transform_update(fn)` | `fn(update) → false?` | Mutate a `session/update` payload in place before the integration consumes it; return `false` to drop it. The bundled claude-code extension lifts subagent attribution and enriches Agent/Task titles this way. Setting `update.timestamp` (epoch milliseconds: when the agent produced it) gives the messages the update creates that time, so a reloaded transcript shows real times (see "Times"). |
 | `view.integration.set_transform_elicitation(fn)` | `fn(fields, request) → fields?` | Reshape parsed elicitation fields before they render (claude-code folds AskUserQuestion's "Other" box into its question). |
 | `view.integration.set_steering(strategy)` | `{ supported, steer }` | Let a submit during a running turn steer it. `supported` is a boolean or a function; `steer(prompt, text, cb)` answers `cb(outcome, err, info?)` with `"injected"`, `"promptRequired"` or `"queued"`. A `"queued"` outcome may pass `info.message_id`, which tags the message for `set_steer_state` below. |
 

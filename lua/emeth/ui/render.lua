@@ -698,8 +698,12 @@ local function render_user_message(msg, is_first)
   if not is_first then
     lines[#lines + 1] = Line:new({ { "" } })
   end
-  -- Compact header: HH:MM · provider · N files
-  local parts = { msg.timestamp:match("%d%d:%d%d") or msg.timestamp }
+  -- Compact header: HH:MM · provider · N files (no time when it is unknown: replayed without one)
+  local parts = {}
+  local time = require("emeth.ui.timestamps").header(msg)
+  if time ~= "" then
+    parts[1] = time
+  end
   -- A steered message cut into a turn that was already running, which is why it
   -- appears mid-stream between the agent's own output. Shown in the header rather
   -- than behind K: a marker explaining an oddity has to be visible unprompted.

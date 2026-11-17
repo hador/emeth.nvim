@@ -3,6 +3,10 @@
 local Line = require("emeth.ui.line")
 local PasteFold = require("emeth.ui.paste_fold")
 local Render = require("emeth.ui.render")
+local Timestamps = require("emeth.ui.timestamps")
+local HL = require("emeth.ui.highlights")
+-- Right-aligned, but never over the text: past the end of a line too long for it (nvim 0.11+).
+local RIGHT = vim.fn.has("nvim-0.11") == 1 and "eol_right_align" or "eol"
 
 local api = vim.api
 
@@ -49,6 +53,7 @@ local PROMPT_CONFIRM_KEY = "<CR>"
 ---@field _follow_end? boolean  follow_end() asked; cleared by the first paint outside a hold
 ---@field _at_end? table<integer, true>  windows whose cursor was on the last row when this paint began
 ---@field _last_paint? integer  vim.uv.now() of the last paint
+---@field _message_time? number|false  set_message_time(): the time messages added now take
 local ChatView = {}
 ChatView.__index = ChatView
 
@@ -302,8 +307,24 @@ function ChatView:new(opts)
   return view
 end
 
+---The time messages added from now on were produced at, until set back to nil: an update's own time
+---(epoch seconds), or false when it has none and is replayed history (the arrival time would be wrong).
+---nil: messages keep their creation time (Message:new), right for live content.
+---@param at number|false|nil
+function ChatView:set_message_time(at)
+  self._message_time = at
+end
+
+---@param msg chat_ui.Message
+function ChatView:_stamp(msg)
+  if self._message_time ~= nil then
+    msg:set_time(self._message_time or nil)
+  end
+end
+
 ---@param msg chat_ui.Message
 function ChatView:add_message(msg)
+  self:_stamp(msg)
   self.messages[#self.messages + 1] = msg
   local idx = #self.messages
   self._dirty_from = self._dirty_from and math.min(self._dirty_from, idx) or idx
@@ -316,6 +337,7 @@ end
 ---@param after_uuid string
 ---@param msg chat_ui.Message
 function ChatView:insert_message_after(after_uuid, msg)
+  self:_stamp(msg)
   for i, m in ipairs(self.messages) do
     if m.uuid == after_uuid then
       table.insert(self.messages, i + 1, msg)
@@ -770,6 +792,27 @@ function ChatView:_render_rows()
   for i = 1, dirty_from - 1 do
     row = row + (cache[self.messages[i].uuid] or 0)
   end
+  -- Times: whether a message shows one depends on the top-level message before it and on the last
+  -- known time before it (see emeth.ui.timestamps).
+  local ts_cfg = Timestamps.config()
+  local prev, prev_at
+  for i = dirty_from - 1, 1, -1 do
+    local m = self.messages[i]
+    if Timestamps.counts(m) then
+      prev = prev or m
+      if m.at then
+        prev_at = m.at
+        break
+      end
+    end
+  end
+  ---@param m chat_ui.Message
+  local function passed(m)
+    if Timestamps.counts(m) then
+      prev = m
+      prev_at = m.at or prev_at
+    end
+  end
 
   -- Visit every message from dirty_from on (a lookup when clean): expanding a
   -- card flips its children's `visible` without dirtying them.
@@ -792,6 +835,7 @@ function ChatView:_render_rows()
         end
       end
       row = row + n_old
+      passed(msg)
     else
       local lines = expand(Render.render_message(msg, self.messages))
       local texts = {}
@@ -807,6 +851,23 @@ function ChatView:_render_rows()
         line:set_highlights(ns, buf, row + k - 1)
         owners[row + k] = msg
       end
+      if #lines > 0 then
+        local marks = Timestamps.marks(msg, prev, prev_at, ts_cfg)
+        if marks.right then
+          api.nvim_buf_set_extmark(buf, ns, row, 0, {
+            virt_text = { { marks.right, HL.MUTED } },
+            virt_text_pos = RIGHT,
+            hl_mode = "combine",
+          })
+        end
+        if marks.day then
+          api.nvim_buf_set_extmark(buf, ns, row, 0, {
+            virt_lines = { { { "── " .. marks.day .. " ──", HL.MUTED } } },
+            virt_lines_above = true,
+          })
+        end
+      end
+      passed(msg)
       if #lines ~= (n_old or 0) then
         shifted = true
       end
