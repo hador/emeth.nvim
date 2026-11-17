@@ -492,6 +492,30 @@ function Sidebar:_setup_keymaps()
     end
   end
 
+  -- gx on a URL in the chat output (a web link's target or a bare URL) opens it in the browser; with no
+  -- opener (a remote host), it is copied to the clipboard instead, said in a notification.
+  local url_keys = config.mappings.open_url and config.mappings.open_url.normal
+  if type(url_keys) == "string" then
+    url_keys = { url_keys }
+  end
+  for _, key in ipairs(url_keys or {}) do
+    if api.nvim_buf_is_valid(view.result_buf) then
+      api.nvim_buf_set_keymap(view.result_buf, "n", key, "", {
+        noremap = true,
+        silent = true,
+        callback = function()
+          local Target = require("emeth.target")
+          local url = Target.url_under_cursor()
+          if not url then
+            vim.notify("[emeth] No URL under cursor", vim.log.levels.INFO)
+            return
+          end
+          Target.open_url(url)
+        end,
+      })
+    end
+  end
+
   -- Hop between the result and input windows. Bound per mode from
   -- `mappings.switch_window` (a key or list per mode; false/{} disables), so the
   -- default <Tab>/<S-Tab> can be moved or dropped like every other mapping.

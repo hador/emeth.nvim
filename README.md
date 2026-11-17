@@ -120,6 +120,7 @@ require("emeth").setup({
     close = { normal = "q" },             -- hide the sidebar (session keeps running)
     switch_window = { normal = { "<Tab>", "<S-Tab>" }, insert = { "<Tab>", "<S-Tab>" } },
     open_file = { normal = { "gf", "gd" } },   -- open the path under the cursor next door
+    open_url = { normal = "gx" },              -- open the URL under the cursor (copies it where no browser can)
     zoom = { normal = "<leader>ez" },          -- grow the sidebar to fill the screen and back
     expand_paste = { normal = { "za", "zo" } }, -- unfold a folded paste in the input
   },
@@ -303,6 +304,7 @@ Keys act on the message under the cursor.
 | `C` | Cancel the subagent whose card is under the cursor, leaving the main turn running (shown only while it is still running) |
 | `R` | kiro-cli: rewind, forking the session at the user message under the cursor (`kiro_cli.rewind_key`); during a permission prompt `R` is reject-always |
 | `gf` / `gd` | Open the file path under the cursor in the code window (honours `:LINE`); on a markdown link `[name](path)`, its target (`#L<n>` anchors too) |
+| `gx` | Open the URL under the cursor (a web link's target, or a bare URL) in the browser; where no browser can be opened (nvim over SSH), copy it to the clipboard instead |
 
 #### Times
 

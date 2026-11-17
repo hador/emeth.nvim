@@ -74,6 +74,55 @@ function M.link_target_at(line, col)
   end
 end
 
+--- The web URL on `line` at byte column `col` (0-based): the target of a markdown link spanning it, or a
+--- bare http(s) URL spanning it (trailing punctuation dropped). nil otherwise, including on a link to a file.
+---@param line string
+---@param col integer
+---@return string|nil
+function M.url_at(line, col)
+  local init = 1
+  while true do
+    local s, e, target = line:find("%[[^%]]*%]%(([^)%s]+)%)", init)
+    if not s then
+      break
+    end
+    if col + 1 >= s and col + 1 <= e then
+      return target:match("^https?://") and target or nil
+    end
+    init = e + 1
+  end
+  init = 1
+  while true do
+    local s, e = line:find("https?://[^%s%)%]>\"'`]+", init)
+    if not s then
+      return nil
+    end
+    if col + 1 >= s and col + 1 <= e then
+      return (line:sub(s, e):gsub("[.,;:!?]+$", ""))
+    end
+    init = e + 1
+  end
+end
+
+--- Open `url` in the browser (`vim.ui.open`); where nothing can open one (a remote host with no opener), put
+--- it on the clipboard instead and say so, so it is one paste away.
+---@param url string
+function M.open_url(url)
+  local ok, cmd, err = pcall(vim.ui.open, url)
+  if ok and cmd and not err then
+    return
+  end
+  pcall(vim.fn.setreg, "+", url)
+  pcall(vim.fn.setreg, '"', url)
+  vim.notify("[emeth] No browser here: copied " .. url, vim.log.levels.INFO)
+end
+
+--- The web URL under the cursor in the current window (see `url_at`).
+---@return string|nil
+function M.url_under_cursor()
+  return M.url_at(api.nvim_get_current_line(), api.nvim_win_get_cursor(0)[2])
+end
+
 --- The reference under the cursor in the current window: the target of a markdown link the cursor is on
 --- (agents link files as `[name](path)`, which `<cWORD>` reads as one mangled token), else `<cWORD>`.
 ---@return string

@@ -207,6 +207,26 @@ h.describe("mappings.switch_window", function()
     sb:close()
   end)
 
+  h.it("gx in the transcript opens the URL under the cursor (open_url); gf stays for files", function()
+    local sb, view = open_with(require("emeth").config.mappings.switch_window)
+    local has_gx = bound(view.result_buf, "n", "gx")
+    local Target = require("emeth.target")
+    local saved = Target.open_url
+    local got
+    Target.open_url = function(u)
+      got = u
+    end
+    vim.api.nvim_set_current_win(sb.result_win)
+    vim.bo[view.result_buf].modifiable = true
+    vim.api.nvim_buf_set_lines(view.result_buf, 0, -1, false, { "See ([f98c0e5c](https://t.example.com/f98c0e5c))." })
+    vim.api.nvim_win_set_cursor(sb.result_win, { 1, 7 })
+    vim.api.nvim_feedkeys("gx", "x", false)
+    Target.open_url = saved
+    sb:close()
+    h.is_true(has_gx, "gx bound on the transcript")
+    h.eq("https://t.example.com/f98c0e5c", got)
+  end)
+
   h.it("honours a remapped key and a disabled mode, leaving <Tab> free", function()
     local sb, view = open_with({ normal = "<C-j>", insert = false })
     local got = {

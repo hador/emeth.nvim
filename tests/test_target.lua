@@ -75,6 +75,42 @@ h.describe("Target: markdown links under the cursor", function()
     h.eq("/a/b.lua:12", Target.link_target_at("[b](file:///a/b.lua#L12)", 1))
     h.eq("/a/b c.lua", Target.link_target_at("[b](</a/b c.lua>)", 1))
   end)
+  h.it("a web link or a bare URL under the cursor is a URL; a file link is not", function()
+    local l = "Ticket ([f98c0e5c](https://t.example.com/f98c0e5c-5c2e)). Also https://x.io/a, and [f](/tmp/f.md)."
+    h.eq("https://t.example.com/f98c0e5c-5c2e", Target.url_at(l, l:find("f98c0e5c%]") - 1))
+    h.eq("https://t.example.com/f98c0e5c-5c2e", Target.url_at(l, l:find("example") - 1))
+    h.eq("https://x.io/a", Target.url_at(l, l:find("x%.io") - 1), "trailing comma dropped")
+    h.is_nil(Target.url_at(l, l:find("/tmp") - 1))
+    h.is_nil(Target.url_at(l, 1))
+  end)
+
+  h.it("open_url: the browser when it can; else the clipboard, said in a notification", function()
+    local saved_open, saved_notify, saved_setreg = vim.ui.open, vim.notify, vim.fn.setreg
+    local opened, note, reg
+    vim.fn.setreg = function(r, v)
+      if r == "+" then
+        reg = v
+      end
+    end
+    vim.notify = function(m)
+      note = m
+    end
+    vim.ui.open = function(u)
+      opened = u
+      return {}, nil
+    end
+    Target.open_url("https://x.io/a")
+    h.eq("https://x.io/a", opened)
+    h.is_nil(note)
+    vim.ui.open = function()
+      return nil, "vim.ui.open: no handler found"
+    end
+    Target.open_url("https://x.io/b")
+    h.eq("https://x.io/b", reg)
+    h.is_true(note:find("copied https://x.io/b", 1, true) ~= nil)
+    vim.ui.open, vim.notify, vim.fn.setreg = saved_open, saved_notify, saved_setreg
+  end)
+
   h.it("gf resolves the linked file, not the mangled word", function()
     local dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")

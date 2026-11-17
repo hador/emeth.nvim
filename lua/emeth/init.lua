@@ -50,6 +50,9 @@ local defaults = {
     -- Open the file path under the cursor in the source window (not the chat),
     -- moving focus there. Honors a trailing :LINE(:COL) suffix.
     open_file = { normal = { "gf", "gd" } },
+    -- Open the URL under the cursor (a web link's target, or a bare URL) in the browser; where none can
+    -- be opened (a remote host), copy it to the clipboard instead.
+    open_url = { normal = "gx" },
     -- tmux-style zoom: grow the sidebar to fill the screen and back.
     zoom = { normal = "<leader>ez" },
     -- Expand a folded paste under the cursor in the input buffer. `za`/`zo`
