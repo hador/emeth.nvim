@@ -52,6 +52,19 @@ h.describe("acp integration: abort stuck connect", function()
     h.is_true(last:text():find("aborted", 1, true) ~= nil, "should report the abort to the user")
   end)
 
+  h.it("an agent process that exits on its own is reported in the transcript", function()
+    local session, view = make_setup()
+    local states, undo = spy_state()
+    session:_emit("update", { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "working" } })
+    flush()
+    session:_emit("exit", 1, 0)
+    flush()
+    undo()
+    local last = view.messages[#view.messages]
+    h.is_true(last:text():find("agent process exited (code 1", 1, true) ~= nil, last:text())
+    h.eq("ready", states[#states], "nothing runs any more")
+  end)
+
   h.it("Ctrl+C does nothing when idle and connected", function()
     local _, view = make_setup() -- _state = "ready", activity = "idle"
     local before = #view.messages

@@ -502,7 +502,7 @@ These are the parts of emeth an extension may rely on; anything else (`view` int
 | `view.integration.session_id() → id\|nil` | The session the transcript belongs to. |
 | `view.integration.resync_winbar()` | Recompose the winbar's left segment and state, e.g. after `Winbar.set_session_title`. Only on the real integration table, so call it after `setup` returns (or guard it). |
 | `Winbar.set_session_title(text\|nil)` / `get_session_title()` | A session identifier (title or short id) shown in the left segment. |
-| `session:on(event, fn)` / `session:off(event, fn)` | Events: `update` (each `session/update`, `fn(update, session_id)`), `notification` (non-ACP notifications), `boundary` (the session id changed: connect, new, load, fork; fires after the id is assigned, so read identity there), plus `file_written`, `permission`, `elicitation`. |
+| `session:on(event, fn)` / `session:off(event, fn)` | Events: `update` (each `session/update`, `fn(update, session_id)`), `notification` (non-ACP notifications), `boundary` (the session id changed: connect, new, load, fork; fires after the id is assigned, so read identity there), `exit` (the agent process exited without being stopped, `fn(code, signal)`; emeth also says so in the transcript), plus `file_written`, `permission`, `elicitation`. |
 | `session:request(method, params, cb)` | Send an agent-specific request (e.g. a `_provider/...` extension method). |
 
 ### Per-session metadata (`_meta`)

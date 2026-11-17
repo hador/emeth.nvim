@@ -200,6 +200,7 @@
 ---@field on_read_file? fun(path: string, line: integer|nil, limit: integer|nil, callback: fun(content: string), error_callback: fun(message: string, code: integer|nil)): nil
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
 ---@field on_notification? fun(method: string, params: table)
+---@field on_exit? fun(code: integer, signal: integer)  the agent process exited without stop() (crash, kill, quit)
 ---@field on_request? fun(method: string, params: table, respond: fun(result: table|nil), respond_error: fun(message: string, code?: number)): boolean|nil
 
 ---@class acp.ClientConfig

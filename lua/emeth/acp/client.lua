@@ -235,6 +235,14 @@ function ACPClient:_create_stdio_transport()
         transport_self.process:close()
         transport_self.process = nil
       end
+      -- An exit nobody asked for (stop() was not called): tell the session, so an idle transcript doesn't
+      -- just go quiet with nothing in flight to fail.
+      local on_exit = self.config.handlers and self.config.handlers.on_exit
+      if on_exit and not self._stopping then
+        vim.schedule(function()
+          on_exit(code, signal)
+        end)
+      end
     end)
 
     if not handle then
@@ -615,6 +623,7 @@ function ACPClient:stop()
   if active_client == self then
     active_client = nil
   end
+  self._stopping = true -- the exit that follows is ours: no on_exit
   self.transport:stop()
   self:_close_debug_log()
 end

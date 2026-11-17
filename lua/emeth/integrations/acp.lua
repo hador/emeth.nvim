@@ -757,6 +757,23 @@ function M.setup_integration(view, session)
     end,
   })
 
+  -- The agent process went away on its own. With nothing in flight nothing else would say so, and the
+  -- transcript would just stop moving.
+  session:on("exit", function(code, signal)
+    vim.schedule(function()
+      set_activity("idle")
+      view:add_message(
+        Message:new(
+          "system",
+          ("⚠ The agent process exited (code %s, signal %s). Resume the session to reconnect."):format(
+            tostring(code),
+            tostring(signal)
+          )
+        )
+      )
+    end)
+  end)
+
   session:on("update", function(update, update_session_id)
     -- Provider extensions may rewrite the update in-place (e.g. enrich a
     -- tool_call's title) before we consume it. Keep this lightweight —

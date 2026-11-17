@@ -401,6 +401,42 @@ h.describe("ACPClient connect when the agent cannot be started", function()
   end)
 end)
 
+h.describe("ACPClient agent process exit", function()
+  ---A real child that exits on its own after a moment, with on_exit recorded.
+  local function exiting_client(exits)
+    return ACPClient:new({
+      command = "sh",
+      args = { "-c", "sleep 0.3; exit 3" },
+      handlers = {
+        on_exit = function(code, signal)
+          exits[#exits + 1] = { code, signal }
+        end,
+      },
+    })
+  end
+
+  h.it("reports an exit nobody asked for through on_exit", function()
+    local exits = {}
+    local c = exiting_client(exits)
+    c:connect(function() end)
+    vim.wait(3000, function()
+      return #exits > 0
+    end)
+    h.eq({ { 3, 0 } }, exits)
+  end)
+
+  h.it("stays quiet when the exit follows stop()", function()
+    local exits = {}
+    local c = exiting_client(exits)
+    c:connect(function() end)
+    c:stop()
+    vim.wait(800, function()
+      return #exits > 0
+    end)
+    h.eq({}, exits)
+  end)
+end)
+
 -- ── generic request / respond ──────────────────────────────────
 -- Steering is no longer a client concern: provider extensions drive their own
 -- control methods (claude `_session/steering`, kiro `_session/steer`) through the

@@ -58,7 +58,7 @@ end
 
 -- ── Event emitter ──────────────────────────────────────────────
 
----@alias acp.SessionEvent "update"|"notification"|"file_written"|"permission"|"elicitation"|"boundary"
+---@alias acp.SessionEvent "update"|"notification"|"file_written"|"permission"|"elicitation"|"boundary"|"exit"
 
 ---Register a listener for a session event.
 ---@param event acp.SessionEvent
@@ -144,6 +144,10 @@ function Session:new(provider_name)
       end,
       on_notification = function(method, params)
         session:_emit("notification", method, params)
+      end,
+      -- The agent process exited without being stopped (crash, kill, the agent quitting on its own).
+      on_exit = function(code, signal)
+        session:_emit("exit", code, signal)
       end,
       -- Agent→client request nobody built-in handles. Dispatch to a provider
       -- extension's registered request handler; return truthy to claim it (the
