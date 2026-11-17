@@ -302,7 +302,7 @@ Keys act on the message under the cursor.
 | `a` `A` `r` `R` | Answer a permission request: allow once / always, reject once / always |
 | `C` | Cancel the subagent whose card is under the cursor, leaving the main turn running (shown only while it is still running) |
 | `R` | kiro-cli: rewind, forking the session at the user message under the cursor (`kiro_cli.rewind_key`); during a permission prompt `R` is reject-always |
-| `gf` / `gd` | Open the file path under the cursor in the code window (honours `:LINE`) |
+| `gf` / `gd` | Open the file path under the cursor in the code window (honours `:LINE`); on a markdown link `[name](path)`, its target (`#L<n>` anchors too) |
 
 #### Times
 

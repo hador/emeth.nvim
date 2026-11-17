@@ -452,7 +452,7 @@ function Sidebar:_setup_keymaps()
           if Target.maps_paths(provider) then
             -- The agent's paths may not exist here: take the reference as written
             -- and let the provider's `map_path` say where it opens.
-            local raw, ref_line = Target.parse_ref(vim.fn.expand("<cWORD>"))
+            local raw, ref_line = Target.parse_ref(Target.token_under_cursor())
             if not raw then
               vim.notify("[emeth] No file path under cursor", vim.log.levels.INFO)
               return

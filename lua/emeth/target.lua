@@ -45,6 +45,43 @@ function M.parse_ref(token)
   return path, line and tonumber(line) or nil
 end
 
+--- The target of the markdown link `[text](target)` on `line` that spans byte column `col` (0-based), with
+--- a `file://` scheme or `<…>` dropped and a `#L<n>` anchor turned into `:<n>`. nil when no link spans
+--- `col`, or the link points at a URL (opening that is `gx`'s job). Pure, so it is unit-testable.
+---@param line string
+---@param col integer
+---@return string|nil
+function M.link_target_at(line, col)
+  local init = 1
+  while true do
+    -- `[text](<target with spaces>)` or `[text](target)`, whichever comes first.
+    local s, e, target = line:find("%[[^%]]*%]%(<([^>]+)>%)", init)
+    local s2, e2, target2 = line:find("%[[^%]]*%]%(([^)%s]+)%)", init)
+    if s2 and (not s or s2 < s) then
+      s, e, target = s2, e2, target2
+    end
+    if not s then
+      return nil
+    end
+    if col + 1 >= s and col + 1 <= e then
+      target = target:gsub("^<", ""):gsub(">$", ""):gsub("^file://", ""):gsub("#L(%d+)$", ":%1")
+      if M.is_uri(target) or target:match("^#") then
+        return nil
+      end
+      return target
+    end
+    init = e + 1
+  end
+end
+
+--- The reference under the cursor in the current window: the target of a markdown link the cursor is on
+--- (agents link files as `[name](path)`, which `<cWORD>` reads as one mangled token), else `<cWORD>`.
+---@return string
+function M.token_under_cursor()
+  local col = api.nvim_win_get_cursor(0)[2]
+  return M.link_target_at(api.nvim_get_current_line(), col) or vim.fn.expand("<cWORD>")
+end
+
 --- Resolve a (possibly relative) path to a readable absolute path, trying the
 --- cwd and the source window's directory as bases. Returns nil if nothing on
 --- disk matches — the caller surfaces that to the user.
@@ -75,7 +112,7 @@ end
 --- Resolve the file reference under the cursor in the current window.
 ---@return string|nil abs, integer|nil line
 function M.ref_under_cursor()
-  local path, line = M.parse_ref(vim.fn.expand("<cWORD>"))
+  local path, line = M.parse_ref(M.token_under_cursor())
   if not path then
     return nil
   end
