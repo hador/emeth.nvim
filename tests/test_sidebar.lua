@@ -168,6 +168,47 @@ h.describe("close/reopen does not stack buffer autocmds", function()
   end)
 end)
 
+h.describe("chat windows keep their own buffer", function()
+  local api = vim.api
+  local function name_in(win)
+    return api.nvim_buf_get_name(api.nvim_win_get_buf(win))
+  end
+  ---Open a sidebar after the transcript has jump history, as a scrolled one does.
+  local function open_scrolled()
+    local sb, view = make_open_sidebar()
+    vim.cmd("stopinsert")
+    api.nvim_set_current_win(sb.result_win)
+    vim.bo[view.result_buf].modifiable = true
+    api.nvim_buf_set_lines(view.result_buf, 0, -1, false, vim.fn["repeat"]({ "t" }, 50))
+    vim.cmd("normal! G")
+    vim.cmd("normal! gg")
+    sb:focus_input()
+    return sb, view
+  end
+
+  h.it("<C-o> in the input window never shows the transcript there", function()
+    local sb = open_scrolled()
+    h.eq(0, #vim.fn.getjumplist(sb.input_win)[1], "input window starts with no inherited jumps")
+    vim.cmd([[execute "normal! \<C-o>"]])
+    vim.wait(50)
+    h.is_true(name_in(sb.input_win):match("^emeth://input") ~= nil, "input window still shows the input")
+    h.is_true(name_in(sb.result_win):match("^emeth://result") ~= nil, "transcript stays in its window")
+    sb:close()
+  end)
+
+  h.it("a chat buffer forced into the other chat window is put back", function()
+    local sb, view = open_scrolled()
+    -- <C-^> takes this path: the input window's alternate buffer is the transcript.
+    api.nvim_win_set_buf(sb.input_win, view.result_buf)
+    vim.wait(50)
+    h.eq(view.input_buf, api.nvim_win_get_buf(sb.input_win))
+    api.nvim_win_set_buf(sb.result_win, view.input_buf)
+    vim.wait(50)
+    h.eq(view.result_buf, api.nvim_win_get_buf(sb.result_win))
+    sb:close()
+  end)
+end)
+
 h.describe("mappings.switch_window", function()
   ---Open a sidebar with `switch` as mappings.switch_window; return the view.
   local function open_with(switch)

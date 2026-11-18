@@ -97,8 +97,12 @@ function Sidebar:open(view)
   if self:is_open() then
     if self.view ~= view then
       self.view = view
+      -- Our own swap: between the two calls one window still shows the old
+      -- view's buffer, which the auto-eject guard would otherwise "restore".
+      self._relocating = true
       pcall(api.nvim_win_set_buf, self.result_win, view.result_buf)
       pcall(api.nvim_win_set_buf, self.input_win, view.input_buf)
+      self._relocating = false
     end
     return
   end
@@ -179,6 +183,13 @@ function Sidebar:open(view)
   vim.cmd("belowright " .. input_height .. "split")
   self.input_win = api.nvim_get_current_win()
   api.nvim_win_set_buf(self.input_win, view.input_buf)
+  -- :split copies the parent's jumplist, so the input window starts out holding
+  -- the transcript's jump history (and, through it, the code window's). <C-o>
+  -- would then walk the input window into those buffers. The input has no jump
+  -- history worth inheriting: start it empty.
+  api.nvim_win_call(self.input_win, function()
+    vim.cmd("clearjumps")
+  end)
   api.nvim_set_option_value("wrap", true, { win = self.input_win })
   api.nvim_set_option_value("number", false, { win = self.input_win })
   api.nvim_set_option_value("relativenumber", false, { win = self.input_win })
@@ -243,8 +254,13 @@ function Sidebar:open(view)
         local win, chat_buf = spec[1], spec[2]
         if win and api.nvim_win_is_valid(win) and chat_buf then
           local shown = api.nvim_win_get_buf(win)
-          if not api.nvim_buf_get_name(shown):match("^emeth://") then
+          if shown ~= chat_buf then
+            -- Each chat window owns exactly one buffer. The other chat buffer
+            -- (the transcript in the input window, via <C-^> or a stray jump)
+            -- is already on screen next door, so it is only put back; anything
+            -- else is a file, which goes to the source window.
             local intruder = shown
+            local is_chat = api.nvim_buf_get_name(shown):match("^emeth://") ~= nil
             local cursor = api.nvim_win_get_cursor(win)
             self._relocating = true
             vim.schedule(function()
@@ -252,7 +268,9 @@ function Sidebar:open(view)
                 if api.nvim_win_is_valid(win) and api.nvim_buf_is_valid(chat_buf) then
                   api.nvim_win_set_buf(win, chat_buf)
                 end
-                require("emeth.target").send_buf(intruder, { line = cursor[1], focus = true })
+                if not is_chat then
+                  require("emeth.target").send_buf(intruder, { line = cursor[1], focus = true })
+                end
               end)
               self._relocating = false
             end)
